@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="33 70 174 118" width="512" height="347">
+  <!-- 信封：浅蓝灰底 + 蓝灰轮廓 + 白色 V 线 + 红点强调
+       不使用 clipPath；V 线为预计算实心路径，端头沿圆角弧线（r=12）收尾 -->
+  <g id="envelope" shape-rendering="geometricPrecision">
+    <!-- 信封主体：加深底色，小尺寸下与浅色托盘背景拉开对比 -->
+    <rect id="body-fill"
+          x="41.6" y="78.6" width="156.8" height="100.8" rx="11.4"
+          fill="#E4EDF5"/>
+    <!-- V 形折线：黑色轮廓层（加粗）+ 白色上层 -->
+    <g id="flaps">
+      <path id="flap-left-outline"
+            d="M41.788 85.717
+               A12 12 0 0 1 49.076 78.660
+               L129.651 137.890
+               L122.363 144.947
+               Z"
+            fill="#000000" stroke="#000000" stroke-width="4" stroke-linejoin="round"/>
+      <path id="flap-left"
+            d="M42.430 84.327
+               A12 12 0 0 1 47.479 79.349
+               L128.054 138.579
+               L123.005 143.557
+               Z"
+            fill="#FFFFFF"/>
+      <path id="flap-right-outline"
+            d="M198.212 85.717
+               A12 12 0 0 0 190.924 78.660
+               L110.349 137.890
+               L117.637 144.947
+               Z"
+            fill="#000000" stroke="#000000" stroke-width="4" stroke-linejoin="round"/>
+      <path id="flap-right"
+            d="M197.570 84.327
+               A12 12 0 0 0 192.521 79.349
+               L111.946 138.579
+               L116.995 143.557
+               Z"
+            fill="#FFFFFF"/>
+    </g>
+    <!-- 外轮廓线：黑色 6px，小尺寸下最大对比 -->
+    <rect id="body-outline"
+          x="38" y="75" width="164" height="108" rx="14"
+          fill="none" stroke="#000000" stroke-width="6"/>
+    <!-- 无未读：灰色封蜡圆点，半径与 icon-unread.svg 的红点一致；
+         26 单位在 44px 位图里约 6px 半径、22px 面板里约 3px，仍清晰可辨 -->
+    <circle id="seal"
+            cx="120" cy="137" r="26"
+            fill="#8E9BA8" stroke="#FFFFFF" stroke-width="3"/>
+  </g>
+</svg>

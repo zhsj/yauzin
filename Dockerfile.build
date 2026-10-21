@@ -1,0 +1,59 @@
+# Build image for Yauzin (Go + Gio desktop app).
+#
+# Self-contained on purpose: the Go toolchain and every C header Gio needs come
+# from the Debian archive itself, so the image does not depend on upstream
+# tarballs or third-party build images.
+
+FROM debian:unstable
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Point apt at the USTC mirror before installing anything. debian:unstable ships
+# the deb822 format (/etc/apt/sources.list.d/debian.sources), so rewrite the host
+# part of every source file instead of overwriting sources.list.
+RUN set -eux; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do \
+        [ -f "$f" ] || continue; \
+        sed -i \
+            -e 's|deb.debian.org/debian-security|mirrors.ustc.edu.cn/debian-security|g' \
+            -e 's|security.debian.org/debian-security|mirrors.ustc.edu.cn/debian-security|g' \
+            -e 's|deb.debian.org/debian|mirrors.ustc.edu.cn/debian|g' \
+            "$f"; \
+    done
+
+# golang-go from the Debian archive (sid currently 1.27, go.mod needs 1.24).
+# Dev packages cover Gio's Linux cgo dependencies. Both backends are compiled in
+# by default (only -tags nox11 / nowayland / novulkan disable them):
+#   x11:     pkg-config x11 x11-xcb xkbcommon xkbcommon-x11 xcursor xfixes
+#   wayland: pkg-config wayland-client wayland-cursor wayland-egl
+#   render:  pkg-config egl, plus <vulkan/vulkan.h> for internal/vk
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential \
+      pkg-config \
+      golang-go \
+      libwayland-dev \
+      libx11-dev \
+      libx11-xcb-dev \
+      libxcb1-dev \
+      libxcb-xkb-dev \
+      libxkbcommon-dev \
+      libxkbcommon-x11-dev \
+      libxcursor-dev \
+      libxfixes-dev \
+      libegl-dev \
+      libvulkan-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# Pin the build conventions so callers no longer pass -e flags per run.
+# GOTOOLCHAIN=local keeps the image offline: Go must not download a toolchain.
+ENV CGO_ENABLED=1 \
+    GOFLAGS=-mod=vendor \
+    GOTOOLCHAIN=local \
+    GOCACHE=/gocache
+
+# Compilation cache lives in a named volume, e.g.
+#   docker run -v yauzin-gocache:/gocache ...
+RUN mkdir -p /gocache && chmod 777 /gocache
+
+WORKDIR /app

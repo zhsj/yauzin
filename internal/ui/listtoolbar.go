@@ -1,0 +1,231 @@
+package ui
+
+import (
+	"image"
+
+	"gioui.org/font"
+	"gioui.org/layout"
+	"gioui.org/op/clip"
+	"gioui.org/op/paint"
+
+	"yauzin/internal/i18n"
+)
+
+// toolbarMoreLeftPad is the distance from the list edge to the first control:
+// the content card insets (4+8) plus the toolbar's own 12dp left inset.
+const toolbarMoreLeftPad = 24
+
+// toolbarGap separates the select-all box from the refresh button.
+const toolbarGap = 2
+
+// listToolbar is the Gmail style bar above the conversation list: bulk select
+// on the left, page range and previous/next arrows on the right. Refreshing
+// lives here (not in the top bar).
+type listToolbar struct {
+	app *App
+
+	check   *checkBox
+	refresh *iconButton
+	more    *iconButton
+
+	archive    *iconButton
+	delete     *iconButton
+	markRead   *iconButton
+	markUnread *iconButton
+	clear      *iconButton
+
+	prev *iconButton
+	next *iconButton
+
+	page int
+	// hasNext reports whether the backend offered a cursor for the next page.
+	// The toolbar cannot derive it from a total any more: paging is by cursor.
+	hasNext bool
+	// rangeStart/rangeEnd/rangeTotal back the page label. The label itself is
+	// translated while laying out, so a language change needs no reload.
+	rangeStart, rangeEnd, rangeTotal int
+	loading                          bool
+	moreRect                         image.Rectangle
+}
+
+func newListToolbar(a *App) *listToolbar {
+	t := &listToolbar{app: a}
+	t.check = newCheckBox(func(checked bool) {
+		if checked {
+			a.list.selectAll()
+			return
+		}
+		a.list.clearSelection()
+	})
+	t.refresh = newListIcon(iconRefresh, 32, a.reloadAll)
+	// Refreshing has its own button just left of this one, so the menu only
+	// carries the actions that have no toolbar glyph.
+	t.more = newListIcon(iconMoreVert, 32, func() {
+		a.showMenu(t.moreRect, []menuItem{
+			{Label: i18n.T("list.markAllRead"), Icon: iconMarkRead, OnTap: func() { a.markPageRead(true) }},
+		})
+	})
+	t.archive = newListIcon(iconArchive, 32, a.bulkArchive)
+	t.delete = newListIcon(iconDelete, 32, a.bulkDelete)
+	t.markRead = newListIcon(iconMarkRead, 32, func() { a.bulkSetRead(true) })
+	t.markUnread = newListIcon(iconMarkUnread, 32, func() { a.bulkSetRead(false) })
+	t.clear = newListIcon(iconClose, 32, func() { a.list.clearSelection() })
+	t.prev = newListIcon(iconChevronLeft, 32, func() { a.goToPage(t.page - 1) })
+	t.next = newListIcon(iconChevronRight, 32, func() { a.goToPage(t.page + 1) })
+	return t
+}
+
+func (t *listToolbar) setLoading(v bool) { t.loading = v }
+
+// setTips refreshes the hover labels in the active language; the labels are
+// re-translated every frame, so a language switch needs no rebuild.
+func (t *listToolbar) setTips() {
+	t.archive.setTip(i18n.T("tooltip.archive"))
+	t.delete.setTip(i18n.T("tooltip.delete"))
+	t.markRead.setTip(i18n.T("tooltip.markRead"))
+	t.markUnread.setTip(i18n.T("tooltip.markUnread"))
+}
+
+// setPage records the page the list is showing: its number, the total the
+// backend reported, how many conversations it holds and whether another page
+// was offered.
+func (t *listToolbar) setPage(page, total, count int, hasNext bool) {
+	t.page = page
+	t.hasNext = hasNext
+	t.rangeTotal = total
+	if total <= 0 || count == 0 {
+		t.rangeStart, t.rangeEnd = 0, 0
+		return
+	}
+	start := (page-1)*perPage + 1
+	t.rangeStart, t.rangeEnd = start, start+count-1
+}
+
+// rangeText renders the page label in the active language.
+func (t *listToolbar) rangeText() string {
+	if t.rangeTotal <= 0 {
+		return ""
+	}
+	return i18n.T("list.range", map[string]int{
+		"Start": t.rangeStart,
+		"End":   t.rangeEnd,
+		"Total": t.rangeTotal,
+	})
+}
+
+func (t *listToolbar) Layout(gtx layout.Context) layout.Dimensions {
+	th := t.app.th
+	h := gtx.Dp(48)
+	w := gtx.Constraints.Max.X
+	t.setTips()
+	paintToolbarBackground(gtx, w, h)
+	t.anchorMore(gtx, h)
+	selected := t.selectionState()
+
+	gtx.Constraints = layout.Exact(image.Pt(w, h))
+	layout.Inset{Left: 12, Right: 10}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		children := append(t.leftControls(gtx, th, selected), t.rightControls(gtx, th)...)
+		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx, children...)
+	})
+	return layout.Dimensions{Size: image.Pt(w, h)}
+}
+
+// paintToolbarBackground fills the bar and draws its bottom hairline.
+func paintToolbarBackground(gtx layout.Context, w, h int) {
+	area := clip.Rect{Max: image.Pt(w, h)}
+	stack := area.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, colSurface)
+	stack.Pop()
+	line := clip.Rect{Min: image.Pt(0, h-1), Max: image.Pt(w, h)}
+	ls := line.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, colBorder)
+	ls.Pop()
+}
+
+// anchorMore records where the overflow menu should open (window
+// coordinates). The anchor is the overflow button itself, so the menu opens
+// just below it; the button is centred in the 48dp bar.
+func (t *listToolbar) anchorMore(gtx layout.Context, h int) {
+	baseX := 0
+	if !t.app.sidebarCollapsed {
+		baseX = gtx.Dp(sidebarWidth)
+	}
+	y := gtx.Dp(t.app.headerHeight()) + 2 + 4
+	// The overflow button sits after the select-all box, a 2dp gap and the
+	// refresh button. Its position comes from the widgets' actual sizes rather
+	// than literals that drift when one of them is resized; the leading pad is
+	// the content card insets (4+8) plus the toolbar's own 12dp left inset.
+	btn := gtx.Dp(t.more.size)
+	btnX := baseX + gtx.Dp(toolbarMoreLeftPad) + gtx.Dp(32) + gtx.Dp(toolbarGap) + gtx.Dp(t.refresh.size)
+	btnY := y + (h-btn)/2
+	t.moreRect = image.Rect(btnX, btnY, btnX+btn, btnY+btn)
+}
+
+// selectionState syncs the select-all box with the current selection and
+// returns how many conversations are selected.
+func (t *listToolbar) selectionState() int {
+	selected := t.app.list.selectionCount()
+	allSelected := selected > 0 && selected >= len(t.app.list.threads)
+	switch {
+	case selected == 0:
+		t.check.setState(0)
+	case allSelected:
+		t.check.setState(1)
+	default:
+		t.check.setState(2)
+	}
+	return selected
+}
+
+// leftControls builds the select-all box and whichever action group matches
+// the selection: refresh and overflow while idle, bulk actions while not.
+func (t *listToolbar) leftControls(gtx layout.Context, th *theme, selected int) []layout.FlexChild {
+	children := make([]layout.FlexChild, 0, 8)
+	children = append(children,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return t.check.Layout(gtx, th) }),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 2) }),
+	)
+	if selected == 0 {
+		children = append(children,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return t.refresh.Layout(gtx, th) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return t.more.Layout(gtx, th) }),
+		)
+	} else {
+		children = append(children,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return t.archive.Layout(gtx, th) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return t.delete.Layout(gtx, th) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return t.markRead.Layout(gtx, th) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return t.markUnread.Layout(gtx, th) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return th.text(gtx, i18n.N("list.selected", selected), 13, colText, font.Medium, 1)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 4) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return t.clear.Layout(gtx, th) }),
+		)
+	}
+	return append(children, layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+		return layout.Dimensions{Size: gtx.Constraints.Min}
+	}))
+}
+
+// rightControls builds the page range and the paging arrows. The arrows are
+// disabled while a page loads, so a second request cannot supersede the first.
+func (t *listToolbar) rightControls(gtx layout.Context, th *theme) []layout.FlexChild {
+	t.prev.setDisabled(t.loading || t.page <= 1)
+	t.next.setDisabled(t.loading || !t.hasNext)
+	return []layout.FlexChild{
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				text := t.rangeText()
+				if text == "" {
+					return layout.Dimensions{}
+				}
+				return th.text(gtx, text, 13, colMuted, font.Normal, 1)
+			})
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return t.prev.Layout(gtx, th) }),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return t.next.Layout(gtx, th) }),
+	}
+}
