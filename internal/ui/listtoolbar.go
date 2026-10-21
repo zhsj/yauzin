@@ -8,7 +8,7 @@ import (
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 
-	"yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/i18n"
 )
 
 // toolbarMoreLeftPad is the distance from the list edge to the first control:

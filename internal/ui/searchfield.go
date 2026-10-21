@@ -8,7 +8,7 @@ import (
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/unit"
-	"yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/i18n"
 )
 
 func (t *topBar) clearSearch() {

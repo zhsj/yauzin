@@ -11,9 +11,9 @@ import (
 	"gioui.org/layout"
 	"gioui.org/op"
 
-	"yauzin/internal/i18n"
-	"yauzin/internal/mail"
-	"yauzin/internal/prefs"
+	"github.com/zhsj/yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/prefs"
 )
 
 // testApp builds just enough state to lay out one headless frame. It avoids

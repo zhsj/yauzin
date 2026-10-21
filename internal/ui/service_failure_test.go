@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/mail"
 )
 
 // fakeService is a mail.Service whose answers the test decides. It records the

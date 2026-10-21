@@ -3,8 +3,8 @@ package main
 import (
 	"gioui.org/app"
 
-	"yauzin/internal/singleinstance"
-	"yauzin/internal/ui"
+	"github.com/zhsj/yauzin/internal/singleinstance"
+	"github.com/zhsj/yauzin/internal/ui"
 )
 
 func main() {

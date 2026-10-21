@@ -3,8 +3,8 @@ package ui
 import (
 	"gioui.org/layout"
 
-	"yauzin/internal/i18n"
-	"yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/mail"
 )
 
 // sidebarView is the fixed left column: the compose pill plus the system

@@ -8,7 +8,7 @@ import (
 
 	"gioui.org/op"
 
-	"yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/mail"
 )
 
 // appWithManyLabels builds an app whose sidebar is taller than the window.

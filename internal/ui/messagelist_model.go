@@ -2,7 +2,7 @@ package ui
 
 import (
 	"gioui.org/layout"
-	"yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/mail"
 )
 
 // setThreads replaces the page contents and clears the bulk selection, which

@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/mail"
 )
 
 const (

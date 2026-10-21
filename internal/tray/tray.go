@@ -14,7 +14,7 @@ import (
 
 	"fyne.io/systray"
 
-	"yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/i18n"
 )
 
 // Handlers are run on goroutines owned by the tray library, so callers must

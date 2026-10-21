@@ -11,8 +11,8 @@ import (
 	"gioui.org/op/paint"
 	"gioui.org/widget"
 
-	"yauzin/internal/i18n"
-	"yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/mail"
 )
 
 // settingsView is the modal panel opened from the gear button. It has three

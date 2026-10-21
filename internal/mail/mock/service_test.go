@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/mail"
 )
 
 func newTestService(t *testing.T) *Service {

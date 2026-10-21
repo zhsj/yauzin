@@ -12,8 +12,8 @@ import (
 	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget"
+	"github.com/zhsj/yauzin/internal/i18n"
 	"image/color"
-	"yauzin/internal/i18n"
 )
 
 // topBar holds the global controls: sidebar toggle, brand, search, settings

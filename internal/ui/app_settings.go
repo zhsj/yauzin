@@ -3,8 +3,8 @@ package ui
 import (
 	"gioui.org/app"
 
-	"yauzin/internal/i18n"
-	"yauzin/internal/prefs"
+	"github.com/zhsj/yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/prefs"
 )
 
 // updateSettings reads the stored settings, lets mutate change them and writes

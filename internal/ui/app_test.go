@@ -4,9 +4,9 @@ import (
 	"reflect"
 	"testing"
 
-	"yauzin/internal/mail"
-	"yauzin/internal/mail/mock"
-	"yauzin/internal/prefs"
+	"github.com/zhsj/yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/mail/mock"
+	"github.com/zhsj/yauzin/internal/prefs"
 )
 
 // TestNewAppWithUsesTheInjectedBackend pins the assembly point: every account

@@ -4,9 +4,9 @@ import (
 	"strings"
 	"time"
 
-	"yauzin/internal/htmltext"
-	"yauzin/internal/i18n"
-	"yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/htmltext"
+	"github.com/zhsj/yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/mail"
 )
 
 // folderDisplayName localizes the system folders. User created labels keep the

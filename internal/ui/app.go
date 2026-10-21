@@ -22,11 +22,11 @@ import (
 	"gioui.org/layout"
 	"gioui.org/unit"
 	"gioui.org/x/explorer"
-	"yauzin/internal/i18n"
-	"yauzin/internal/mail"
-	"yauzin/internal/mail/mock"
-	"yauzin/internal/prefs"
-	"yauzin/internal/tray"
+	"github.com/zhsj/yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/mail/mock"
+	"github.com/zhsj/yauzin/internal/prefs"
+	"github.com/zhsj/yauzin/internal/tray"
 )
 
 type composeMode string

@@ -2,8 +2,8 @@ package ui
 
 import (
 	"gioui.org/layout"
-	"yauzin/internal/i18n"
-	"yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/mail"
 )
 
 // messageListView renders one page of conversations, each row a merged thread

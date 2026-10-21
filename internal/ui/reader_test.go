@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/mail"
 )
 
 func TestReaderCardResolvesTheCurrentMessage(t *testing.T) {

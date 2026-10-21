@@ -12,11 +12,11 @@ import (
 	"gioui.org/op"
 	"gioui.org/unit"
 	"gioui.org/x/explorer"
-	"yauzin/internal/cursor"
-	"yauzin/internal/i18n"
-	"yauzin/internal/mail"
-	"yauzin/internal/singleinstance"
-	"yauzin/internal/tray"
+	"github.com/zhsj/yauzin/internal/cursor"
+	"github.com/zhsj/yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/singleinstance"
+	"github.com/zhsj/yauzin/internal/tray"
 )
 
 // Run owns the window lifecycle. The tray keeps the process alive after the
