@@ -5,12 +5,13 @@ import (
 	"strconv"
 	"strings"
 
+	"image/color"
+
 	"gioui.org/font"
 	"gioui.org/layout"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/unit"
-	"image/color"
 )
 
 // avatar paints a coloured circle with the initials of name.

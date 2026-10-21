@@ -4,6 +4,8 @@ import (
 	"image"
 	"time"
 
+	"image/color"
+
 	"gioui.org/font"
 	"gioui.org/io/pointer"
 	"gioui.org/io/system"
@@ -12,8 +14,8 @@ import (
 	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget"
+
 	"github.com/zhsj/yauzin/internal/i18n"
-	"image/color"
 )
 
 // topBar holds the global controls: sidebar toggle, brand, search, settings

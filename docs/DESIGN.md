@@ -184,6 +184,7 @@
 - 文件选择与附件保存通过 `xdg-desktop-portal` 提供的系统对话框；portal 不可用时附件保存回退到 `~/Downloads`。
 - macOS 需要 Xcode Command Line Tools，Windows 需要 MinGW-w64。
 - 开发沙箱 `CGO_ENABLED=0` 且缺少上述开发库：任何（直接或间接）import `gioui.org/app` 的目标（`internal/ui`、`cmd/yauzin`）只能在 Docker 内编译，典型报错 `build constraints exclude all Go files in .../gioui.org/internal/vk`。
+- 格式化使用 `gofmt`（沙箱 `PATH` 内，go1.27.2）；import 增删与分组使用 Go 扩展安装的 `goimports`（`~/go/bin/goimports`，**不在沙箱 `PATH`**），命令见 §13.5。
 
 ### 13.2 依赖与 vendor
 
@@ -236,6 +237,21 @@ docker run --rm -v "$PWD":/app -w /app -v yauzin-gocache:/gocache \
 ```bash
 go test ./internal/prefs ./internal/i18n ./internal/htmltext ./internal/mail/... ./internal/tray ./internal/cursor
 ```
+
+格式化与 import 分组（沙箱直接执行，两条检查都无输出即合格）：
+
+```bash
+gofmt -l internal/ cmd/
+gofmt -w internal/ui
+
+~/go/bin/goimports -local github.com/zhsj/yauzin -l internal/ cmd/
+~/go/bin/goimports -local github.com/zhsj/yauzin -w internal/ cmd/
+```
+
+- import 块固定三段：标准库 / 第三方 / `github.com/zhsj/yauzin/...`。分组由 `-local` 决定，不要手工插空行。
+- `goimports` 接受目录与多个路径，不需要 `git ls-files` 展开；它顺带做 gofmt 等价格式化，所以 `-w` 之后 `gofmt -l` 仍为空，两条检查都保留。
+- `goimports` 只处理磁盘文件，编辑器里未保存的改动需先保存。
+- 不用 `gopls` 做格式化或分组：`gopls format` 等价 gofmt、只排序不分组（`local` 设置只在 Organize Imports 或插入新 import 时生效，格式化请求 "merely sorts the existing imports"），命令行 `gopls imports` 也没有 `-local` 参数，只能分出两组。
 
 ## 14. 字体与图标资产
 

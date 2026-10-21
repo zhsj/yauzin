@@ -2,6 +2,7 @@ package ui
 
 import (
 	"gioui.org/layout"
+
 	"github.com/zhsj/yauzin/internal/mail"
 )
 

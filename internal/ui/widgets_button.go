@@ -3,6 +3,8 @@ package ui
 import (
 	"image"
 
+	"image/color"
+
 	"gioui.org/f32"
 	"gioui.org/font"
 	"gioui.org/io/event"
@@ -13,7 +15,6 @@ import (
 	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget"
-	"image/color"
 )
 
 // iconButton is a square, circular-hover button drawing one glyph.

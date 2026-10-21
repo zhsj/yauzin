@@ -4,13 +4,14 @@ import (
 	"image"
 	"strconv"
 
+	"image/color"
+
 	"gioui.org/font"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/widget"
-	"image/color"
 )
 
 // navItem is one row of the sidebar: folder icon or label dot, name and unread

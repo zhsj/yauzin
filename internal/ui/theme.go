@@ -4,6 +4,8 @@ import (
 	"image"
 	"strings"
 
+	"image/color"
+
 	"gioui.org/font"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -13,7 +15,6 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
-	"image/color"
 )
 
 // theme bundles the shared text shaper, font faces and the small Gmail-like

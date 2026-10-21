@@ -4,6 +4,8 @@ import (
 	"image"
 	"math"
 
+	"image/color"
+
 	"gioui.org/f32"
 	"gioui.org/font"
 	"gioui.org/io/pointer"
@@ -14,7 +16,6 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
-	"image/color"
 )
 
 // tick paints Gmail's checkbox mark in the square at the current origin. The

@@ -8,6 +8,7 @@ import (
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/unit"
+
 	"github.com/zhsj/yauzin/internal/i18n"
 )
 

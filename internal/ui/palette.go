@@ -1,8 +1,9 @@
 package ui
 
 import (
-	"gioui.org/unit"
 	"image/color"
+
+	"gioui.org/unit"
 )
 
 // Gmail Web palette.
