@@ -109,14 +109,26 @@
 
   "reader.emptyTitle": "选择一个会话开始阅读",
   "reader.emptyHint": "点击右侧列表中的会话，整段对话会显示在这里。",
-  "reader.openInBrowser": "在浏览器中打开",
-  "reader.noPlainText": "此邮件没有纯文本正文，可在浏览器中查看 HTML 版本。",
+  "reader.moreActions": "更多操作",
+  "reader.menu.safePreview": "安全预览",
+  "reader.menu.fullPreview": "完整预览（不安全）",
+  "reader.menu.viewSource": "查看原始邮件",
+  "reader.noPlainText": "此邮件没有纯文本正文，可从「更多操作」在浏览器预览 HTML 版本。",
   "reader.messageCount": {
     "other": "{{.Count}} 封邮件"
   },
   "reader.loading": "正在加载…",
   "reader.reply": "回复",
   "reader.forward": "转发",
+
+  "source.title": "原始邮件",
+  "source.messageId": "邮件 ID",
+  "source.account": "账号",
+  "source.from": "发件人",
+  "source.to": "收件人",
+  "source.cc": "抄送",
+  "source.subject": "主题",
+  "source.date": "日期",
 
   "compose.new": "新邮件",
   "compose.reply": "回复",

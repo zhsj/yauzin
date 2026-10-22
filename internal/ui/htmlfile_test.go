@@ -122,6 +122,40 @@ func TestInjectHeadMeta(t *testing.T) {
 	}
 }
 
+// TestInjectCharsetOnly pins the unrestricted preview: the encoding is
+// declared, but no policy is added, so the message runs with whatever it ships.
+func TestInjectCharsetOnly(t *testing.T) {
+	src := `<html><head><title>t</title></head><body><script>alert(1)</script><p>body</p></body></html>`
+	got := injectCharsetOnly(src)
+
+	doc := parseDocument(t, got)
+	head := findHead(doc)
+	if head == nil {
+		t.Fatalf("injected document has no head:\n%s", got)
+	}
+	if !isMeta(elementChild(head, 0), "charset", "utf-8") {
+		t.Fatalf("charset meta is not the first head element child:\n%s", got)
+	}
+	for _, n := range elementsInOrder(doc) {
+		if isMeta(n, "http-equiv", "Content-Security-Policy") {
+			t.Fatalf("unsafe preview injected a policy:\n%s", got)
+		}
+	}
+	if !strings.Contains(got, "alert(1)") {
+		t.Fatalf("unsafe preview dropped the script:\n%s", got)
+	}
+	if text := nodeText(doc); !strings.Contains(text, "body") {
+		t.Fatalf("body text lost, got %q:\n%s", text, got)
+	}
+
+	// A message that ships its own policy keeps it: the unrestricted preview
+	// only refrains from adding one.
+	own := injectCharsetOnly(`<html><head><meta http-equiv="Content-Security-Policy" content="default-src *"><script>x()</script></head><body>b</body></html>`)
+	if !strings.Contains(own, "default-src *") {
+		t.Fatalf("unsafe preview dropped the message's own policy:\n%s", own)
+	}
+}
+
 func parseDocument(t *testing.T, src string) *html.Node {
 	t.Helper()
 	doc, err := html.Parse(strings.NewReader(src))
@@ -263,5 +297,38 @@ func TestWriteMessageHTML(t *testing.T) {
 	}
 	if head := findHead(doc); !isMeta(elementChild(head, 1), "http-equiv", "Content-Security-Policy") {
 		t.Fatalf("written document lost the CSP meta:\n%s", data)
+	}
+}
+
+// TestWriteMessageHTMLUnsafe covers the second written document of a message:
+// its own name, no injected policy, and markup left untouched.
+func TestWriteMessageHTMLUnsafe(t *testing.T) {
+	dir := t.TempDir()
+	src := `<html><head><title>t</title></head><body><script>alert(1)</script><p>你好</p></body></html>`
+
+	safe, err := writeMessageHTML(dir, "demo-gmail-t000-m0", src)
+	if err != nil {
+		t.Fatalf("writeMessageHTML: %v", err)
+	}
+	unsafe, err := writeMessageHTMLUnsafe(dir, "demo-gmail-t000-m0", src)
+	if err != nil {
+		t.Fatalf("writeMessageHTMLUnsafe: %v", err)
+	}
+	if safe == unsafe {
+		t.Fatalf("both modes share the name %q", safe)
+	}
+	if !strings.HasSuffix(unsafe, "-unsafe.html") {
+		t.Fatalf("unsafe document named %q, want an -unsafe suffix", unsafe)
+	}
+
+	data, err := os.ReadFile(unsafe)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if strings.Contains(string(data), "Content-Security-Policy") {
+		t.Fatalf("unsafe document still carries a policy:\n%s", data)
+	}
+	if !strings.Contains(string(data), "alert(1)") || !strings.Contains(string(data), "你好") {
+		t.Fatalf("unsafe document lost its markup:\n%s", data)
 	}
 }

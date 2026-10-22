@@ -36,33 +36,62 @@ func headMeta() string {
 // trade for the guarantee, and it is why the message is only ever rendered by a
 // browser through this path.
 func injectHeadMeta(src string) string {
+	return injectHead(src,
+		metaElement("charset", "utf-8"),
+		metaElement("http-equiv", "Content-Security-Policy", "content", cspContent),
+	)
+}
+
+// injectCharsetOnly declares the encoding and nothing else. It backs the
+// unrestricted preview: the message keeps whatever policy it ships, so its
+// scripts and remote resources run. Nothing else about the document changes.
+func injectCharsetOnly(src string) string {
+	return injectHead(src, metaElement("charset", "utf-8"))
+}
+
+// injectHead inserts metas in front of the head's first child, in the order
+// given, and returns the serialised document.
+func injectHead(src string, metas ...*html.Node) string {
 	doc, err := html.Parse(strings.NewReader(src))
 	if err != nil {
-		return wrapperDocument(src)
+		return wrapperDocument(src, metas...)
 	}
 	head := findHead(doc)
 	if head == nil {
-		return wrapperDocument(src)
+		return wrapperDocument(src, metas...)
 	}
-	// Both elements go in front of the current first child, so the policy is
+	// Every meta goes in front of the current first child, so the policy is
 	// seen before anything the parser placed in the head, including a <script>
 	// that appeared before the <head> tag in the source.
 	first := head.FirstChild
-	head.InsertBefore(metaElement("charset", "utf-8"), first)
-	head.InsertBefore(metaElement("http-equiv", "Content-Security-Policy", "content", cspContent), first)
+	for _, m := range metas {
+		head.InsertBefore(m, first)
+	}
 
 	var out strings.Builder
 	if err := html.Render(&out, doc); err != nil {
-		return wrapperDocument(src)
+		return wrapperDocument(src, metas...)
 	}
 	return out.String()
 }
 
-// wrapperDocument locks down a message the parser could not handle. The policy
-// is the first thing in the document, so nothing in src can run before it;
-// stray <head> and <body> tags inside the body are ignored by the parser.
-func wrapperDocument(src string) string {
-	return "<!DOCTYPE html><html><head>" + headMeta() + "</head><body>" + src + "</body></html>"
+// wrapperDocument locks down a message the parser could not handle, or that has
+// no head to insert into. The metas are the first thing in the document, so
+// nothing in src can run before them; stray <head> and <body> tags inside the
+// body are ignored by the parser.
+func wrapperDocument(src string, metas ...*html.Node) string {
+	var b strings.Builder
+	b.WriteString("<!DOCTYPE html><html><head>")
+	for _, m := range metas {
+		if err := html.Render(&b, m); err != nil {
+			b.WriteString(headMeta())
+			break
+		}
+	}
+	b.WriteString("</head><body>")
+	b.WriteString(src)
+	b.WriteString("</body></html>")
+	return b.String()
 }
 
 // metaElement builds a meta element from key/value attribute pairs.
@@ -93,6 +122,14 @@ func findHead(doc *html.Node) *html.Node {
 // safe character set so a hostile backend cannot escape the temp directory and
 // the content hash keeps different bodies of the same id apart.
 func messageHTMLName(id, src string) string {
+	return messageHTMLNameSuffix(id, src, "")
+}
+
+// messageHTMLNameSuffix is messageHTMLName with a mode marker. The safe
+// preview, the unrestricted one and the source page of one message must not
+// overwrite each other, so their marks sit between the content hash and the
+// extension. An empty mode keeps the original name.
+func messageHTMLNameSuffix(id, src, mode string) string {
 	name := unsafeFileChars.ReplaceAllString(id, "_")
 	name = strings.Trim(name, "._")
 	if name == "" {
@@ -102,17 +139,32 @@ func messageHTMLName(id, src string) string {
 		name = name[:64]
 	}
 	sum := sha256.Sum256([]byte(src))
-	return name + "-" + hex.EncodeToString(sum[:8]) + ".html"
+	suffix := ""
+	if mode != "" {
+		suffix = "-" + mode
+	}
+	return name + "-" + hex.EncodeToString(sum[:8]) + suffix + ".html"
 }
 
 // writeMessageHTML stores the HTML body in dir and returns the path that can
-// be handed to the system browser.
+// be handed to the system browser. The document keeps the strict policy.
 func writeMessageHTML(dir, id, src string) (string, error) {
+	return writeHTMLFile(dir, messageHTMLName(id, src), injectHeadMeta(src))
+}
+
+// writeMessageHTMLUnsafe stores the same body without the injected policy, for
+// the unrestricted preview the user asked for explicitly.
+func writeMessageHTMLUnsafe(dir, id, src string) (string, error) {
+	return writeHTMLFile(dir, messageHTMLNameSuffix(id, src, "unsafe"), injectCharsetOnly(src))
+}
+
+// writeHTMLFile creates dir on demand and writes one document into it.
+func writeHTMLFile(dir, name, doc string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, messageHTMLName(id, src))
-	if err := os.WriteFile(path, []byte(injectHeadMeta(src)), 0o644); err != nil {
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
 		return "", err
 	}
 	return path, nil

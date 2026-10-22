@@ -110,8 +110,11 @@
 
   "reader.emptyTitle": "Select a conversation to start reading",
   "reader.emptyHint": "Pick a conversation from the list and the whole thread appears here.",
-  "reader.openInBrowser": "Open in browser",
-  "reader.noPlainText": "This message has no plain-text part. Open the HTML version in your browser.",
+  "reader.moreActions": "More actions",
+  "reader.menu.safePreview": "Safe preview",
+  "reader.menu.fullPreview": "Full preview (unsafe)",
+  "reader.menu.viewSource": "View original message",
+  "reader.noPlainText": "This message has no plain-text part. Preview the HTML version from \"More actions\".",
   "reader.messageCount": {
     "one": "{{.Count}} message",
     "other": "{{.Count}} messages"
@@ -119,6 +122,15 @@
   "reader.loading": "Loading…",
   "reader.reply": "Reply",
   "reader.forward": "Forward",
+
+  "source.title": "Original message",
+  "source.messageId": "Message ID",
+  "source.account": "Account",
+  "source.from": "From",
+  "source.to": "To",
+  "source.cc": "Cc",
+  "source.subject": "Subject",
+  "source.date": "Date",
 
   "compose.new": "New message",
   "compose.reply": "Reply",
