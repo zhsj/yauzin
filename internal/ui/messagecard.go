@@ -14,29 +14,69 @@ import (
 	"github.com/zhsj/yauzin/internal/mail"
 )
 
-// actions returns the reply, forward and browser buttons, building them once.
-// The callbacks look the message up when they run: the reader replaces the
-// message objects on every refresh, so a closure over the pointer seen during
-// the first frame would act on an older copy.
-func (c *messageCard) actions(a *App) (*pillButton, *pillButton, *pillButton) {
-	if c.reply == nil {
-		c.reply = newPillButton(i18n.T("reader.reply"), iconReply, false, func() {
-			if m := c.message(a); m != nil {
-				a.openCompose(composeReply, m)
-			}
-		})
-		c.fwd = newPillButton(i18n.T("reader.forward"), iconForward, false, func() {
-			if m := c.message(a); m != nil {
-				a.openCompose(composeForward, m)
-			}
-		})
-		c.browser = newPillButton(i18n.T("reader.openInBrowser"), iconOpenInNew, false, func() {
-			if m := c.message(a); m != nil {
-				a.openHTMLInBrowser(m)
-			}
-		})
+// actions returns the reply and forward buttons, building them once. The
+// callbacks look the message up when they run: the reader replaces the message
+// objects on every refresh, so a closure over the pointer seen during the first
+// frame would act on an older copy.
+func (c *messageCard) actions(a *App) {
+	if c.reply != nil {
+		return
 	}
-	return c.reply, c.fwd, c.browser
+	c.reply = newPillButton(i18n.T("reader.reply"), iconReply, false, func() {
+		if m := c.message(a); m != nil {
+			a.openCompose(composeReply, m)
+		}
+	})
+	c.fwd = newPillButton(i18n.T("reader.forward"), iconForward, false, func() {
+		if m := c.message(a); m != nil {
+			a.openCompose(composeForward, m)
+		}
+	})
+	// The overflow menu is built once as well: its entries are assembled per
+	// click, because which ones apply depends on the message being shown.
+	c.more = newIconButton(iconMoreVert, 32, func() {
+		if m := c.message(a); m != nil {
+			a.showMenu(c.moreAnchor(a), c.menuItems(a, m))
+		}
+	})
+	c.more.setGlyph(20)
+	c.more.setTip(i18n.T("reader.moreActions"))
+	c.more.track = true
+}
+
+// menuItems lists the viewing actions of one message. The two previews need an
+// HTML body, the source view works for every message.
+func (c *messageCard) menuItems(a *App, m *mail.Message) []menuItem {
+	items := make([]menuItem, 0, 3)
+	if strings.TrimSpace(m.HTMLBody) != "" {
+		items = append(items,
+			menuItem{Label: i18n.T("reader.menu.safePreview"), Icon: iconOpenInNew, OnTap: func() {
+				if msg := c.message(a); msg != nil {
+					a.openHTMLInBrowser(msg, previewSafe)
+				}
+			}},
+			menuItem{Label: i18n.T("reader.menu.fullPreview"), Icon: iconWarning, OnTap: func() {
+				if msg := c.message(a); msg != nil {
+					a.openHTMLInBrowser(msg, previewFull)
+				}
+			}},
+		)
+	}
+	return append(items, menuItem{Label: i18n.T("reader.menu.viewSource"), Icon: iconSource, OnTap: func() {
+		if msg := c.message(a); msg != nil {
+			a.openMessageSource(msg)
+		}
+	}})
+}
+
+// moreAnchor is where the dropdown opens: the button itself. A tap on a touch
+// screen has no hover frame before it, so the pointer position is the fallback.
+func (c *messageCard) moreAnchor(a *App) image.Rectangle {
+	if r := c.more.rect; !r.Empty() {
+		return r
+	}
+	p := a.pointer
+	return image.Rect(p.X, p.Y, p.X+1, p.Y+1)
 }
 
 // message returns the message the card currently shows. Cards are keyed by
@@ -60,12 +100,12 @@ func truncateName(name string, limit int) string {
 }
 
 type messageCard struct {
-	reader  *readerView
-	id      string
-	header  widget.Clickable
-	reply   *pillButton
-	fwd     *pillButton
-	browser *pillButton
+	reader *readerView
+	id     string
+	header widget.Clickable
+	reply  *pillButton
+	fwd    *pillButton
+	more   *iconButton
 
 	// sel is the selection state of the plain-text part. It belongs to one
 	// message, so it is replaced when the card shows a different one.
@@ -91,10 +131,12 @@ func (c *messageCard) Layout(gtx layout.Context, msg *mail.Message) layout.Dimen
 	open := a.expanded[msg.ID]
 
 	c.actions(a)
-
-	if c.header.Clicked(gtx) {
-		a.expanded[msg.ID] = !open
-		open = !open
+	// Pointer events reach every handler under them, so a click on the ⋮ is
+	// also delivered to the header. The toggle therefore waits until the button
+	// has reported whether it consumed the click.
+	clicked := c.header.Clicked(gtx)
+	c.more.hit = false
+	if clicked {
 		invalidateAfterTap(gtx)
 	}
 
@@ -113,6 +155,12 @@ func (c *messageCard) Layout(gtx layout.Context, msg *mail.Message) layout.Dimen
 		return c.expanded(gtx, msg)
 	})
 	call := macro.Stop()
+
+	// The controls have had their say: a click the ⋮ consumed must not also
+	// collapse or expand the card.
+	if clicked && !c.more.hit {
+		a.expanded[msg.ID] = !open
+	}
 
 	w := gtx.Constraints.Max.X
 	if w <= 0 || w > 1<<20 {
@@ -186,6 +234,8 @@ func (c *messageCard) expanded(gtx layout.Context, msg *mail.Message) layout.Dim
 							return th.glyph(gtx, iconExpandLess, 18)
 						})
 					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 2) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.more.Layout(gtx, th) }),
 				)
 				// The whole header toggles the card, so it advertises itself.
 				th.cursor(gtx, pointer.CursorPointer, dims.Size)
@@ -207,46 +257,27 @@ func (c *messageCard) expanded(gtx layout.Context, msg *mail.Message) layout.Dim
 			})
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			children := []layout.FlexChild{
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.reply.Layout(gtx, th) }),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.fwd.Layout(gtx, th) }),
-			}
-			if strings.TrimSpace(msg.HTMLBody) != "" {
-				children = append(children,
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.browser.Layout(gtx, th) }),
-				)
-			}
 			return layout.Inset{Top: 12}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx, children...)
+				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.reply.Layout(gtx, th) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.fwd.Layout(gtx, th) }),
+				)
 			})
 		}),
 	)
 }
 
-// body shows the text/plain part. HTML bodies are never rendered in-app: they
-// are written to a temp file and handed to the user's browser instead.
+// body shows the text/plain part. HTML bodies are never rendered in-app: the
+// card's "more" menu hands them to the browser instead.
 func (c *messageCard) body(gtx layout.Context, msg *mail.Message) layout.Dimensions {
-	a := c.reader.app
+	th := c.reader.app.th
 	body := strings.TrimSpace(msg.TextBody)
 	sel := c.bodySelection(msg)
 	if body == "" {
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return a.th.selectableText(gtx, sel, i18n.T("reader.noPlainText"), 14, colMuted, font.Normal)
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if strings.TrimSpace(msg.HTMLBody) == "" {
-					return layout.Dimensions{}
-				}
-				return layout.Inset{Top: 10}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return c.browser.Layout(gtx, a.th)
-				})
-			}),
-		)
+		return th.selectableText(gtx, sel, i18n.T("reader.noPlainText"), 14, colMuted, font.Normal)
 	}
-	return a.th.selectableText(gtx, sel, body, 14, colText, font.Normal)
+	return th.selectableText(gtx, sel, body, 14, colText, font.Normal)
 }
 
 func (c *messageCard) attachments(gtx layout.Context, msg *mail.Message) layout.Dimensions {

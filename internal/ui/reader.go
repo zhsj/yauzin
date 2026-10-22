@@ -10,7 +10,8 @@ import (
 
 // readerView renders one conversation: a toolbar, the subject headline and one
 // bordered card per message with the newest one expanded. Only text/plain
-// bodies are shown; HTML-only messages get a hint and a browser button.
+// bodies are shown; HTML bodies and the original source open from the card's
+// "more" menu.
 type readerView struct {
 	app   *App
 	list  layout.List
@@ -136,7 +137,7 @@ func (r *readerView) toolbar(gtx layout.Context) layout.Dimensions {
 // the attachment chips survive: the chips show file names, not UI copy.
 func (r *readerView) relabel() {
 	for _, card := range r.cards {
-		card.reply, card.fwd, card.browser = nil, nil, nil
+		card.reply, card.fwd, card.more = nil, nil, nil
 	}
 }
 

@@ -44,6 +44,13 @@ type iconButton struct {
 	// jitter by a pixel while the pointer moved inside the button.
 	anchor   image.Point
 	anchored bool
+
+	// track asks the button to publish its rectangle in window coordinates, for
+	// views that anchor a dropdown to it. The rectangle is refreshed only while
+	// the pointer rests on the button: locating it needs a pointer position
+	// inside its own area.
+	track bool
+	rect  image.Rectangle
 }
 
 func newIconButton(ic icon, size unit.Dp, onTap func()) *iconButton {
@@ -98,7 +105,7 @@ func (b *iconButton) layout(gtx layout.Context, th *theme, ic icon, hoverCol col
 	}
 	dims := b.click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		gtx.Constraints = layout.Exact(image.Pt(s, s))
-		if b.tip != "" {
+		if b.tip != "" || b.track {
 			// A private pointer area tracks the pointer inside the button. It
 			// is declared before the cursor op below: hit testing walks the
 			// newest nodes first and leaves the area chain at the first
@@ -132,8 +139,15 @@ func (b *iconButton) layout(gtx layout.Context, th *theme, ic icon, hoverCol col
 	// label: filters route events by what the previous frame declared, so
 	// declaring only while hovered would miss the very Enter that starts a
 	// hover and anchor from a stale position.
-	if b.tip != "" {
+	if b.tip != "" || b.track {
 		b.readPointer(gtx)
+	}
+	if b.track && hovered {
+		// The pointer area reports the pointer in the button's own coordinates
+		// while theme.pointer carries it in window coordinates; their difference
+		// is the button's origin.
+		origin := image.Pt(th.pointer.X-int(b.localPtr.X+.5), th.pointer.Y-int(b.localPtr.Y+.5))
+		b.rect = image.Rectangle{Min: origin, Max: origin.Add(dims.Size)}
 	}
 	if hovered && b.tip != "" {
 		if !b.anchored {

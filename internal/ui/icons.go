@@ -124,6 +124,11 @@ var (
 	iconMoreVert  = mutedIcon(glyphMoreVert)
 	iconMinimize  = mutedIcon(glyphMinimize)
 
+	// iconWarning marks an action that gives up a protection, and iconSource
+	// the view of the unstyled message source.
+	iconWarning = mutedIcon(glyphAlert)
+	iconSource  = mutedIcon(glyphFile)
+
 	iconStarOutline = icon{glyph: glyphStar, col: colStarIdle}
 	iconStarFilled  = icon{glyph: glyphStar, fill: true, col: colAmber}
 )

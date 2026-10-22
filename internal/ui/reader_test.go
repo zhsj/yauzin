@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"image"
 	"testing"
 
+	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
 )
 
@@ -40,7 +42,8 @@ func TestReaderReplyUsesTheCurrentMessage(t *testing.T) {
 		},
 	}}
 	card := a.reader.cardFor("m1")
-	reply, _, _ := card.actions(a)
+	card.actions(a)
+	reply := card.reply
 
 	a.msgs[0] = &mail.Message{
 		MessageSummary: mail.MessageSummary{
@@ -56,6 +59,77 @@ func TestReaderReplyUsesTheCurrentMessage(t *testing.T) {
 	}
 	if a.compose.msg == nil || a.compose.msg.Subject != "new subject" {
 		t.Fatalf("reply quoted %+v, want the refreshed message", a.compose.msg)
+	}
+}
+
+// TestMessageCardMenuFollowsTheMessage pins which entries a card offers: the
+// previews need an HTML body, the source view is always there.
+func TestMessageCardMenuFollowsTheMessage(t *testing.T) {
+	a := testApp(t)
+	withHTML := &mail.Message{MessageSummary: mail.MessageSummary{ID: "m1"}, HTMLBody: "<p>hi</p>"}
+	plain := &mail.Message{MessageSummary: mail.MessageSummary{ID: "m2"}, TextBody: "hi"}
+
+	card := a.reader.cardFor("m1")
+	card.actions(a)
+
+	items := card.menuItems(a, withHTML)
+	want := []string{
+		i18n.T("reader.menu.safePreview"),
+		i18n.T("reader.menu.fullPreview"),
+		i18n.T("reader.menu.viewSource"),
+	}
+	if len(items) != len(want) {
+		t.Fatalf("menu has %d entries, want %d", len(items), len(want))
+	}
+	for i, item := range items {
+		if item.Label != want[i] {
+			t.Fatalf("entry %d = %q, want %q", i, item.Label, want[i])
+		}
+		if item.Icon.glyph == 0 || item.OnTap == nil {
+			t.Fatalf("entry %d is not actionable: %+v", i, item)
+		}
+	}
+
+	items = card.menuItems(a, plain)
+	if len(items) != 1 || items[0].Label != i18n.T("reader.menu.viewSource") {
+		t.Fatalf("text-only menu = %+v, want the source view alone", items)
+	}
+}
+
+// TestMessageCardMoreOpensTheMenu drives the button without a pointer: the
+// click callback is what the menu anchor is built from.
+func TestMessageCardMoreOpensTheMenu(t *testing.T) {
+	a := testApp(t)
+	a.msgs = []*mail.Message{{
+		MessageSummary: mail.MessageSummary{ID: "m1"},
+		HTMLBody:       "<p>hi</p>",
+	}}
+	card := a.reader.cardFor("m1")
+	card.actions(a)
+	card.more.onTap()
+
+	m, ok := a.overlay.(*menuOverlay)
+	if !ok {
+		t.Fatalf("overlay = %T after the more button, want *menuOverlay", a.overlay)
+	}
+	if len(m.items) != 3 {
+		t.Fatalf("menu has %d entries, want 3", len(m.items))
+	}
+}
+
+func TestMessageCardMoreAnchorFallsBackToThePointer(t *testing.T) {
+	a := testApp(t)
+	card := a.reader.cardFor("m1")
+	card.actions(a)
+
+	a.pointer = image.Pt(120, 240)
+	if got, want := card.moreAnchor(a), image.Rect(120, 240, 121, 241); got != want {
+		t.Fatalf("anchor = %v, want the pointer %v", got, want)
+	}
+
+	card.more.rect = image.Rect(10, 20, 42, 52)
+	if got := card.moreAnchor(a); got != card.more.rect {
+		t.Fatalf("anchor = %v, want the button %v", got, card.more.rect)
 	}
 }
 
