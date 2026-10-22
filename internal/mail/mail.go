@@ -73,6 +73,10 @@ type Folder struct {
 	Kind   FolderKind
 	Color  string
 	Unread int
+	// Total is the number of conversations (threads) in the folder or label,
+	// filled in by FolderDetails. It backs the list toolbar's "N of Total"
+	// range label; backends that cannot tell leave it at zero.
+	Total int
 }
 
 // Account describes one configured mail account.

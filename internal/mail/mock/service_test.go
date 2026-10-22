@@ -188,6 +188,33 @@ func TestUnreadCountersUseConversations(t *testing.T) {
 	}
 }
 
+// TestFolderDetailsReportsConversationTotals keeps the folder total in step
+// with the list: the "N of Total" label reads the folder's Total, so it must
+// equal the count ListThreads reports for the same folder.
+func TestFolderDetailsReportsConversationTotals(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+
+	folders, err := s.Folders(ctx)
+	if err != nil {
+		t.Fatalf("folders: %v", err)
+	}
+	folders, err = s.FolderDetails(ctx, folders)
+	if err != nil {
+		t.Fatalf("folder details: %v", err)
+	}
+
+	for _, f := range folders {
+		page, err := s.ListThreads(ctx, mail.ListRequest{FolderID: f.ID, Limit: 200})
+		if err != nil {
+			t.Fatalf("list %q: %v", f.ID, err)
+		}
+		if f.Total != page.Total {
+			t.Fatalf("folder %q total = %d, want %d", f.ID, f.Total, page.Total)
+		}
+	}
+}
+
 func TestArchiveHidesThread(t *testing.T) {
 	s := newTestService(t)
 	ctx := context.Background()

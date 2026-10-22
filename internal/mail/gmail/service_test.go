@@ -216,9 +216,9 @@ const folderListBody = `{"labels":[
 // folderDetails is the per-label answer of labels.get.
 func folderDetails() map[string]string {
 	return map[string]string{
-		"INBOX":   `{"messagesUnread":3}`,
-		"STARRED": `{"messagesUnread":1}`,
-		"Label_1": `{"messagesUnread":2,"color":{"backgroundColor":"#0b57d0"}}`,
+		"INBOX":   `{"messagesUnread":3,"threadsTotal":112}`,
+		"STARRED": `{"messagesUnread":1,"threadsTotal":7}`,
+		"Label_1": `{"messagesUnread":2,"threadsTotal":42,"color":{"backgroundColor":"#0b57d0"}}`,
 	}
 }
 
@@ -255,18 +255,19 @@ func TestFoldersReadsCountsFromBatchedLabelDetails(t *testing.T) {
 		id     string
 		kind   mail.FolderKind
 		unread int
+		total  int
 	}{
-		{"inbox", mail.FolderInbox, 3},
-		{"starred", mail.FolderStarred, 1},
-		{"sent", mail.FolderSent, 0},
-		{"trash", mail.FolderTrash, 0},
-		{"Label_1", mail.FolderLabel, 2},
-		{"Label_2", mail.FolderLabel, 0},
+		{"inbox", mail.FolderInbox, 3, 112},
+		{"starred", mail.FolderStarred, 1, 7},
+		{"sent", mail.FolderSent, 0, 0},
+		{"trash", mail.FolderTrash, 0, 0},
+		{"Label_1", mail.FolderLabel, 2, 42},
+		{"Label_2", mail.FolderLabel, 0, 0},
 	}
 	for i, w := range want {
 		got := folders[i]
-		if got.ID != w.id || got.Kind != w.kind || got.Unread != w.unread {
-			t.Fatalf("folder %d = %+v, want id=%q kind=%q unread=%d", i, got, w.id, w.kind, w.unread)
+		if got.ID != w.id || got.Kind != w.kind || got.Unread != w.unread || got.Total != w.total {
+			t.Fatalf("folder %d = %+v, want id=%q kind=%q unread=%d total=%d", i, got, w.id, w.kind, w.unread, w.total)
 		}
 	}
 	if got := folders[4]; got.Name != "Work" || got.Color != "#0b57d0" {

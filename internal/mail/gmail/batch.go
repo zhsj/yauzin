@@ -28,7 +28,7 @@ const batchLimit = 25
 // labelDetailFields trims a labels.get response to what the sidebar renders.
 // labels.list only returns id, name and type, so these fields have to come from
 // a separate call per label.
-const labelDetailFields = "messagesUnread,color/backgroundColor"
+const labelDetailFields = "messagesUnread,threadsTotal,color/backgroundColor"
 
 // batchTarget is one GET embedded in a batch request.
 type batchTarget struct {

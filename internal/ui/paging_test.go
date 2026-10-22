@@ -1,6 +1,11 @@
 package ui
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/zhsj/yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/mail"
+)
 
 func TestGoToPageNeedsAKnownCursor(t *testing.T) {
 	a := testApp(t)
@@ -73,6 +78,9 @@ func TestToolbarRangeLabel(t *testing.T) {
 		{name: "middle page", page: 2, total: 112, count: 25, hasNext: true, wantStart: 26, wantEnd: 50, wantOK: 112},
 		{name: "last page", page: 5, total: 112, count: 12, hasNext: false, wantStart: 101, wantEnd: 112, wantOK: 112},
 		{name: "empty page", page: 1, total: 0, count: 0, hasNext: false, wantStart: 0, wantEnd: 0, wantOK: 0},
+		// A page with rows but no total still renders its range; rangeText
+		// decides whether to show "of N" separately.
+		{name: "unknown total", page: 1, total: -1, count: 25, hasNext: true, wantStart: 1, wantEnd: 25, wantOK: -1},
 	}
 
 	for _, tt := range tests {
@@ -90,5 +98,44 @@ func TestToolbarRangeLabel(t *testing.T) {
 				t.Fatalf("page = %d, want %d", bar.page, tt.page)
 			}
 		})
+	}
+}
+
+// TestToolbarRangeTextPrefersFolderTotal covers the folder total override:
+// browsing a folder shows the accurate count from FolderDetails instead of the
+// unreliable resultSizeEstimate, while a search keeps the list estimate.
+func TestToolbarRangeTextPrefersFolderTotal(t *testing.T) {
+	t.Cleanup(func() { i18n.SetLanguage(i18n.DefaultLanguage) })
+	i18n.SetLanguage("en")
+
+	a := testApp(t)
+	a.folders = []mail.Folder{{ID: "inbox", Kind: mail.FolderInbox, Total: 42}}
+	a.activeFolder = "inbox"
+	a.toolbar.setPage(1, 999, 25, true)
+
+	if got := a.folderTotal("inbox"); got != 42 {
+		t.Fatalf("folderTotal(inbox) = %d, want 42", got)
+	}
+	if got := a.folderTotal("nope"); got != 0 {
+		t.Fatalf("folderTotal(nope) = %d, want 0", got)
+	}
+
+	// Browsing: the accurate folder total wins over the estimate.
+	if got, want := a.toolbar.rangeText(), "1–25 of 42"; got != want {
+		t.Fatalf("browsing range = %q, want %q", got, want)
+	}
+
+	// A search has no per-label total, so the list estimate stays.
+	a.query = "invoice"
+	if got, want := a.toolbar.rangeText(), "1–25 of 999"; got != want {
+		t.Fatalf("search range = %q, want %q", got, want)
+	}
+
+	// Browsing with the folder total not yet loaded falls back to the estimate
+	// instead of hiding the range.
+	a.query = ""
+	a.folders = nil
+	if got, want := a.toolbar.rangeText(), "1–25 of 999"; got != want {
+		t.Fatalf("unknown-total range = %q, want %q", got, want)
 	}
 }

@@ -292,6 +292,7 @@ func (s *Service) FolderDetails(ctx context.Context, folders []mail.Folder) ([]m
 	out := make([]mail.Folder, len(folders))
 	for i, f := range folders {
 		out[i] = f
+		out[i].Total = len(s.threadPool(f.ID, ""))
 		switch f.Kind {
 		case mail.FolderInbox:
 			out[i].Unread = inboxUnread

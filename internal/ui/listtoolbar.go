@@ -93,7 +93,10 @@ func (t *listToolbar) setPage(page, total, count int, hasNext bool) {
 	t.page = page
 	t.hasNext = hasNext
 	t.rangeTotal = total
-	if total <= 0 || count == 0 {
+	// The page range depends only on how many rows arrived; the total is shown
+	// separately and may be replaced by the folder's accurate count later (see
+	// rangeText), so an unknown total must not blank the range.
+	if count == 0 {
 		t.rangeStart, t.rangeEnd = 0, 0
 		return
 	}
@@ -103,13 +106,24 @@ func (t *listToolbar) setPage(page, total, count int, hasNext bool) {
 
 // rangeText renders the page label in the active language.
 func (t *listToolbar) rangeText() string {
-	if t.rangeTotal <= 0 {
+	total := t.rangeTotal
+	// Browsing a folder or label, the accurate conversation count lives in the
+	// sidebar's folder details, which arrive after the page (reloadAll loads
+	// names, then rows, then counters). Gmail's resultSizeEstimate is only an
+	// estimate that often stays the same across labels, so prefer the folder
+	// total once it is known.
+	if t.app != nil && t.app.query == "" {
+		if n := t.app.folderTotal(t.app.activeFolder); n > 0 {
+			total = n
+		}
+	}
+	if total <= 0 {
 		return ""
 	}
 	return i18n.T("list.range", map[string]int{
 		"Start": t.rangeStart,
 		"End":   t.rangeEnd,
-		"Total": t.rangeTotal,
+		"Total": total,
 	})
 }
 

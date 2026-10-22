@@ -250,6 +250,18 @@ func (a *App) selectFolder(id string) {
 	a.side.reload()
 }
 
+// folderTotal returns the conversation count FolderDetails stored for the given
+// folder or label. It reports zero when the folder is unknown or its details
+// have not arrived yet, so callers fall back to the list's own estimate.
+func (a *App) folderTotal(id string) int {
+	for _, f := range a.folders {
+		if f.ID == id {
+			return f.Total
+		}
+	}
+	return 0
+}
+
 // activeAccount returns the mailbox in use. An empty activeAcc means no
 // mailbox is selected (the account was removed); it must not fall back to the
 // first one, or the header would name a mailbox the list never loaded.

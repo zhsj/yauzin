@@ -170,6 +170,7 @@ func (s *Service) FolderDetails(ctx context.Context, folders []mail.Folder) ([]m
 			continue
 		}
 		out[i].Unread = d.MessagesUnread
+		out[i].Total = d.ThreadsTotal
 		if d.Color != nil {
 			out[i].Color = d.Color.BackgroundColor
 		}
