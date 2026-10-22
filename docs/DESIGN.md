@@ -21,11 +21,13 @@
 
 ## 3. 后端契约（`internal/mail`）
 
-- **会话聚合在服务层**，UI 不做分组：`ThreadSummary` 恒描述整段会话，`ListRequest.Query` 只决定会话是否命中，不会裁剪会话内的邮件。
+- **会话聚合在服务层**，UI 不做分组：`ThreadSummary` 恒描述整段会话，搜索命中也只决定会话是否出现，不会裁剪会话内的邮件。
 - **会话粒度的读取**：正文只通过 `GetThread(ctx, threadID)` 按会话读取，`Service` 不提供单封 `Get`。真实后端因此不必为 UI 不使用的懒加载路径写实现；若将来确实需要单封读取，先在设计里说明用途再重新加回。
 - **原文查看是独立的读取路径**：`RawMessage(ctx, messageID) ([]byte, error)` 只在用户点「查看原始邮件」时调用，返回后端存储的原始 RFC 822 源码（Gmail 为 `messages.get?format=raw`）。它不是正文懒加载：解析后的正文仍只来自 `GetThread`，因此不受上一条约束。
-- **纯返回值（无 emit）**：`Folders(ctx) ([]Folder, error)` 返回侧栏名称（不含未读数/颜色），`FolderDetails(ctx, folders) ([]Folder, error)` 补未读数与颜色，`ListThreads(ctx, req) (ThreadPage, error)` 返回整页会话；三个方法都一次性返回，不再有 emit 回调。渐进体验由 UI 串行编排（见 §4.2）：侧栏先显示标签名、列表保持加载态直到详情就绪后一次性显示整页，最后补计数器。
-- **游标分页**：`ListThreads(ctx, ListRequest{FolderID, Query, PageToken, Limit})`；`ThreadPage{Threads, Total, NextPageToken}`，`NextPageToken` 为空表示最后一页，`Total` 为负表示后端无法估算。UI 只在 `tokens []string` 里压栈游标，不向下传页码。
+- **纯返回值（无 emit）**：`Folders(ctx) ([]Folder, error)` 返回侧栏名称（不含未读数/颜色），`FolderDetails(ctx, folders) ([]Folder, error)` 补未读数与颜色，`ListThreads(ctx, req)` 与 `SearchThreads(ctx, req)` 返回整页会话；四个方法都一次性返回，不再有 emit 回调。渐进体验由 UI 串行编排（见 §4.2）：侧栏先显示标签名、列表保持加载态直到详情就绪后一次性显示整页，最后补计数器。
+- **游标分页**：`ListThreads(ctx, ListRequest{FolderID, PageToken, Limit})` 浏览单个文件夹，`SearchThreads(ctx, SearchRequest{Query, PageToken, Limit})` 跨全部文件夹搜索；两者的 `FolderID` / `Query` 都是必填，空值返回 `ErrInvalidArgument`。`ThreadPage{Threads, Total, NextPageToken}`，`NextPageToken` 为空表示最后一页，`Total` 为负表示后端无法估算。UI 只在 `tokens []string` 里压栈游标，不向下传页码。
+- **搜索是独立的读路径**：query 原样交给后端（Gmail 支持 `from:` / `subject:` / `has:attachment` 等原生语法），不带 folder 过滤；Gmail 的 `includeSpamTrash` 取默认 false，因此天然排除垃圾邮件与垃圾箱，与 mock 的 `matchFolder("")` 语义一致。`Total` 取后端估算，无法估算时为 -1。
+- **读取缓存**：gmail 后端对 `Folders` / `FolderDetails` / `ListThreads` / `SearchThreads` 各做一份无过期 LRU（容量 4 / 4 / 64 / 32；键为固定键、标签 ID 集合、`(labelID, pageToken, limit)`、`(query, pageToken, limit)`），命中返回深拷贝，`Invalidate()` 整体清空。列表与搜索的缓存分开，互不挤占。
 - **错误是分类不是句子**：`ErrNotFound` / `ErrUnsupported` / `ErrInvalidArgument` / `ErrUnauthorized` 由 `internal/ui/errors.go` 用 `errors.Is` 映射到 i18n 键，未知错误才回退 `err.Error()`。`ErrUnauthorized` 只表示「账号需要重新授权」，不让传输层文案冒充原因。
 - **能力边界按方法表达**：只读后端（当前 Gmail）对 `SetFlag` / `Archive` / `Delete` / `Send` / `SaveAttachment` 统一返回 `ErrUnsupported`，UI 保留原入口并由既有错误映射提示「当前账号不支持该操作」；`RawMessage` 属于读操作，只读账号照常实现。打开未读会话触发的自动已读在只读后端上静默回滚徽标，不打断阅读。
 - 实现必须并发安全并尊重 `ctx`（UI 从多个 goroutine 并发调用、不串行化）。mock 的延迟存在的意义就是暴露加载态与竞态。
@@ -39,7 +41,7 @@
 - **请求日志**：每个账号的每次 HTTP 请求在 DEBUG 级别各记一行 `gmail request`，字段为 `account`（账号 ID，新增账号授权时为 `-`）、`method`、`endpoint`（host + path，不含 query）与 `status`；传输层失败时改记 `err`、不记状态。日志装在 `transport.go` 的 `http.RoundTripper` 上，覆盖单次 REST、batch、令牌刷新与授权交换；包装只克隆 `*http.Client`，不改 `http.DefaultClient` 或测试注入的 client。级别来自「设置 → 通用 → 日志」（`settings.json` 的 `logLevel`），默认 `info`，改后对运行中的后端立即生效。
 - **读取映射**：Gmail 系统标签 `INBOX/STARRED/SENT/TRASH` 映射为 `inbox/starred/sent/trash` 与对应 `FolderKind`（名称留给 UI 按 kind 翻译），`DRAFT/SPAM/IMPORTANT/UNREAD/CATEGORY_*` 不展示；用户标签保留 Gmail label ID 与名称；`labels.list` 返回的是部分资源（只有 id/name/type），因此未读数与颜色来自一次 **batch** 请求：`POST /batch/gmail/v1`（multipart/mixed）里每个子请求是 `labels.get?fields=messagesUnread,color/backgroundColor`，**单批 25 个子请求**、超出则分片，子请求用 `Content-ID` 索引回填，响应乱序也能对应；全部批次完成后一次性返回，补齐对应标签的未读数/颜色。一次文件夹加载因此是 `1 + ceil(L/25)` 个 HTTP 请求；单个子请求失败（标签刚被删除）只告警并按 0 显示，全部失败才报错。列表用 `threads.list`，随后用同样的一次 **batch** 请求补全本页每个会话的 `threads.get?format=metadata`（参与者、未读数、星标、附件标记与最新时间），同样**每批 25**、按 `Content-ID` 回填并按 list 顺序输出，全部批次完成后一次性返回；子请求 404（会话在两次调用之间被删除）只丢弃该行，其它子请求失败或整批失败则该次调用报错，空页不发 batch。一次列表加载因此是 `1 + ceil(N/25)` 个 HTTP 请求。**batch 按账号串行**：`client` 持有一个容量 1、可被 ctx 取消的信号量，从发起到响应体读闭一直持有（含整批 401 重发），因此侧栏的 labels batch 与列表的 threads batch 不会叠加——Gmail 会并发执行 batch 内的子请求并按用户计并发，叠加正是触发 429 的原因。`Total` 取 `resultSizeEstimate`，缺省或用空时为 -1。正文用 `format=full` 递归解析 MIME：首个 `text/plain` 与首个 `text/html` 作正文，带 `filename` 的部件只留元数据（附件下载不在本期范围）。
 - **类型来源**：`discovery_types.go` 由 `internal/cmd/gmailgen` 从 Google 的 Discovery 文档生成（`//go:generate`，文件头记录文档 `revision`），字段名按 initialism 表保持 `ID` / `IDs` / `MIMEType` / `AttachmentID` 等写法；`api.go` 只留 `headers` / `hasFlag` / `date` / `hasAttachment` 这些把文档折算成领域模型的辅助方法。文档本身不入库，每次生成都取官方当前版本，schema 变化靠 `git diff` 审阅。
-- **已知取舍**：一页 25 个会话 = 1 次 list + 1 次 metadata batch（`1 + ceil(N/25)`），首屏延迟仍高于 mock；每批 25 是并发预算而非 Gmail 协议上限（协议仍允许 100），串行后 batch 子请求峰值固定为 25，若线上仍偶发 429 再下调 `batchLimit`；标签多时文件夹加载仍拆成多批（每次 `FolderDetails` 一次性返回，不再逐批渐进渲染），但首次仍未缓存、每次 `Folders` 都全量取 `labels.get`；Gmail 按子请求计配额，batch 只省往返与连接开销、不省配额，`metadataHeaders` 也仍是每会话一份；`resultSizeEstimate` 是估算值；列表中附件标记依赖 metadata 返回的 part 树，若某条消息未返回 parts 则该行可能漏标记；token 与代理凭据都是明文 0600 存储，没有系统密钥环集成。
+- **已知取舍**：一页 25 个会话 = 1 次 list + 1 次 metadata batch（`1 + ceil(N/25)`），首屏延迟仍高于 mock；每批 25 是并发预算而非 Gmail 协议上限（协议仍允许 100），串行后 batch 子请求峰值固定为 25，若线上仍偶发 429 再下调 `batchLimit`；标签多时文件夹加载仍拆成多批（每次 `FolderDetails` 一次性返回，不再逐批渐进渲染），缓存未命中时仍是一次 `labels.list` 加 `ceil(L/25)` 个 `labels.get`，且缓存无过期、邮箱变化不会自动反映，只能靠 `Invalidate()` 清空；Gmail 按子请求计配额，batch 只省往返与连接开销、不省配额，`metadataHeaders` 也仍是每会话一份；`resultSizeEstimate` 是估算值；列表中附件标记依赖 metadata 返回的 part 树，若某条消息未返回 parts 则该行可能漏标记；token 与代理凭据都是明文 0600 存储，没有系统密钥环集成。
 
 ## 4. UI 架构（`internal/ui`）
 
@@ -49,7 +51,7 @@
 
 状态分四类：
 
-1. 会话上下文：`activeAcc`、`activeFolder`、`query`、`folders`。
+1. 会话上下文：`activeAcc`、`activeFolder`、`query`、`folders`。`activeFolder == ""` 就是搜索视图（此时 `query` 非空），侧栏不高亮任何项；非空则是该文件夹/标签的浏览视图。
 2. 分页：`page`（1 基）+ `tokens`（`tokens[i]` 打开第 `i+1` 页，`tokens[0]` 恒为空游标）。
 3. 阅读：`selectedThread`、`thread`、`msgs`、`expanded`、`loadingThread`。
 4. 窗口/浮层：`decorated`、`maximized`、`csd`、`windowActions`、`overlay` + `compose`/`settings`/`menu`。
@@ -65,13 +67,14 @@
 - 三阶段加载由 `onSuccess` 链式编排：`loadFolderNames` 成功后在其回调里发起 `loadThreadsKeepingScroll`，列表就绪后再发起 `loadFolderDetails`。每次调用各走一次 `async`，结果经 `post` 回投并套用同一代际/账号校验，迟到结果直接丢弃。列表在 detail 到达前保持加载态，页数据到达后一次性 `setThreads`（切页/切换，回顶）或 `mergeThreads`（同页刷新，保留滚动与仍存在的勾选）；成功回调只收尾页码/工具栏，不再重设行数据。
 - 过期响应靠**代际号**丢弃：`listGen`（列表/分页）、`folderGen`（文件夹未读数）、`msgGen`（阅读器）；回调里同时校验 `activeAcc`、页码或会话 ID。`context.Canceled` 是预期结果，不弹错误提示。
 - 切账号 / 切文件夹 / 搜索时先清空视图（`App.clearList` 清 `setThreads(nil)` 并抹掉工具栏范围文案，`resetSelection` 关阅读器）再发起加载，避免旧行、旧标签色块与旧页码闪现。
+- 列表请求按查询分流：`query` 非空走 `SearchThreads`，否则 `ListThreads`。两者共用同一个 `listGen` / `listCancel` / `tokens`，因此搜索、翻页、切文件夹互相取代；worker 启动前快照 `folder` 与 `query`，worker 内不读 `App` 字段。
 - 列表只渲染可见行（`layout.List`），行内控件状态按会话 ID 缓存在视图结构里。
 
 ### 4.3 浮层
 
 - `App.overlay` 是**单一槽位**：`menuOverlay` / `settingsView` / `composeView` 互相替换。
 - 吞点击层必须是 `Stack` 的第一个子对象，否则挡住卡片自身的交互。菜单用 pass-through blocker（点击外部只关菜单），设置保持模态阻塞；写信浮窗**不设全窗 blocker**，由卡片内 `Clickable` 自己消费空白点击。
-- Esc 优先级：状态条 / 菜单 → 写信 / 设置 → 阅读器返回列表 → 清空搜索。
+- Esc 优先级：状态条 / 菜单 → 写信 / 设置 → 阅读器返回列表。Esc 不清空查询、不在搜索时回退文件夹；搜索框胶囊的 ✕ 只清空输入框文字，列表保持当前搜索结果（`query` 与 `activeFolder` 都不变）。
 - 面板内的下拉**必须页内展开**，不能复用 `App.showMenu`：`showOverlay` 先 `closeOverlay()` 把 `a.settings` 置 nil，菜单关闭时 `hideOverlay()` 又直接清空 `a.overlay`，设置面板不会回来。设置页的语言选择即按此实现（`settingsView.langOpen`，候选行在同一张卡片内展开）。
 
 ### 4.5 键盘
