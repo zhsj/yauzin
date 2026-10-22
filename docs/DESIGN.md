@@ -176,8 +176,9 @@
 | `showPerfMonitor` | 顶栏显示性能读数 |
 | `proxy` | 出站邮件请求使用的代理（`http`/`https`/`socks5`，空表示直连） |
 | `logLevel` | 控制台日志级别（`error`/`warn`/`info`/`debug`，空或未知表示 `info`） |
+| `activeAccount` | 上次使用的账号 ID，下次启动优先打开；为空、账号已删除或后端构建失败时回退列表第一个账号 |
 
-约定：`LoadOrZero` 把「文件不存在」当首次运行，其余错误只告警、不覆盖；修改设置一律「先落盘成功再改内存」，失败提示并回滚。
+约定：`LoadOrZero` 把「文件不存在」当首次运行，其余错误只告警、不覆盖；修改设置一律「先落盘成功再改内存」，失败提示并回滚。`activeAccount` 是例外：账号切换已经发生，写盘失败只记日志、不弹提示；删除账号也不清该字段，下次启动匹配不到账号即回退，行为仍然正确。
 
 账号凭据与令牌另存 `accounts.json`（`internal/accounts`，同为 0600 原子写，目录由 `prefs.Dir()` 统一解析，`YAUZIN_CONFIG_DIR` 对两者同时生效）。它不放进 `settings.json`：令牌刷新频繁且由后端在 worker goroutine 写回，与 UI 设置的读写节奏不同。
 

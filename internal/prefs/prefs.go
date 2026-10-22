@@ -35,6 +35,11 @@ type Settings struct {
 	// means info, which is also what an unknown value falls back to; debug
 	// adds one line per Gmail request.
 	LogLevel string `json:"logLevel,omitempty"`
+	// ActiveAccount is the ID of the mailbox that was in use when the
+	// application last ran. The next start opens it again. An empty ID, or one
+	// that no longer names a usable account, falls back to the first account in
+	// the list; a removed account keeps its stale ID here on purpose.
+	ActiveAccount string `json:"activeAccount,omitempty"`
 }
 
 const (

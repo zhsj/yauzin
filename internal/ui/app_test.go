@@ -40,6 +40,62 @@ func TestNewAppWithUsesTheInjectedBackend(t *testing.T) {
 	}
 }
 
+// TestNewAppWithRestoresTheStoredAccount covers the choice saved by the
+// previous run: that mailbox is active again and starts in its inbox.
+func TestNewAppWithRestoresTheStoredAccount(t *testing.T) {
+	a := newAppWith(prefs.Settings{ActiveAccount: "two"}, appOptions{
+		accounts: []mail.Account{
+			{ID: "one", Email: "one@example.com"},
+			{ID: "two", Email: "two@example.com"},
+		},
+		newService: func(mail.Account) mail.Service { return &fakeService{} },
+	})
+
+	if a.activeAcc != "two" {
+		t.Fatalf("active account = %q, want the stored two", a.activeAcc)
+	}
+	if a.activeFolder != "inbox" {
+		t.Fatalf("active folder = %q, want inbox", a.activeFolder)
+	}
+}
+
+// TestNewAppWithFallsBackFromAStaleChoice covers the ID a removed account
+// leaves behind: the stored mailbox is gone, so the first one opens instead.
+func TestNewAppWithFallsBackFromAStaleChoice(t *testing.T) {
+	a := newAppWith(prefs.Settings{ActiveAccount: "gone"}, appOptions{
+		accounts: []mail.Account{
+			{ID: "one", Email: "one@example.com"},
+			{ID: "two", Email: "two@example.com"},
+		},
+		newService: func(mail.Account) mail.Service { return &fakeService{} },
+	})
+
+	if a.activeAcc != "one" {
+		t.Fatalf("active account = %q, want the first account", a.activeAcc)
+	}
+}
+
+// TestNewAppWithFallsBackFromABackendlessChoice keeps the restore honest: an
+// account whose backend could not be built must not be reopened.
+func TestNewAppWithFallsBackFromABackendlessChoice(t *testing.T) {
+	a := newAppWith(prefs.Settings{ActiveAccount: "two"}, appOptions{
+		accounts: []mail.Account{
+			{ID: "one", Email: "one@example.com"},
+			{ID: "two", Email: "two@example.com"},
+		},
+		newService: func(acc mail.Account) mail.Service {
+			if acc.ID == "two" {
+				return nil
+			}
+			return &fakeService{}
+		},
+	})
+
+	if a.activeAcc != "one" {
+		t.Fatalf("active account = %q, want the first account", a.activeAcc)
+	}
+}
+
 // TestNewAppWithDefaultsToTheDemoAccount keeps the zero options honest: the
 // shipped binary still opens the demo mailbox on the mock backend.
 func TestNewAppWithDefaultsToTheDemoAccount(t *testing.T) {

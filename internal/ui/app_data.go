@@ -239,6 +239,7 @@ func (a *App) switchAccount(id string) {
 	a.reloadFolders()
 	a.loadThreads()
 	a.notify(i18n.T("toast.accountSwitched", map[string]string{"Name": a.accountName()}), false)
+	a.rememberActiveAccount(id)
 }
 
 func (a *App) openHTMLInBrowser(m *mail.Message) {

@@ -117,6 +117,27 @@ func (a *App) setLogLevel(name string) {
 	a.logLevel = logging.SetLevel(name)
 }
 
+// rememberActiveAccount stores id as the mailbox to reopen on the next start.
+// The switch has already happened, so a failed read or write is only logged:
+// the user asked for another mailbox and cannot act on a settings failure.
+func (a *App) rememberActiveAccount(id string) {
+	if a.saveSettings == nil || id == "" {
+		return
+	}
+	settings, err := prefs.LoadOrZero()
+	if err != nil {
+		logErr("read settings", err)
+		return
+	}
+	if settings.ActiveAccount == id {
+		return
+	}
+	settings.ActiveAccount = id
+	if err := a.saveSettings(settings); err != nil {
+		logErr("save settings", err)
+	}
+}
+
 // setProxy validates and stores the shared proxy address, then replaces the
 // Gmail backends that opt into it. A returned error is meant for the settings
 // form; a storage failure has already been reported by updateSettings.

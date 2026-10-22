@@ -78,6 +78,9 @@ type App struct {
 	// logLevel is the normalized console log level. The logger itself is
 	// process wide; the field only mirrors the choice for the settings panel.
 	logLevel string
+	// saveSettings writes the stored settings. It is nil for an App assembled
+	// by a test that does not persist anything.
+	saveSettings func(prefs.Settings) error
 	// accountAdd is the sign-in dialog while it is open. It owns the pending
 	// authorization context so closing the panel can cancel the wait.
 	accountAdd *accountDialog
@@ -226,6 +229,11 @@ type appOptions struct {
 	store   *accounts.Store
 	proxy   string
 	factory *serviceFactory
+
+	// saveSettings persists the stored settings, prefs.Save in the running app.
+	// The zero value disables persistence, which keeps the tests that switch
+	// accounts away from the real configuration directory.
+	saveSettings func(prefs.Settings) error
 }
 
 // demoAccountID identifies the shipped demo mailbox, which is always served by
@@ -269,11 +277,12 @@ func newApp() *App {
 	}
 	factory := &serviceFactory{store: store, proxy: pref.Proxy}
 	return newAppWith(pref, appOptions{
-		accounts:   configuredAccounts(store),
-		newService: factory.newService,
-		store:      store,
-		proxy:      pref.Proxy,
-		factory:    factory,
+		accounts:     configuredAccounts(store),
+		newService:   factory.newService,
+		store:        store,
+		proxy:        pref.Proxy,
+		factory:      factory,
+		saveSettings: prefs.Save,
 	})
 }
 
@@ -331,6 +340,27 @@ func (f *serviceFactory) newService(acc mail.Account) mail.Service {
 	return svc
 }
 
+// restoredAccount returns the mailbox to open at start: the one stored by the
+// previous run when it is still listed and has a backend, the first account
+// otherwise. A removed account keeps its ID in the settings file on purpose, so
+// falling back here is the normal path after a deletion; an account whose
+// backend could not be built must not be restored either, or the window would
+// open on a mailbox that cannot be read.
+func restoredAccount(id string, accounts []mail.Account, services map[string]mail.Service) string {
+	if id != "" {
+		for _, acc := range accounts {
+			if acc.ID != id {
+				continue
+			}
+			if _, ok := services[id]; ok {
+				return id
+			}
+			break
+		}
+	}
+	return accounts[0].ID
+}
+
 // newAppWith assembles the app from already resolved settings and backends. It
 // touches no global state besides the views, so tests build their app here
 // instead of duplicating the field list.
@@ -345,6 +375,7 @@ func newAppWith(pref prefs.Settings, opts appOptions) *App {
 		proxy:        opts.proxy,
 		factory:      opts.factory,
 		logLevel:     logging.Normalize(pref.LogLevel),
+		saveSettings: opts.saveSettings,
 		page:         1,
 		tokens:       []string{""},
 		expanded:     map[string]bool{},
@@ -361,7 +392,7 @@ func newAppWith(pref prefs.Settings, opts appOptions) *App {
 			a.services[acc.ID] = svc
 		}
 	}
-	a.activeAcc = a.accounts[0].ID
+	a.activeAcc = restoredAccount(pref.ActiveAccount, a.accounts, a.services)
 	a.activeFolder = "inbox"
 
 	a.top = newTopBar(a)

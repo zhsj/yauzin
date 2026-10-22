@@ -144,3 +144,64 @@ func TestSwitchAccountResetsTheFolder(t *testing.T) {
 		t.Fatalf("list requested folder %q, want inbox", got)
 	}
 }
+
+// TestSwitchAccountRemembersTheAccount covers the stored choice: the next start
+// reopens this mailbox, and the write keeps the settings the switch did not
+// touch.
+func TestSwitchAccountRemembersTheAccount(t *testing.T) {
+	t.Setenv("YAUZIN_CONFIG_DIR", t.TempDir())
+	if err := prefs.Save(prefs.Settings{ActiveAccount: "one", Language: "en"}); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+	var saved []prefs.Settings
+	a := newAppWith(prefs.Settings{}, appOptions{
+		accounts: []mail.Account{
+			{ID: "one", Kind: mail.KindGmail, Email: "one@example.com"},
+			{ID: "two", Kind: mail.KindGmail, Email: "two@example.com"},
+		},
+		newService: func(mail.Account) mail.Service { return &fakeService{} },
+		saveSettings: func(s prefs.Settings) error {
+			saved = append(saved, s)
+			return nil
+		},
+	})
+
+	a.switchAccount("two")
+
+	if len(saved) != 1 {
+		t.Fatalf("settings written %d times, want 1", len(saved))
+	}
+	if got := saved[0].ActiveAccount; got != "two" {
+		t.Fatalf("stored account = %q, want two", got)
+	}
+	if got := saved[0].Language; got != "en" {
+		t.Fatalf("stored language = %q, want the untouched en", got)
+	}
+}
+
+// TestSwitchAccountSkipsAnAlreadyStoredChoice keeps the file from being
+// rewritten when it already names the mailbox being opened.
+func TestSwitchAccountSkipsAnAlreadyStoredChoice(t *testing.T) {
+	t.Setenv("YAUZIN_CONFIG_DIR", t.TempDir())
+	if err := prefs.Save(prefs.Settings{ActiveAccount: "two"}); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+	writes := 0
+	a := newAppWith(prefs.Settings{}, appOptions{
+		accounts: []mail.Account{
+			{ID: "one", Kind: mail.KindGmail, Email: "one@example.com"},
+			{ID: "two", Kind: mail.KindGmail, Email: "two@example.com"},
+		},
+		newService: func(mail.Account) mail.Service { return &fakeService{} },
+		saveSettings: func(prefs.Settings) error {
+			writes++
+			return nil
+		},
+	})
+
+	a.switchAccount("two")
+
+	if writes != 0 {
+		t.Fatalf("settings written %d times, want none", writes)
+	}
+}

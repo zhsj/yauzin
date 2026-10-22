@@ -1,6 +1,7 @@
 package prefs
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -9,7 +10,7 @@ import (
 
 func TestSaveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	want := Settings{Language: "zh-Hans", LogLevel: "debug"}
+	want := Settings{Language: "zh-Hans", LogLevel: "debug", ActiveAccount: "gmail:user@example.com"}
 	if err := saveTo(dir, want); err != nil {
 		t.Fatalf("saveTo: %v", err)
 	}
@@ -19,6 +20,27 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestSaveActiveAccountJSONKey(t *testing.T) {
+	dir := t.TempDir()
+	if err := saveTo(dir, Settings{ActiveAccount: "gmail:user@example.com", Proxy: "socks5://127.0.0.1:1080"}); err != nil {
+		t.Fatalf("saveTo: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, fileName))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := raw["activeAccount"]; got != "gmail:user@example.com" {
+		t.Fatalf("activeAccount = %v, want the stored account ID", got)
+	}
+	if _, ok := raw["proxy"]; !ok {
+		t.Fatalf("proxy was dropped from the document: %s", data)
 	}
 }
 
