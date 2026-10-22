@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"testing"
 
+	"gioui.org/io/key"
+	"gioui.org/io/system"
 	"gioui.org/layout"
 
 	"github.com/zhsj/yauzin/internal/i18n"
@@ -14,11 +16,15 @@ import (
 // shortcuts page rely on: one row per action, one bit per row, readable caps,
 // display order by group, and a translation for every label.
 func TestShortcutTableIsConsistent(t *testing.T) {
-	if got, want := len(shortcutTable), 13; got != want {
+	if got, want := len(shortcutTable), 15; got != want {
 		t.Fatalf("shortcut table has %d rows, want %d", got, want)
 	}
 	bits := map[uint32]string{}
-	names := map[string]string{}
+	type binding struct {
+		name key.Name
+		mods key.Modifiers
+	}
+	names := map[binding]string{}
 	groups := map[shortcutGroup]bool{}
 	prev := groupGlobal
 	for _, s := range shortcutTable {
@@ -30,14 +36,21 @@ func TestShortcutTableIsConsistent(t *testing.T) {
 		}
 		bits[s.bit] = s.action
 
+		// The global layer is read while an editor may own the keyboard, so
+		// its rows have to require a modifier the editors leave unbound.
+		if s.global && s.mods == 0 {
+			t.Errorf("%s is global without a modifier", s.action)
+		}
+
 		if len(s.names) == 0 {
 			t.Errorf("%s has no key names", s.action)
 		}
 		for _, name := range s.names {
-			if other, ok := names[string(name)]; ok {
+			b := binding{name, s.mods}
+			if other, ok := names[b]; ok {
 				t.Errorf("key %q is bound to both %s and %s", name, other, s.action)
 			}
-			names[string(name)] = s.action
+			names[b] = s.action
 		}
 		if len(s.caps) == 0 {
 			t.Errorf("%s has no key caps", s.action)
@@ -62,6 +75,53 @@ func TestShortcutTableIsConsistent(t *testing.T) {
 	}
 	if len(groups) != 3 {
 		t.Errorf("shortcut table covers %d groups, want 3", len(groups))
+	}
+}
+
+// TestGlobalShortcuts checks the window and process layer: Ctrl+W asks the
+// window to close, Ctrl+Q ends the process, and the bare letters keep doing
+// nothing. The first frame registers the key filters the router needs before
+// the event can be queued.
+func TestGlobalShortcuts(t *testing.T) {
+	tests := []struct {
+		name string
+		ev   key.Event
+		want func(a *App) bool
+	}{
+		{
+			"ctrl+w closes the window",
+			key.Event{Name: "W", Modifiers: key.ModShortcut, State: key.Press},
+			func(a *App) bool { return a.windowActions&system.ActionClose != 0 },
+		},
+		{
+			"ctrl+q quits",
+			key.Event{Name: "Q", Modifiers: key.ModShortcut, State: key.Press},
+			func(a *App) bool { return a.quitting.Load() },
+		},
+		{
+			"bare w does nothing",
+			key.Event{Name: "W", State: key.Press},
+			func(a *App) bool { return a.windowActions == 0 && !a.quitting.Load() },
+		},
+		{
+			"bare q does nothing",
+			key.Event{Name: "Q", State: key.Press},
+			func(a *App) bool { return a.windowActions == 0 && !a.quitting.Load() },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := testApp(t)
+			router, ops, gtx := newRouterFrame(testWindow)
+			runFrame(a, router, ops, gtx)
+
+			router.Queue(tt.ev)
+			runFrame(a, router, ops, gtx)
+			if !tt.want(a) {
+				t.Fatalf("%s: windowActions = %v, quitting = %v",
+					tt.name, a.windowActions, a.quitting.Load())
+			}
+		})
 	}
 }
 

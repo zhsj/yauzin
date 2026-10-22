@@ -2,6 +2,7 @@ package ui
 
 import (
 	"gioui.org/io/key"
+	"gioui.org/io/system"
 	"gioui.org/layout"
 )
 
@@ -21,6 +22,8 @@ const (
 	keyReply
 	keyForward
 	keyEscape
+	keyCloseWindow
+	keyQuit
 )
 
 // shortcutGroup orders the sections of the shortcuts page. The constants are
@@ -55,6 +58,15 @@ type shortcut struct {
 	action string
 	group  shortcutGroup
 	bit    uint32
+	// global marks the window and process shortcuts: they are read before the
+	// editor gates, while a search field or an overlay owns the keyboard, so
+	// they always have a modifier. Rows without it wait for an unmodified
+	// keyboard, because reading a bare key would swallow a character the
+	// focused editor is waiting for.
+	global bool
+	// mods is the modifier combination the filter requires. Zero means the
+	// bare key, which Gio only matches when no modifier is held.
+	mods key.Modifiers
 	// names are the Gio key names that trigger the action. Letters are upper
 	// case because Gio reports them that way (the shift modifier decides the
 	// name, not the letters typed).
@@ -66,39 +78,59 @@ type shortcut struct {
 
 // shortcutTable lists every implemented shortcut in display order. Actions the
 // list and the reader share (archive, delete, star, read) live in the global
-// group, so the page never repeats a row.
+// group, so the page never repeats a row. The window and process shortcuts
+// (Ctrl+W, Ctrl+Q) carry global, which the dispatch reads before the editors.
 var shortcutTable = []shortcut{
-	{"shortcut.search", groupGlobal, keySlash, []key.Name{"/"}, []string{"/"}},
-	{"shortcut.compose", groupGlobal, keyCompose, []key.Name{"C"}, []string{"C"}},
-	{"shortcut.close", groupGlobal, keyEscape, []key.Name{key.NameEscape}, []string{"Esc"}},
-	{"shortcut.archive", groupGlobal, keyArchive, []key.Name{"E"}, []string{"E"}},
-	{"shortcut.delete", groupGlobal, keyDelete, []key.Name{key.NameDeleteForward}, []string{"Del"}},
-	{"shortcut.star", groupGlobal, keyStar, []key.Name{"S"}, []string{"S"}},
-	{"shortcut.read", groupGlobal, keyRead, []key.Name{"U"}, []string{"U"}},
-	{"shortcut.next", groupList, keyNext, []key.Name{"J", key.NameDownArrow}, []string{"J", "↓"}},
-	{"shortcut.prev", groupList, keyPrev, []key.Name{"K", key.NameUpArrow}, []string{"K", "↑"}},
-	{"shortcut.open", groupList, keyOpen, []key.Name{key.NameEnter, key.NameReturn}, []string{"Enter"}},
-	{"shortcut.select", groupList, keyToggle, []key.Name{"X"}, []string{"X"}},
-	{"shortcut.reply", groupReader, keyReply, []key.Name{"R"}, []string{"R"}},
-	{"shortcut.forward", groupReader, keyForward, []key.Name{"F"}, []string{"F"}},
+	{"shortcut.search", groupGlobal, keySlash, false, 0, []key.Name{"/"}, []string{"/"}},
+	{"shortcut.compose", groupGlobal, keyCompose, false, 0, []key.Name{"C"}, []string{"C"}},
+	{"shortcut.close", groupGlobal, keyEscape, false, 0, []key.Name{key.NameEscape}, []string{"Esc"}},
+	{"shortcut.archive", groupGlobal, keyArchive, false, 0, []key.Name{"E"}, []string{"E"}},
+	{"shortcut.delete", groupGlobal, keyDelete, false, 0, []key.Name{key.NameDeleteForward}, []string{"Del"}},
+	{"shortcut.star", groupGlobal, keyStar, false, 0, []key.Name{"S"}, []string{"S"}},
+	{"shortcut.read", groupGlobal, keyRead, false, 0, []key.Name{"U"}, []string{"U"}},
+	{"shortcut.closeWindow", groupGlobal, keyCloseWindow, true, key.ModShortcut, []key.Name{"W"}, []string{"Ctrl", "W"}},
+	{"shortcut.quit", groupGlobal, keyQuit, true, key.ModShortcut, []key.Name{"Q"}, []string{"Ctrl", "Q"}},
+	{"shortcut.next", groupList, keyNext, false, 0, []key.Name{"J", key.NameDownArrow}, []string{"J", "↓"}},
+	{"shortcut.prev", groupList, keyPrev, false, 0, []key.Name{"K", key.NameUpArrow}, []string{"K", "↑"}},
+	{"shortcut.open", groupList, keyOpen, false, 0, []key.Name{key.NameEnter, key.NameReturn}, []string{"Enter"}},
+	{"shortcut.select", groupList, keyToggle, false, 0, []key.Name{"X"}, []string{"X"}},
+	{"shortcut.reply", groupReader, keyReply, false, 0, []key.Name{"R"}, []string{"R"}},
+	{"shortcut.forward", groupReader, keyForward, false, 0, []key.Name{"F"}, []string{"F"}},
 }
 
 // handleKeys routes the keyboard before anything is laid out. The rules, in
-// order: Esc keeps its "status bar, then overlay, then conversation, then
-// search" priority; the search field owns every other key while it has focus,
-// because its editor needs the characters; an overlay owns the rest, also for
-// its editors; the remaining keys act on the keyboard cursor in the list, or on
-// the open conversation.
+// order: the window and process shortcuts (Ctrl+W, Ctrl+Q) run first, even
+// while an editor owns the keyboard; Esc keeps its "status bar, then overlay,
+// then conversation, then search" priority; the search field owns every other
+// key while it has focus, because its editor needs the characters; an overlay
+// owns the rest, also for its editors; the remaining keys act on the keyboard
+// cursor in the list, or on the open conversation.
 //
-// Shortcuts are only read when no editor can own the keyboard. Reading is
-// destructive: Router.Event deletes the matched event from the frame, so a
-// shortcut filter for a bare key would swallow the very characters (and the
-// Enter) the focused editor is waiting for.
+// Reading a shortcut is destructive: Router.Event deletes the matched event
+// from the frame, so a filter for a bare key would swallow the very characters
+// (and the Enter) the focused editor is waiting for. The global layer is safe
+// to read early because its rows require a modifier the editors leave unbound;
+// everything else is only read when no editor can own the keyboard.
 func (a *App) handleKeys(gtx layout.Context) {
 	a.trackSearchFocus(gtx)
 	if a.blurRequested {
 		a.blurRequested = false
 		gtx.Execute(key.FocusCmd{Tag: a})
+	}
+
+	// Quit wins when both arrive in the same frame: it ends the process, which
+	// closes the window on the way out.
+	if bits := readShortcuts(gtx, true); bits != 0 {
+		if bits&keyQuit != 0 {
+			a.requestQuit()
+			return
+		}
+		if bits&keyCloseWindow != 0 {
+			// Same path as the title bar close button: the window is torn down
+			// after the frame, never in the middle of the layout.
+			a.windowActions |= system.ActionClose
+			return
+		}
 	}
 
 	if a.overlay == nil && a.searchFocused {
@@ -111,7 +143,7 @@ func (a *App) handleKeys(gtx layout.Context) {
 		return
 	}
 
-	bits := readShortcuts(gtx)
+	bits := readShortcuts(gtx, false)
 	// Esc runs before the overlay gate, because it is the key that closes it.
 	if bits&keyEscape != 0 {
 		a.escape(gtx)
@@ -182,12 +214,18 @@ func pressedWith(gtx layout.Context, name key.Name, mods key.Modifiers) bool {
 	}
 }
 
-// readShortcuts collects the pressed shortcuts of this frame.
-func readShortcuts(gtx layout.Context) uint32 {
+// readShortcuts collects the pressed shortcuts of this frame for one half of
+// the table: the global layer (window and process shortcuts, read while an
+// editor may own the keyboard) or the rest, which waits for an unmodified
+// keyboard.
+func readShortcuts(gtx layout.Context, global bool) uint32 {
 	var bits uint32
 	for _, s := range shortcutTable {
+		if s.global != global {
+			continue
+		}
 		for _, name := range s.names {
-			if pressed(gtx, name) {
+			if pressedWith(gtx, name, s.mods) {
 				bits |= s.bit
 			}
 		}
