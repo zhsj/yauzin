@@ -269,13 +269,13 @@ docker run --rm \
 
 ```bash
 docker run --rm -v "$PWD":/app -w /app -v yauzin-gocache:/gocache \
-  yauzin-gio-builder sh -c 'go vet ./... && go test ./...'
+  yauzin-gio-builder sh -c 'go test -vet=all ./...'
 ```
 
 纯 Go 包可直接在本地运行（`internal/ui` 与 `cmd/*` 导入 Gio，必须进容器）：
 
 ```bash
-go test ./internal/prefs ./internal/i18n ./internal/htmltext ./internal/mail/... ./internal/tray ./internal/cursor
+go test -vet=all ./internal/prefs ./internal/i18n ./internal/htmltext ./internal/mail/... ./internal/tray ./internal/cursor
 ```
 
 格式化与 import 分组（沙箱直接执行，两条检查都无输出即合格）：

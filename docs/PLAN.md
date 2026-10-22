@@ -17,7 +17,7 @@
 - 通用代理设置：`settings.json` 的 `proxy`，账号条目只记 `useProxy`；保存后按新代理重建对应后端。
 - Gmail API 类型改由 Discovery 文档生成（`internal/cmd/gmailgen` + `//go:generate`），`api.go` 只剩领域映射辅助方法。
 
-当前验证基线：`gofmt` 与 `goimports -local github.com/zhsj/yauzin` 均干净、纯 Go 包 `go vet`/`go test` 通过、容器内 `go build ./cmd/yauzin` 与 `go test ./...` 通过。
+当前验证基线：`gofmt` 与 `goimports -local github.com/zhsj/yauzin` 均干净、纯 Go 包 `go test -vet=all` 通过、容器内 `go build ./cmd/yauzin` 与 `go test -vet=all ./...` 通过。
 
 ## 1. 暂缓项（用户指定，暂不实施）
 
@@ -33,7 +33,7 @@
 
 每个条目收尾都要满足：
 
-1. `gofmt -l internal/ cmd/` 与 `~/go/bin/goimports -local github.com/zhsj/yauzin -l internal/ cmd/` 均无输出；纯 Go 包 `go vet`/`go test` 通过；改到 Gio 目标时在容器内跑 `go vet ./... && go test ./...` 与 `go build -o /tmp/yauzin ./cmd/yauzin`。
+1. `gofmt -l internal/ cmd/` 与 `~/go/bin/goimports -local github.com/zhsj/yauzin -l internal/ cmd/` 均无输出；纯 Go 包 `go test -vet=all` 通过；改到 Gio 目标时在容器内跑 `go test -vet=all ./...` 与 `go build -o /tmp/yauzin ./cmd/yauzin`。
 2. 行为变化有测试或明确的手工验证步骤（GUI 相关需在宿主桌面会话验证，不在容器里启动）。
 3. 按 Conventional Commits 提交，一个条目一个提交。
 4. 完成后把仍然成立的结论并入 `DESIGN.md`，删除本文件中的对应条目；暂缓项恢复或否决时同样处理。
