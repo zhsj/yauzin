@@ -71,10 +71,14 @@ func New(acc mail.Account, store Store, opts ...Option) (*Service, error) {
 func (s *Service) Account() mail.Account { return s.acc }
 
 // Folders lists the four system folders plus the user labels.
+//
+// labels.list only returns partial label resources (id, name, type), so the
+// unread counters and the label colours are read with one batch of labels.get
+// calls: without that the sidebar showed no numbers for a real account.
 func (s *Service) Folders(ctx context.Context) ([]mail.Folder, error) {
 	var resp ListLabelsResponse
 	q := url.Values{}
-	q.Set("fields", "labels(id,name,type,messagesUnread,color/backgroundColor)")
+	q.Set("fields", "labels(id,name,type)")
 	if err := s.c.do(ctx, "labels.list", "GET", "/users/me/labels", q, &resp); err != nil {
 		return nil, err
 	}
@@ -83,31 +87,50 @@ func (s *Service) Folders(ctx context.Context) ([]mail.Folder, error) {
 	for _, l := range resp.Labels {
 		byID[l.ID] = l
 	}
-	out := make([]mail.Folder, 0, len(systemFolders)+len(resp.Labels))
+	specs := make(map[string]folderSpec, len(systemFolders))
 	for _, spec := range systemFolders {
-		l, ok := byID[spec.labelID]
-		if !ok {
-			continue
+		specs[spec.labelID] = spec
+	}
+
+	// The sidebar order is fixed: system folders first, then the user labels in
+	// the order the API returned them.
+	selected := make([]*Label, 0, len(resp.Labels))
+	ids := make([]string, 0, len(resp.Labels))
+	for _, spec := range systemFolders {
+		if l, ok := byID[spec.labelID]; ok {
+			selected = append(selected, l)
+			ids = append(ids, l.ID)
 		}
-		out = append(out, mail.Folder{
-			ID:     spec.id,
-			Kind:   spec.kind,
-			Name:   l.Name,
-			Unread: l.MessagesUnread,
-		})
 	}
 	for _, l := range resp.Labels {
-		if l.Type != "user" {
+		if l.Type == "user" {
+			selected = append(selected, l)
+			ids = append(ids, l.ID)
+		}
+	}
+
+	details, err := s.c.labelDetails(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]mail.Folder, 0, len(selected))
+	for _, l := range selected {
+		d := details[l.ID]
+		if spec, ok := specs[l.ID]; ok {
+			f := mail.Folder{ID: spec.id, Kind: spec.kind, Name: l.Name}
+			if d != nil {
+				f.Unread = d.MessagesUnread
+			}
+			out = append(out, f)
 			continue
 		}
-		f := mail.Folder{
-			ID:     l.ID,
-			Name:   l.Name,
-			Kind:   mail.FolderLabel,
-			Unread: l.MessagesUnread,
-		}
-		if l.Color != nil {
-			f.Color = l.Color.BackgroundColor
+		f := mail.Folder{ID: l.ID, Name: l.Name, Kind: mail.FolderLabel}
+		if d != nil {
+			f.Unread = d.MessagesUnread
+			if d.Color != nil {
+				f.Color = d.Color.BackgroundColor
+			}
 		}
 		out = append(out, f)
 	}

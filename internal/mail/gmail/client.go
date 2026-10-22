@@ -39,10 +39,14 @@ type Store interface {
 type client struct {
 	accountID string
 	baseURL   string
-	tokenURL  string
-	store     Store
-	http      *http.Client
-	now       func() time.Time
+	// apiPath is the path part of baseURL, and batchURL is the batch endpoint of
+	// the same API: Gmail accepts "origin/batch/apiPath" for multipart calls.
+	apiPath  string
+	batchURL string
+	tokenURL string
+	store    Store
+	http     *http.Client
+	now      func() time.Time
 
 	refreshMu sync.Mutex
 }
@@ -94,9 +98,16 @@ func newClient(accountID string, store Store, opts []Option) (*client, error) {
 	for _, opt := range opts {
 		opt(&o)
 	}
+	base, err := url.Parse(o.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("gmail: parse base URL: %w", err)
+	}
+	apiPath := strings.TrimSuffix(base.Path, "/")
 	c := &client{
 		accountID: accountID,
 		baseURL:   o.baseURL,
+		apiPath:   apiPath,
+		batchURL:  base.Scheme + "://" + base.Host + "/batch" + apiPath,
 		tokenURL:  o.tokenURL,
 		store:     store,
 		http:      o.client,

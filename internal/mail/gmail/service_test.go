@@ -3,9 +3,14 @@ package gmail
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
+	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,28 +102,137 @@ func writeErrorJSON(t *testing.T, w http.ResponseWriter, status int, body string
 	}
 }
 
-func TestFoldersMapsSystemLabelsAndUserLabels(t *testing.T) {
-	const body = `{"labels":[
-		{"id":"INBOX","name":"INBOX","type":"system","messagesUnread":3},
-		{"id":"STARRED","name":"STARRED","type":"system","messagesUnread":1},
-		{"id":"SENT","name":"SENT","type":"system"},
-		{"id":"TRASH","name":"TRASH","type":"system"},
-		{"id":"DRAFT","name":"DRAFT","type":"system"},
-		{"id":"SPAM","name":"SPAM","type":"system"},
-		{"id":"Label_1","name":"Work","type":"user","messagesUnread":2,"color":{"backgroundColor":"#0b57d0"}},
-		{"id":"Label_2","name":"Bills","type":"user"}
-	]}`
-	srv, _ := newTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/users/me/labels" {
-			t.Errorf("unexpected path %q", r.URL.Path)
-		}
-		if got := r.URL.Query().Get("fields"); !strings.Contains(got, "messagesUnread") {
-			t.Errorf("fields = %q, want messagesUnread", got)
-		}
-		writeJSON(t, w, body)
-	}))
+// batchServer answers the Gmail batch endpoint. It decodes the embedded
+// labels.get calls of each request and replies with one application/http part
+// per call, using the same index the client put into the request Content-ID.
+type batchServer struct {
+	mu       sync.Mutex
+	batches  [][]string // label IDs per batch request, in request order
+	details  map[string]string
+	statuses map[string]int
+}
 
-	folders, err := srv.Folders(context.Background())
+func (b *batchServer) handler(t *testing.T) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/batch" {
+			t.Errorf("batch path = %q", r.URL.Path)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer access-token" {
+			t.Errorf("batch authorization = %q", got)
+		}
+		mr, err := r.MultipartReader()
+		if err != nil {
+			t.Errorf("batch request: %v", err)
+			return
+		}
+		var ids []string
+		for {
+			p, err := mr.NextPart()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Errorf("batch request part: %v", err)
+				return
+			}
+			raw, _ := io.ReadAll(p)
+			line, _, _ := strings.Cut(string(raw), "\r\n")
+			fields := strings.Fields(line)
+			if len(fields) != 3 || fields[0] != http.MethodGet {
+				t.Errorf("batch request line = %q", line)
+				continue
+			}
+			target, err := url.Parse(fields[1])
+			if err != nil {
+				t.Errorf("batch request target %q: %v", fields[1], err)
+				continue
+			}
+			if got := target.Query().Get("fields"); got != labelDetailFields {
+				t.Errorf("batch fields = %q, want %q", got, labelDetailFields)
+			}
+			ids = append(ids, path.Base(target.Path))
+		}
+		b.mu.Lock()
+		b.batches = append(b.batches, ids)
+		b.mu.Unlock()
+
+		mw := multipart.NewWriter(w)
+		w.Header().Set("Content-Type", "multipart/mixed; boundary="+mw.Boundary())
+		for i, id := range ids {
+			status := http.StatusOK
+			if s, ok := b.statuses[id]; ok {
+				status = s
+			}
+			header := make(textproto.MIMEHeader)
+			header.Set("Content-Type", "application/http")
+			header.Set("Content-ID", fmt.Sprintf("<response-label-%d>", i))
+			part, err := mw.CreatePart(header)
+			if err != nil {
+				t.Errorf("batch response part: %v", err)
+				return
+			}
+			body := b.details[id]
+			if body == "" {
+				body = "{}"
+			}
+			fmt.Fprintf(part, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\n\r\n%s\n",
+				status, http.StatusText(status), body)
+		}
+		if err := mw.Close(); err != nil {
+			t.Errorf("batch response: %v", err)
+		}
+	}
+}
+
+func (b *batchServer) calls() [][]string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([][]string(nil), b.batches...)
+}
+
+// folderListBody is what labels.list returns: partial label resources without
+// the unread counters or colours.
+const folderListBody = `{"labels":[
+	{"id":"INBOX","name":"INBOX","type":"system"},
+	{"id":"STARRED","name":"STARRED","type":"system"},
+	{"id":"SENT","name":"SENT","type":"system"},
+	{"id":"TRASH","name":"TRASH","type":"system"},
+	{"id":"DRAFT","name":"DRAFT","type":"system"},
+	{"id":"SPAM","name":"SPAM","type":"system"},
+	{"id":"Label_1","name":"Work","type":"user"},
+	{"id":"Label_2","name":"Bills","type":"user"}
+]}`
+
+// folderDetails is the per-label answer of labels.get.
+func folderDetails() map[string]string {
+	return map[string]string{
+		"INBOX":   `{"messagesUnread":3}`,
+		"STARRED": `{"messagesUnread":1}`,
+		"Label_1": `{"messagesUnread":2,"color":{"backgroundColor":"#0b57d0"}}`,
+	}
+}
+
+func newFolderService(t *testing.T, batch *batchServer, listBody string) *Service {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/me/labels", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("fields"); strings.Contains(got, "messagesUnread") {
+			t.Errorf("labels.list fields = %q, want only id/name/type", got)
+		}
+		writeJSON(t, w, listBody)
+	})
+	mux.HandleFunc("/batch", batch.handler(t))
+	svc, _ := newTestService(t, mux)
+	return svc
+}
+
+func TestFoldersReadsCountsFromBatchedLabelDetails(t *testing.T) {
+	batch := &batchServer{details: folderDetails()}
+	svc := newFolderService(t, batch, folderListBody)
+
+	folders, err := svc.Folders(context.Background())
 	if err != nil {
 		t.Fatalf("Folders: %v", err)
 	}
@@ -145,6 +259,96 @@ func TestFoldersMapsSystemLabelsAndUserLabels(t *testing.T) {
 	}
 	if got := folders[4]; got.Name != "Work" || got.Color != "#0b57d0" {
 		t.Fatalf("user label = %+v, want Work with its colour", got)
+	}
+	batches := batch.calls()
+	if len(batches) != 1 {
+		t.Fatalf("batch requests = %d, want 1", len(batches))
+	}
+	if len(batches[0]) != 6 {
+		t.Fatalf("batch calls = %v, want one per displayed label", batches[0])
+	}
+}
+
+func TestFoldersToleratesADeletedLabel(t *testing.T) {
+	batch := &batchServer{
+		details:  folderDetails(),
+		statuses: map[string]int{"Label_2": http.StatusNotFound},
+	}
+	svc := newFolderService(t, batch, folderListBody)
+
+	folders, err := svc.Folders(context.Background())
+	if err != nil {
+		t.Fatalf("Folders: %v", err)
+	}
+	if len(folders) != 6 {
+		t.Fatalf("folders = %+v, want the surviving labels", folders)
+	}
+	if got := folders[4]; got.ID != "Label_1" || got.Unread != 2 {
+		t.Fatalf("folder 4 = %+v, want the counted user label", got)
+	}
+	// A label deleted between the list and the batch keeps its row, without a
+	// count, instead of failing the whole folder list.
+	if got := folders[5]; got.ID != "Label_2" || got.Unread != 0 {
+		t.Fatalf("folder 5 = %+v, want Label_2 without a count", got)
+	}
+}
+
+func TestFoldersFailsWhenNoLabelDetailSucceeds(t *testing.T) {
+	statuses := make(map[string]int, len(folderDetails())+2)
+	for _, id := range []string{"INBOX", "STARRED", "SENT", "TRASH", "Label_1", "Label_2"} {
+		statuses[id] = http.StatusForbidden
+	}
+	batch := &batchServer{details: folderDetails(), statuses: statuses}
+	svc := newFolderService(t, batch, folderListBody)
+
+	if _, err := svc.Folders(context.Background()); err == nil {
+		t.Fatal("Folders returned no error although every detail call failed")
+	}
+}
+
+func TestFoldersFailsWhenTheBatchRequestFails(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/me/labels", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, folderListBody)
+	})
+	mux.HandleFunc("/batch", func(w http.ResponseWriter, r *http.Request) {
+		writeErrorJSON(t, w, http.StatusInternalServerError, `{"error":{"code":500,"message":"boom"}}`)
+	})
+	svc, _ := newTestService(t, mux)
+
+	if _, err := svc.Folders(context.Background()); err == nil {
+		t.Fatal("Folders returned no error although the batch request failed")
+	}
+}
+
+func TestFoldersSplitsLargeLabelLists(t *testing.T) {
+	const labels = 120
+	var list strings.Builder
+	list.WriteString(`{"labels":[`)
+	for i := 0; i < labels; i++ {
+		if i > 0 {
+			list.WriteString(",")
+		}
+		fmt.Fprintf(&list, `{"id":"Label_%d","name":"L%d","type":"user"}`, i, i)
+	}
+	list.WriteString(`]}`)
+
+	batch := &batchServer{}
+	svc := newFolderService(t, batch, list.String())
+
+	folders, err := svc.Folders(context.Background())
+	if err != nil {
+		t.Fatalf("Folders: %v", err)
+	}
+	if len(folders) != labels {
+		t.Fatalf("folders = %d, want %d", len(folders), labels)
+	}
+	batches := batch.calls()
+	if len(batches) != 2 {
+		t.Fatalf("batch requests = %d, want 2 (100 + 20)", len(batches))
+	}
+	if len(batches[0]) != batchLimit || len(batches[1]) != labels-batchLimit {
+		t.Fatalf("batch sizes = %d/%d, want %d/%d", len(batches[0]), len(batches[1]), batchLimit, labels-batchLimit)
 	}
 }
 
