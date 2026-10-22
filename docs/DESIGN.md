@@ -120,7 +120,7 @@
 6. **禁止跨帧重放录制宏**：`op.Record` 的宏在帧末以当前变换重放，跨帧重放会错位并触发 GPU `collectOps index out of range` panic。tooltip 队列 `th.tips` 每帧清空，只存放本帧录制的标签，帧末在无 clip 的窗口坐标系重放。
 7. **tooltip 锚点要冻结**：窗口指针坐标与按钮局部坐标分别取整会 ±1px 抖动；进入 hover 时算一次 `anchor` 并冻结，离开时重置。只给语义不直观的图标提示（归档 / 删除 / 标记已读 / 标记未读），其余按钮无提示。
 8. **光标必须 clip 到控件矩形**：`cursor.Apply` 作用于当前 clip，裸调用会让整片区域变手型。
-9. **字体**：`text.Shaper` 只建一次，界面族固定 `sans-serif`（字体来源见 [§14.1](#141-文本字体)）；图标字形尺寸按 (fill, size, pxPerSp) 缓存，避免每帧 shaping。
+9. **字体**：`text.Shaper` 只建一次，界面族固定 `sans-serif, emoji`（字体来源与顺序原因见 [§14.1](#141-文本字体)）；图标字形尺寸按 (fill, size, pxPerSp) 缓存，避免每帧 shaping。
 10. **不要在视图构造期长期缓存译文**：语言切换会重建视图，缓存的旧语言字符串不会自动更新。
 
 ## 7. 窗口装饰（CSD）与光标
@@ -300,7 +300,11 @@ gofmt -w internal/ui
 
 ### 14.1 文本字体
 
-文本字体完全使用系统字体：Gio 的 text shaper 自 v0.2.0 起默认加载系统字体（基于 fontconfig 目录与配置解析，首次扫描约 0.2–0.5s 并缓存到用户缓存目录），中文由系统安装的中文字体提供；Flatpak 沙箱内的 `/run/host/fonts` 也通过运行时的 fontconfig 配置自动可达。系统一个字体都没有时，界面回退到内置的 Go 字体（仅拉丁字符）。界面文本使用 `sans-serif` 通用字体族，跟随系统默认 UI 字体。
+文本字体完全使用系统字体：Gio 的 text shaper 自 v0.2.0 起默认加载系统字体（基于 fontconfig 目录与配置解析，首次扫描约 0.2–0.5s 并缓存到用户缓存目录），中文由系统安装的中文字体提供；Flatpak 沙箱内的 `/run/host/fonts` 也通过运行时的 fontconfig 配置自动可达。系统一个字体都没有时，界面回退到内置的 Go 字体（仅拉丁字符）。界面文本使用 `sans-serif, emoji` 字体族列表（`internal/ui/fonts.go` 的 `textTypeface`），第一段跟随系统默认 UI 字体，第二段只兜底前者渲染不了的 emoji 码点。
+
+顺序不能反过来。emoji 属于 Common 脚本，go-text 会把它并入前一个 Latin/CJK run 一起做字体回退；只用 `sans-serif` 时，覆盖 Latin 且数据库顺序更靠前的单色符号字体（如 Symbola）会抢到 emoji，显示成黑白。把通用族 `emoji` 放在第二段后，它在精确族匹配阶段命中彩色 emoji 字体（fontconfig 替换表优先 Noto Color Emoji），不受前一 run 脚本影响。也不能把 `emoji` 放第一段：Noto Color Emoji 的 cmap 同样覆盖 ASCII 数字、`#`、`*` 和空格，会以 1.245em 的 emoji 宽度渲染它们。
+
+彩色 emoji 依赖字体自带位图（CBDT/CBLC、sbix）：Gio 只渲染位图与轮廓字形，COLR/CPAL 彩色字形不支持，仅有 COLR 字体的系统会显示空白 emoji。已知限制：go-text 的 `splitByFace` 让空白不触发换字体，紧跟在 emoji 后面的空格会沿用 emoji 字体的空格度量（约 1.245em，明显比正常的 0.26em 宽）；应用层不改文本无法规避，待上游修正。
 
 ### 14.2 图标字体
 
