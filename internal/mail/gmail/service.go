@@ -80,11 +80,9 @@ func New(acc mail.Account, store Store, opts ...Option) (*Service, error) {
 // Account returns the account this service was built for.
 func (s *Service) Account() mail.Account { return s.acc }
 
-// Folders lists the four system folders plus the user labels.
-//
-// labels.list only returns partial label resources (id, name, type), so the
-// unread counters and the label colours are read with one batch of labels.get
-// calls: without that the sidebar showed no numbers for a real account.
+// Folders lists the four system folders plus the user labels, without the
+// unread counters and label colours: those are read by FolderDetails, which the
+// caller runs after the list is on screen.
 func (s *Service) Folders(ctx context.Context) ([]mail.Folder, error) {
 	var resp ListLabelsResponse
 	q := url.Values{}
@@ -105,18 +103,36 @@ func (s *Service) Folders(ctx context.Context) ([]mail.Folder, error) {
 	// The sidebar order is fixed: system folders first, then the user labels in
 	// the order the API returned them.
 	selected := make([]*Label, 0, len(resp.Labels))
-	ids := make([]string, 0, len(resp.Labels))
 	for _, spec := range systemFolders {
 		if l, ok := byID[spec.labelID]; ok {
 			selected = append(selected, l)
-			ids = append(ids, l.ID)
 		}
 	}
 	for _, l := range resp.Labels {
 		if l.Type == "user" {
 			selected = append(selected, l)
-			ids = append(ids, l.ID)
 		}
+	}
+
+	return s.folders(selected, specs), nil
+}
+
+// FolderDetails fills the unread counters and label colours of the folders
+// Folders returned. The counters are read with one batch of labels.get calls
+// per batchLimit labels.
+func (s *Service) FolderDetails(ctx context.Context, folders []mail.Folder) ([]mail.Folder, error) {
+	if len(folders) == 0 {
+		return folders, nil
+	}
+	// Map each folder back to the Gmail label id whose detail it needs: system
+	// folders carry semantic IDs, user labels carry their Gmail ID already.
+	ids := make([]string, len(folders))
+	for i, f := range folders {
+		id, err := labelIDFor(f.ID)
+		if err != nil {
+			return nil, err
+		}
+		ids[i] = id
 	}
 
 	details, err := s.c.labelDetails(ctx, ids)
@@ -124,27 +140,32 @@ func (s *Service) Folders(ctx context.Context) ([]mail.Folder, error) {
 		return nil, err
 	}
 
-	out := make([]mail.Folder, 0, len(selected))
-	for _, l := range selected {
-		d := details[l.ID]
-		if spec, ok := specs[l.ID]; ok {
-			f := mail.Folder{ID: spec.id, Kind: spec.kind, Name: l.Name}
-			if d != nil {
-				f.Unread = d.MessagesUnread
-			}
-			out = append(out, f)
+	out := make([]mail.Folder, len(folders))
+	for i, f := range folders {
+		out[i] = f
+		d := details[ids[i]]
+		if d == nil {
 			continue
 		}
-		f := mail.Folder{ID: l.ID, Name: l.Name, Kind: mail.FolderLabel}
-		if d != nil {
-			f.Unread = d.MessagesUnread
-			if d.Color != nil {
-				f.Color = d.Color.BackgroundColor
-			}
+		out[i].Unread = d.MessagesUnread
+		if d.Color != nil {
+			out[i].Color = d.Color.BackgroundColor
 		}
-		out = append(out, f)
 	}
 	return out, nil
+}
+
+// folders assembles the sidebar entries from the labels labels.list returned.
+func (s *Service) folders(selected []*Label, specs map[string]folderSpec) []mail.Folder {
+	out := make([]mail.Folder, 0, len(selected))
+	for _, l := range selected {
+		if spec, ok := specs[l.ID]; ok {
+			out = append(out, mail.Folder{ID: spec.id, Kind: spec.kind, Name: l.Name})
+			continue
+		}
+		out = append(out, mail.Folder{ID: l.ID, Name: l.Name, Kind: mail.FolderLabel})
+	}
+	return out
 }
 
 // ListThreads returns one page of conversations, newest first.
@@ -179,6 +200,14 @@ func (s *Service) ListThreads(ctx context.Context, req mail.ListRequest) (mail.T
 		return mail.ThreadPage{}, err
 	}
 
+	summaries := func(live []*Thread) []mail.ThreadSummary {
+		out := make([]mail.ThreadSummary, 0, len(live))
+		for _, th := range live {
+			out = append(out, summarize(s.acc.ID, th))
+		}
+		return out
+	}
+
 	threads, err := s.fetchThreadMetadata(ctx, list.Threads)
 	if err != nil {
 		return mail.ThreadPage{}, err
@@ -190,20 +219,16 @@ func (s *Service) ListThreads(ctx context.Context, req mail.ListRequest) (mail.T
 		// say the backend cannot tell.
 		total = -1
 	}
-	summaries := make([]mail.ThreadSummary, 0, len(threads))
-	for _, th := range threads {
-		summaries = append(summaries, summarize(s.acc.ID, th))
-	}
 	return mail.ThreadPage{
-		Threads:       summaries,
+		Threads:       summaries(threads),
 		Total:         total,
 		NextPageToken: list.NextPageToken,
 	}, nil
 }
 
 // fetchThreadMetadata loads the messages of every listed conversation in one
-// batch request per 100 conversations, keeping the list order. A conversation
-// deleted between the two calls is dropped instead of failing the whole page.
+// batch request, keeping the list order. A conversation deleted between the two
+// calls is dropped instead of failing the whole page.
 func (s *Service) fetchThreadMetadata(ctx context.Context, refs []*Thread) ([]*Thread, error) {
 	if len(refs) == 0 {
 		return nil, nil
@@ -216,40 +241,42 @@ func (s *Service) fetchThreadMetadata(ctx context.Context, refs []*Thread) ([]*T
 		targets[i] = batchTarget{path: "/users/me/threads/" + url.PathEscape(ref.ID), query: q}
 	}
 
-	errs, fatal := s.c.batchGet(ctx, "threads.get", targets, func(i, status int, body io.Reader) error {
-		switch status {
+	// live returns the kept conversations, in list order, dropping the ones
+	// that were deleted between the list and the batch.
+	live := func() []*Thread {
+		rows := make([]*Thread, 0, len(refs))
+		for i := range out {
+			if found[i] {
+				rows = append(rows, out[i])
+			}
+		}
+		return rows
+	}
+
+	err := s.c.batchFetch(ctx, "threads.get", targets, func(i int, resp *http.Response) error {
+		switch resp.StatusCode {
 		case http.StatusOK:
 		case http.StatusNotFound:
 			// The conversation was deleted between the list and the batch:
 			// drop the row and keep the rest of the page.
 			return nil
 		default:
-			detail, _ := io.ReadAll(io.LimitReader(body, 8<<10))
+			detail, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 			return fmt.Errorf("gmail threads.get %s: %s: %s",
-				refs[i].ID, http.StatusText(status), strings.TrimSpace(string(detail)))
+				refs[i].ID, http.StatusText(resp.StatusCode), strings.TrimSpace(string(detail)))
 		}
 		var th Thread
-		if err := json.NewDecoder(body).Decode(&th); err != nil {
+		if err := json.NewDecoder(resp.Body).Decode(&th); err != nil {
 			return fmt.Errorf("gmail threads.get %s: decode response: %w", refs[i].ID, err)
 		}
 		out[i] = &th
 		found[i] = true
 		return nil
 	})
-	if fatal != nil {
-		return nil, fatal
+	if err != nil {
+		return nil, err
 	}
-	if len(errs) > 0 {
-		return nil, errs[0]
-	}
-
-	live := out[:0]
-	for i := range out {
-		if found[i] {
-			live = append(live, out[i])
-		}
-	}
-	return live, nil
+	return live(), nil
 }
 
 // GetThread returns every message of one conversation, oldest first.

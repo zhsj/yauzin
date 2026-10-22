@@ -232,9 +232,34 @@ func (s *Service) wait(ctx context.Context) error {
 	}
 }
 
-// Folders implements mail.Service. Unread counters count conversations, which
-// matches the granularity of the message list.
+// Folders implements mail.Service. Unread counters and colours are left to
+// FolderDetails.
 func (s *Service) Folders(ctx context.Context) ([]mail.Folder, error) {
+	if err := s.wait(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	out := []mail.Folder{
+		{ID: "inbox", Name: "收件箱", Kind: mail.FolderInbox},
+		{ID: "starred", Name: "已加星标", Kind: mail.FolderStarred},
+		{ID: "sent", Name: "已发送", Kind: mail.FolderSent},
+		{ID: "trash", Name: "垃圾箱", Kind: mail.FolderTrash},
+	}
+	for _, l := range s.labels {
+		out = append(out, mail.Folder{ID: l.ID, Name: l.Name, Kind: l.Kind})
+	}
+	return out, nil
+}
+
+// FolderDetails implements mail.Service. Unread counters count conversations,
+// which matches the granularity of the message list; colours are the ones the
+// demo data was seeded with.
+func (s *Service) FolderDetails(ctx context.Context, folders []mail.Folder) ([]mail.Folder, error) {
 	if err := s.wait(ctx); err != nil {
 		return nil, err
 	}
@@ -246,6 +271,10 @@ func (s *Service) Folders(ctx context.Context) ([]mail.Folder, error) {
 
 	inboxUnread, starredUnread := 0, 0
 	labelUnread := map[string]int{}
+	labelColor := map[string]string{}
+	for _, l := range s.labels {
+		labelColor[l.ID] = l.Color
+	}
 	for _, th := range s.threads {
 		if slices.ContainsFunc(th.msgs, func(e *stored) bool { return e.msg.Unread && matchFolder(e, "inbox") }) {
 			inboxUnread++
@@ -254,22 +283,24 @@ func (s *Service) Folders(ctx context.Context) ([]mail.Folder, error) {
 			starredUnread++
 		}
 		for _, l := range s.labels {
-			id := l.ID
-			if slices.ContainsFunc(th.msgs, func(e *stored) bool { return e.msg.Unread && matchFolder(e, id) }) {
-				labelUnread[id]++
+			if slices.ContainsFunc(th.msgs, func(e *stored) bool { return e.msg.Unread && matchFolder(e, l.ID) }) {
+				labelUnread[l.ID]++
 			}
 		}
 	}
 
-	out := []mail.Folder{
-		{ID: "inbox", Name: "收件箱", Kind: mail.FolderInbox, Unread: inboxUnread},
-		{ID: "starred", Name: "已加星标", Kind: mail.FolderStarred, Unread: starredUnread},
-		{ID: "sent", Name: "已发送", Kind: mail.FolderSent},
-		{ID: "trash", Name: "垃圾箱", Kind: mail.FolderTrash},
-	}
-	for _, l := range s.labels {
-		l.Unread = labelUnread[l.ID]
-		out = append(out, l)
+	out := make([]mail.Folder, len(folders))
+	for i, f := range folders {
+		out[i] = f
+		switch f.Kind {
+		case mail.FolderInbox:
+			out[i].Unread = inboxUnread
+		case mail.FolderStarred:
+			out[i].Unread = starredUnread
+		case mail.FolderLabel:
+			out[i].Unread = labelUnread[f.ID]
+			out[i].Color = labelColor[f.ID]
+		}
 	}
 	return out, nil
 }

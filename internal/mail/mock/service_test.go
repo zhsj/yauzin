@@ -140,6 +140,10 @@ func TestUnreadCountersUseConversations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("folders: %v", err)
 	}
+	folders, err = s.FolderDetails(ctx, folders)
+	if err != nil {
+		t.Fatalf("folder details: %v", err)
+	}
 	inboxUnread := 0
 	for _, f := range folders {
 		if f.ID == "inbox" {
@@ -172,6 +176,10 @@ func TestUnreadCountersUseConversations(t *testing.T) {
 	folders, err = s.Folders(ctx)
 	if err != nil {
 		t.Fatalf("folders: %v", err)
+	}
+	folders, err = s.FolderDetails(ctx, folders)
+	if err != nil {
+		t.Fatalf("folder details: %v", err)
 	}
 	for _, f := range folders {
 		if f.ID == "inbox" && f.Unread != inboxUnread-1 {
@@ -469,6 +477,7 @@ func TestListThreadsReturnsEmptyPagePastTheEnd(t *testing.T) {
 		PageToken: encodeToken(math.MaxInt),
 		Limit:     50,
 	})
+
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

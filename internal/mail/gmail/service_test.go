@@ -244,6 +244,10 @@ func TestFoldersReadsCountsFromBatchedLabelDetails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Folders: %v", err)
 	}
+	folders, err = svc.FolderDetails(context.Background(), folders)
+	if err != nil {
+		t.Fatalf("FolderDetails: %v", err)
+	}
 	if len(folders) != 6 {
 		t.Fatalf("folders = %+v, want 4 system + 2 labels", folders)
 	}
@@ -288,6 +292,10 @@ func TestFoldersToleratesADeletedLabel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Folders: %v", err)
 	}
+	folders, err = svc.FolderDetails(context.Background(), folders)
+	if err != nil {
+		t.Fatalf("FolderDetails: %v", err)
+	}
 	if len(folders) != 6 {
 		t.Fatalf("folders = %+v, want the surviving labels", folders)
 	}
@@ -309,8 +317,12 @@ func TestFoldersFailsWhenNoLabelDetailSucceeds(t *testing.T) {
 	batch := &batchServer{details: folderDetails(), statuses: statuses}
 	svc := newFolderService(t, batch, folderListBody)
 
-	if _, err := svc.Folders(context.Background()); err == nil {
-		t.Fatal("Folders returned no error although every detail call failed")
+	folders, err := svc.Folders(context.Background())
+	if err != nil {
+		t.Fatalf("Folders: %v", err)
+	}
+	if _, err := svc.FolderDetails(context.Background(), folders); err == nil {
+		t.Fatal("FolderDetails returned no error although every detail call failed")
 	}
 }
 
@@ -324,8 +336,12 @@ func TestFoldersFailsWhenTheBatchRequestFails(t *testing.T) {
 	})
 	svc, _ := newTestService(t, mux)
 
-	if _, err := svc.Folders(context.Background()); err == nil {
-		t.Fatal("Folders returned no error although the batch request failed")
+	folders, err := svc.Folders(context.Background())
+	if err != nil {
+		t.Fatalf("Folders: %v", err)
+	}
+	if _, err := svc.FolderDetails(context.Background(), folders); err == nil {
+		t.Fatal("FolderDetails returned no error although the batch request failed")
 	}
 }
 
@@ -351,12 +367,23 @@ func TestFoldersSplitsLargeLabelLists(t *testing.T) {
 	if len(folders) != labels {
 		t.Fatalf("folders = %d, want %d", len(folders), labels)
 	}
-	batches := batch.calls()
-	if len(batches) != 2 {
-		t.Fatalf("batch requests = %d, want 2 (100 + 20)", len(batches))
+	folders, err = svc.FolderDetails(context.Background(), folders)
+	if err != nil {
+		t.Fatalf("FolderDetails: %v", err)
 	}
-	if len(batches[0]) != batchLimit || len(batches[1]) != labels-batchLimit {
-		t.Fatalf("batch sizes = %d/%d, want %d/%d", len(batches[0]), len(batches[1]), batchLimit, labels-batchLimit)
+	if len(folders) != labels {
+		t.Fatalf("detailed folders = %d, want %d", len(folders), labels)
+	}
+	batches := batch.calls()
+	wantBatches := (labels + batchLimit - 1) / batchLimit
+	if len(batches) != wantBatches {
+		t.Fatalf("batch requests = %d, want %d", len(batches), wantBatches)
+	}
+	for i, calls := range batches {
+		want := min(batchLimit, labels-i*batchLimit)
+		if len(calls) != want {
+			t.Fatalf("batch %d = %d calls, want %d", i, len(calls), want)
+		}
 	}
 }
 
@@ -524,6 +551,7 @@ func TestListThreadsAssemblesConversations(t *testing.T) {
 		PageToken: "prev",
 		Limit:     50,
 	})
+
 	if err != nil {
 		t.Fatalf("ListThreads: %v", err)
 	}
@@ -694,13 +722,14 @@ func TestListThreadsSplitsLargeMetadataBatches(t *testing.T) {
 		}
 	}
 	batches := batch.calls()
-	if len(batches) != 3 {
-		t.Fatalf("batch requests = %d, want 3 (100+100+50)", len(batches))
+	wantBatches := (threads + batchLimit - 1) / batchLimit
+	if len(batches) != wantBatches {
+		t.Fatalf("batch requests = %d, want %d", len(batches), wantBatches)
 	}
-	sizes := []int{batchLimit, batchLimit, threads - 2*batchLimit}
-	for i, size := range sizes {
-		if len(batches[i]) != size {
-			t.Fatalf("batch %d = %d calls, want %d", i, len(batches[i]), size)
+	for i, calls := range batches {
+		want := min(batchLimit, threads-i*batchLimit)
+		if len(calls) != want {
+			t.Fatalf("batch %d = %d calls, want %d", i, len(calls), want)
 		}
 	}
 }

@@ -27,11 +27,18 @@ type setFlagCall struct {
 	on   bool
 }
 
-func (f *fakeService) Folders(context.Context) ([]mail.Folder, error) {
+func (f *fakeService) Folders(_ context.Context) ([]mail.Folder, error) {
 	if f.foldersErr != nil {
 		return nil, f.foldersErr
 	}
 	return []mail.Folder{{ID: "inbox", Kind: mail.FolderInbox}}, nil
+}
+
+func (f *fakeService) FolderDetails(_ context.Context, folders []mail.Folder) ([]mail.Folder, error) {
+	if f.foldersErr != nil {
+		return nil, f.foldersErr
+	}
+	return folders, nil
 }
 
 func (f *fakeService) ListThreads(context.Context, mail.ListRequest) (mail.ThreadPage, error) {

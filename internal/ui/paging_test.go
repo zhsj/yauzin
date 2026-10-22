@@ -69,9 +69,9 @@ func TestToolbarRangeLabel(t *testing.T) {
 		hasNext                    bool
 		wantStart, wantEnd, wantOK int
 	}{
-		{name: "first page", page: 1, total: 112, count: 50, hasNext: true, wantStart: 1, wantEnd: 50, wantOK: 112},
-		{name: "middle page", page: 2, total: 112, count: 50, hasNext: true, wantStart: 51, wantEnd: 100, wantOK: 112},
-		{name: "last page", page: 3, total: 112, count: 12, hasNext: false, wantStart: 101, wantEnd: 112, wantOK: 112},
+		{name: "first page", page: 1, total: 112, count: 25, hasNext: true, wantStart: 1, wantEnd: 25, wantOK: 112},
+		{name: "middle page", page: 2, total: 112, count: 25, hasNext: true, wantStart: 26, wantEnd: 50, wantOK: 112},
+		{name: "last page", page: 5, total: 112, count: 12, hasNext: false, wantStart: 101, wantEnd: 112, wantOK: 112},
 		{name: "empty page", page: 1, total: 0, count: 0, hasNext: false, wantStart: 0, wantEnd: 0, wantOK: 0},
 	}
 

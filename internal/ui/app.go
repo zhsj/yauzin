@@ -41,8 +41,10 @@ const (
 	composeForward composeMode = "forward"
 )
 
-// perPage matches Gmail's default page size.
-const perPage = 50
+// perPage is the number of conversations one page requests. It is below
+// Gmail's default of 50 to keep the metadata batch small alongside the label
+// batch, which share the account's per-user concurrency budget.
+const perPage = 25
 
 // overlay is any full-window layer drawn above the mailbox.
 type overlay interface {

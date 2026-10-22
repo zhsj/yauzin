@@ -200,11 +200,11 @@ func TestClampCursorAfterReload(t *testing.T) {
 	}
 }
 
-func TestRefreshThreadsKeepsTheScrollPosition(t *testing.T) {
+func TestMergeThreadsKeepsTheScrollPosition(t *testing.T) {
 	a := testApp(t)
 	a.list.list.Position = layout.Position{First: 12, Offset: 40, Count: 5}
 
-	a.list.refreshThreads(cursorThreads(20))
+	a.list.mergeThreads(cursorThreads(20))
 	if got := a.list.list.Position.First; got != 12 {
 		t.Fatalf("first visible row = %d after a refresh, want the previous 12", got)
 	}

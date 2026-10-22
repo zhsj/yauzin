@@ -55,6 +55,13 @@ type client struct {
 	now          func() time.Time
 
 	refreshMu sync.Mutex
+
+	// reqSem holds one token while a Gmail API request is in flight. Every
+	// request, single and batch alike, passes through it, so one account never
+	// sends two Gmail calls at once: Gmail runs the calls embedded in a batch
+	// concurrently and counts them against a per-user limit, and the sidebar
+	// and the page used to overlap their batches and trip it.
+	reqSem chan struct{}
 }
 
 // options collects the injected dependencies of Service.
@@ -118,6 +125,7 @@ func newClient(accountID string, store Store, opts []Option) (*client, error) {
 		store:     store,
 		http:      o.client,
 		now:       o.now,
+		reqSem:    make(chan struct{}, 1),
 	}
 	if c.http == nil {
 		tr, err := proxyTransport(o.proxyURL)
@@ -143,6 +151,20 @@ func (c *client) close() {
 		c.ownTransport.CloseIdleConnections()
 	}
 }
+
+// acquireReq waits for this account's request slot. A cancelled request leaves
+// the queue immediately instead of waiting for the request ahead of it.
+func (c *client) acquireReq(ctx context.Context) error {
+	select {
+	case c.reqSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// releaseReq gives the request slot back.
+func (c *client) releaseReq() { <-c.reqSem }
 
 // do performs one authorized JSON request. force is unused: the retry logic
 // below asks for it explicitly.
@@ -182,8 +204,15 @@ func (c *client) do(ctx context.Context, op, method, path string, query url.Valu
 	return nil
 }
 
-// send builds and performs one request with the given bearer token.
+// send builds and performs one request with the given bearer token. It holds
+// the account's request slot for the HTTP round trip, so single and batch
+// requests never overlap.
 func (c *client) send(ctx context.Context, method, path string, query url.Values, token string) (*http.Response, error) {
+	if err := c.acquireReq(ctx); err != nil {
+		return nil, err
+	}
+	defer c.releaseReq()
+
 	u := c.baseURL + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()

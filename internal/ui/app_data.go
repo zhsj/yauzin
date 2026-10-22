@@ -14,12 +14,24 @@ func (a *App) toggleSidebar() { a.sidebarCollapsed = !a.sidebarCollapsed }
 // service returns the backend for the active account.
 func (a *App) service() mail.Service { return a.services[a.activeAcc] }
 
+// reloadAll loads the sidebar and the current page in a fixed order: the folder
+// names first, then the page rows, then the folder counters. Each step starts
+// on the success callback of the previous one, so the requests run one stage at
+// a time.
 func (a *App) reloadAll() {
-	a.reloadFolders()
-	a.loadThreads()
+	a.loadFolderNames(func() {
+		a.loadThreadsKeepingScroll(false, a.loadFolderDetails)
+	})
 }
 
+// reloadFolders reloads just the sidebar: the names, then their counters.
 func (a *App) reloadFolders() {
+	a.loadFolderNames(a.loadFolderDetails)
+}
+
+// loadFolderNames loads the sidebar names without the unread counters or label
+// colours, then runs next on the UI goroutine.
+func (a *App) loadFolderNames(next func()) {
 	svc := a.service()
 	if svc == nil {
 		return
@@ -27,12 +39,44 @@ func (a *App) reloadFolders() {
 	cancelRequest(&a.folderCancel)
 	a.folderGen++
 	gen, accID := a.folderGen, a.activeAcc
+	guard := func() bool { return gen == a.folderGen && accID == a.activeAcc }
 	var folders []mail.Folder
-	a.folderCancel = a.async("folders", timeoutFolders,
-		func() bool { return gen == a.folderGen && accID == a.activeAcc },
+	a.folderCancel = a.async("folders", timeoutFolders, guard,
 		func(ctx context.Context) error {
 			var err error
 			folders, err = svc.Folders(ctx)
+			return err
+		},
+		func() {
+			a.folders = folders
+			a.side.reload()
+			if next != nil {
+				next()
+			}
+		},
+		func(err error) {
+			a.notify(i18n.T("toast.foldersFailed", map[string]string{"Error": errorText(err)}), true)
+		})
+}
+
+// loadFolderDetails fills the unread counters and colours of the folders that
+// loadFolderNames put on screen.
+func (a *App) loadFolderDetails() {
+	svc := a.service()
+	if svc == nil {
+		return
+	}
+	names := append([]mail.Folder(nil), a.folders...)
+	if len(names) == 0 {
+		return
+	}
+	gen, accID := a.folderGen, a.activeAcc
+	guard := func() bool { return gen == a.folderGen && accID == a.activeAcc }
+	var folders []mail.Folder
+	a.folderCancel = a.async("folder details", timeoutFolders, guard,
+		func(ctx context.Context) error {
+			var err error
+			folders, err = svc.FolderDetails(ctx, names)
 			return err
 		},
 		func() {
@@ -98,16 +142,18 @@ func (a *App) clearList() {
 // loadThreads loads the current page and resets the list scroll: it serves
 // page, folder and search changes, where the previous position is meaningless.
 func (a *App) loadThreads() {
-	a.loadThreadsKeepingScroll(false)
+	a.loadThreadsKeepingScroll(false, nil)
 }
 
 // refreshThreads reloads the current page after a mutation and keeps the
 // scroll position, so archiving a row does not jump back to the top.
 func (a *App) refreshThreads() {
-	a.loadThreadsKeepingScroll(true)
+	a.loadThreadsKeepingScroll(true, nil)
 }
 
-func (a *App) loadThreadsKeepingScroll(keepScroll bool) {
+// loadThreadsKeepingScroll loads the current page and, when after is not nil,
+// runs it on the UI goroutine once the page is on screen.
+func (a *App) loadThreadsKeepingScroll(keepScroll bool, after func()) {
 	svc := a.service()
 	if svc == nil {
 		return
@@ -126,10 +172,10 @@ func (a *App) loadThreadsKeepingScroll(keepScroll bool) {
 		PageToken: token,
 		Limit:     perPage,
 	}
+	guard := func() bool { return gen == a.listGen && accID == a.activeAcc }
 	a.toolbar.setLoading(true)
 	var result mail.ThreadPage
-	a.listCancel = a.async("list threads", timeoutList,
-		func() bool { return gen == a.listGen && accID == a.activeAcc },
+	a.listCancel = a.async("list threads", timeoutList, guard,
 		func(ctx context.Context) error {
 			var err error
 			result, err = svc.ListThreads(ctx, req)
@@ -145,13 +191,22 @@ func (a *App) loadThreadsKeepingScroll(keepScroll bool) {
 			}
 			a.page = page
 			a.rememberCursor(page, result.NextPageToken)
-			if keepScroll {
-				a.list.refreshThreads(result.Threads)
+			if len(result.Threads) == 0 {
+				// An empty page: drop whatever the previous view or a refresh
+				// left behind.
+				a.list.setThreads(nil)
+			} else if keepScroll {
+				// A refresh keeps the scroll position and the rows the user
+				// ticked.
+				a.list.mergeThreads(result.Threads)
 			} else {
 				a.list.setThreads(result.Threads)
 			}
 			a.clampCursor()
 			a.toolbar.setPage(page, result.Total, len(result.Threads), result.NextPageToken != "")
+			if after != nil {
+				after()
+			}
 		},
 		func(err error) {
 			a.toolbar.setLoading(false)

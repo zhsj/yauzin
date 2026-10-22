@@ -12,11 +12,19 @@ func (l *messageListView) setThreads(threads []mail.ThreadSummary) {
 	l.replace(threads, false)
 }
 
-// refreshThreads replaces the page contents after a mutation on the same page:
-// the scroll position survives, so archiving a row does not send the list back
-// to the top.
-func (l *messageListView) refreshThreads(threads []mail.ThreadSummary) {
+// mergeThreads replaces the page contents on a same-page refresh: the scroll
+// position survives, and the bulk selection is kept for the rows that are still
+// present, so a mutation neither jumps back to the top nor untags the rows the
+// user already ticked.
+func (l *messageListView) mergeThreads(threads []mail.ThreadSummary) {
+	selected := l.selected
 	l.replace(threads, true)
+	l.selected = make(map[string]bool, len(selected))
+	for id := range selected {
+		if _, ok := l.byID[id]; ok {
+			l.selected[id] = true
+		}
+	}
 }
 
 func (l *messageListView) replace(threads []mail.ThreadSummary, keepScroll bool) {

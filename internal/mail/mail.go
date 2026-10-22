@@ -226,7 +226,13 @@ var (
 // never serialises them. Every method honours ctx, including while it waits for
 // its own locks.
 type Service interface {
+	// Folders returns the sidebar entries without the unread counters and label
+	// colours. The names come straight from the folder list; the counters and
+	// colours are filled in by FolderDetails afterwards.
 	Folders(ctx context.Context) ([]Folder, error)
+	// FolderDetails fills in the unread counters and label colours of the
+	// folders Folders returned.
+	FolderDetails(ctx context.Context, folders []Folder) ([]Folder, error)
 	// ListThreads returns one page of conversations, newest first.
 	ListThreads(ctx context.Context, req ListRequest) (ThreadPage, error)
 	// GetThread returns every message of a conversation, oldest first.
