@@ -36,7 +36,28 @@ func TestSettingsPagesFrame(t *testing.T) {
 	s.tabs[0].click.Click()
 	s.Layout(gtx, a)
 	if s.page != 0 {
-		t.Fatalf("page = %d, want 0 after clicking the interface segment", s.page)
+		t.Fatalf("page = %d, want 0 after clicking the general segment", s.page)
+	}
+}
+
+// TestSettingsRowDisabledIgnoresClicks covers rows that are listed but have no
+// implementation behind them: they must not react to a click.
+func TestSettingsRowDisabledIgnoresClicks(t *testing.T) {
+	a := testApp(t)
+	taps := 0
+	row := &settingsRow{
+		title:    "Disabled row",
+		disabled: true,
+		onTap:    func() { taps++ },
+	}
+
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+	gtx.Constraints = layout.Constraints{Min: image.Pt(400, 46), Max: image.Pt(400, 46)}
+	row.click.Click()
+	row.Layout(gtx, a.th)
+	if taps != 0 {
+		t.Fatalf("taps = %d on a disabled row, want 0", taps)
 	}
 }
 

@@ -33,7 +33,7 @@
 
 - **授权**：用户自带 Google Cloud「桌面应用」OAuth 客户端，在「设置 → 账号 → 添加账号」中填写 Client ID / Secret。流程是授权码 + PKCE（`oauth2.GenerateVerifier` / `S256ChallengeOption`），回调走 `http://127.0.0.1:<随机端口>/oauth2/callback` 的一次性本地服务；scope 只有 `gmail.readonly`，并带 `access_type=offline` 与 `prompt=consent` 以取得 refresh token。没有 refresh token 视为授权失败。授权码、令牌、client secret、含密码的代理地址一律不写日志。
 - **存储**：`accounts.json`（与 `settings.json` 同目录，0600，临时文件 + rename 原子写）保存共享的 `oauth{clientId, clientSecret}` 与每账号 `{id,email,name,useProxy,token{accessToken,refreshToken,tokenType,expiresAt}}`；`id` 为 `gmail:` + 小写邮箱，重复登录同一邮箱即覆盖（重新授权）。一个 `*accounts.Store` 同时被 UI 与所有后端持有，后端刷新令牌后立即回写。文件损坏只告警并退化为「仅 demo 账号」，不阻止启动。
-- **代理**：代理地址是通用设置（`settings.json` 的 `proxy`，在「设置 → 界面 → 网络」维护），账号条目只记 `useProxy`。保存代理后，使用代理的 Gmail 后端被关闭并重建（先取消在途请求），新 Transport 立即生效。`net/url` 只接受 `http` / `https` / `socks5` 且必须有 host 与端口；`socks5` 由 `http.Transport` 原生支持（`socks5h` 不接受：net/http 没有对应 dialer）。回环回调不经代理。
+- **代理**：代理地址是通用设置（`settings.json` 的 `proxy`，在「设置 → 通用 → 网络 → 代理」维护），账号条目只记 `useProxy`。保存代理后，使用代理的 Gmail 后端被关闭并重建（先取消在途请求），新 Transport 立即生效。`net/url` 只接受 `http` / `https` / `socks5` 且必须有 host 与端口；`socks5` 由 `http.Transport` 原生支持（`socks5h` 不接受：net/http 没有对应 dialer）。回环回调不经代理。
 - **读取映射**：Gmail 系统标签 `INBOX/STARRED/SENT/TRASH` 映射为 `inbox/starred/sent/trash` 与对应 `FolderKind`（名称留给 UI 按 kind 翻译），`DRAFT/SPAM/IMPORTANT/UNREAD/CATEGORY_*` 不展示；用户标签保留 Gmail label ID、名称、`color.backgroundColor` 与 `messagesUnread`。列表用 `threads.list`，随后每会话一次 `threads.get?format=metadata`（并发 6）补全参与者、未读数、星标、附件标记与最新时间；`Total` 取 `resultSizeEstimate`，缺省或用空时为 -1。正文用 `format=full` 递归解析 MIME：首个 `text/plain` 与首个 `text/html` 作正文，带 `filename` 的部件只留元数据（附件下载不在本期范围）。
 - **已知取舍**：一页 50 个会话 = 1 次 list + 50 次 metadata get（Gmail 无批量端点），首屏延迟明显高于 mock，后续可考虑批量或减少 `metadataHeaders`；`resultSizeEstimate` 是估算值；列表中附件标记依赖 metadata 返回的 part 树，若某条消息未返回 parts 则该行可能漏标记；token 与代理凭据都是明文 0600 存储，没有系统密钥环集成。
 
@@ -132,7 +132,7 @@
 ### 7.2 使用者配置
 
 - **跟随系统（默认）**：平台报告「不装饰」时应用自绘单行标题栏（GNOME Wayland、Windows、macOS）；平台已装饰时保持系统边框（KDE 默认的 Breeze 标题栏）。
-- **KDE Wayland 需要两步**：① 在 *系统设置 → 窗口管理 → 窗口规则* 新建规则（窗口类 `yauzin`，即二进制名），把「无标题栏和边框」设为「强制」；② 在应用 *设置 → 界面* 打开「使用客户端标题栏」。切换后立即生效，无需重启。第二步不能省：`xdg-decoration` 协议没有「无装饰」取值，KWin 对强制无边框的窗口仍报告服务端装饰，应用无法自动分辨（原因见 §7.1）。
+- **KDE Wayland 需要两步**：① 在 *系统设置 → 窗口管理 → 窗口规则* 新建规则（窗口类 `yauzin`，即二进制名），把「无标题栏和边框」设为「强制」；② 在应用 *设置 → 通用* 打开「使用客户端标题栏」。切换后立即生效，无需重启。第二步不能省：`xdg-decoration` 协议没有「无装饰」取值，KWin 对强制无边框的窗口仍报告服务端装饰，应用无法自动分辨（原因见 §7.1）。
 - **X11 无法使用客户端标题栏**，该开关无效。
 - **光标主题覆盖**：环境变量优先级最高，可绕过自动解析直接指定；运行中更换系统主题后，从托盘关闭再打开窗口即可生效。
 
@@ -333,8 +333,8 @@ internal/ui/reader.go          阅读器容器与工具栏
 internal/ui/messagecard.go     可折叠消息卡片
 internal/ui/compose_view.go    写信浮层布局
 internal/ui/compose_actions.go 发送、附件暂存与丢弃
-internal/ui/settings.go        设置浮层（含网络代理）
-internal/ui/account_add.go     添加 Gmail 账号浮层（浏览器授权）
+internal/ui/settings.go        设置浮层（通用/账号/快捷键，含网络代理）
+internal/ui/account_add.go     添加账号浮层（先选类型，Gmail 走浏览器授权）
 internal/ui/menu.go            下拉菜单
 internal/ui/status.go          轻量状态条
 internal/ui/fonts.go           字体集合（系统字体 + Material Symbols）与 Shaper

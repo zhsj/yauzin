@@ -22,18 +22,34 @@ import (
 // an OAuth client and log in, so it is far longer than a mail request.
 const signInTimeout = 5 * time.Minute
 
-// accountDialog adds one Gmail account: the user supplies the OAuth client
-// they created in Google Cloud, the app opens the system browser and the
-// loopback callback returns the token. The dialog stays open across the wait
-// so a failure is explained in place.
+// accountStep is the page of the add-account wizard. Every protocol is listed
+// on the first step; only the ones with a backend behind them can be entered.
+type accountStep int
+
+const (
+	accountStepType accountStep = iota
+	accountStepGmail
+)
+
+// accountDialog adds one account. The first step picks the protocol, the
+// second is the Gmail form: the user supplies the OAuth client they created in
+// Google Cloud, the app opens the system browser and the loopback callback
+// returns the token. The dialog stays open across the wait so a failure is
+// explained in place.
 type accountDialog struct {
 	app     *App
 	blocker *tapBlocker
 	close   *iconButton
 
-	clientID     widget.Editor
-	clientSecret widget.Editor
-	useProxy     bool
+	step     accountStep
+	back     *linkButton
+	typeRows []*settingsRow
+
+	clientID        widget.Editor
+	clientSecret    widget.Editor
+	clientIDBox     widget.Clickable
+	clientSecretBox widget.Clickable
+	useProxy        bool
 	// hasProxy mirrors the stored proxy setting: without an address the
 	// switch makes no sense and is not shown.
 	hasProxy bool
@@ -74,6 +90,31 @@ func newAccountDialog(a *App) *accountDialog {
 	d.useProxy = d.hasProxy
 	if d.hasProxy {
 		d.proxySwitch = newToggleSwitch(d.useProxy, func(on bool) { d.useProxy = on })
+	}
+	d.back = newLinkButton(i18n.T("settings.accountBack"), icon{glyph: glyphBack}, func() {
+		d.step = accountStepType
+		d.err = ""
+		d.list.ScrollTo(0)
+	})
+	// IMAP/SMTP is on the roadmap but has no backend yet, so the row is listed
+	// disabled rather than hiding the option altogether.
+	d.typeRows = []*settingsRow{
+		{
+			icon:     glyphMail,
+			title:    i18n.T("settings.accountTypeGmail"),
+			subtitle: i18n.T("settings.accountTypeGmailHint"),
+			onTap: func() {
+				d.step = accountStepGmail
+				d.err = ""
+				d.list.ScrollTo(0)
+			},
+		},
+		{
+			icon:     glyphInbox,
+			title:    i18n.T("settings.accountTypeIMAP"),
+			subtitle: i18n.T("settings.accountTypeIMAPHint"),
+			disabled: true,
+		},
 	}
 	d.signIn = newPillButton(i18n.T("settings.accountSignIn"), icon{}, true, d.start)
 	d.signIn.disabled = true
@@ -257,16 +298,58 @@ func (d *accountDialog) Layout(gtx layout.Context, a *App) layout.Dimensions {
 }
 
 func (d *accountDialog) content(gtx layout.Context, th *theme) layout.Dimensions {
+	if d.step == accountStepGmail {
+		return d.gmailContent(gtx, th)
+	}
+	return d.typeContent(gtx, th)
+}
+
+// typeContent is the first step: one row per account protocol. The rows carry
+// the settings row style and the ones without a backend are disabled.
+func (d *accountDialog) typeContent(gtx layout.Context, th *theme) layout.Dimensions {
+	return layout.Inset{Top: 8, Bottom: 14}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Left: 20, Right: 20, Bottom: 8}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return th.wrappedText(gtx, i18n.T("settings.accountChooseType"), 12, colMuted, font.Normal)
+				})
+			}),
+			layout.Rigid(rows(d.typeRows, th)),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 14) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Left: 20, Right: 20}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Flex{Axis: layout.Horizontal, Spacing: layout.SpaceEnd}.Layout(gtx,
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return d.cancel.Layout(gtx, th)
+						}),
+					)
+				})
+			}),
+		)
+	})
+}
+
+// gmailContent is the second step: the OAuth client form. The back link keeps
+// the protocol step reachable without closing the dialog.
+func (d *accountDialog) gmailContent(gtx layout.Context, th *theme) layout.Dimensions {
+	// Going back while the browser flow owns the dialog would hide the only
+	// progress feedback, so the link stays dimmed until the flow returns.
+	d.back.disabled = d.busy || d.pending
 	return layout.Inset{Top: 8, Bottom: 14, Left: 20, Right: 20}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Bottom: 6}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return d.back.Layout(gtx, th)
+				})
+			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Bottom: 12}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return th.wrappedText(gtx, i18n.T("settings.accountIntro"), 12, colMuted, font.Normal)
 				})
 			}),
-			layout.Rigid(d.field(th, i18n.T("settings.accountClientID"), &d.clientID, "1234.apps.googleusercontent.com")),
+			layout.Rigid(d.field(th, i18n.T("settings.accountClientID"), &d.clientID, &d.clientIDBox, "1234.apps.googleusercontent.com")),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 10) }),
-			layout.Rigid(d.field(th, i18n.T("settings.accountClientSecret"), &d.clientSecret, i18n.T("settings.accountClientSecretHint"))),
+			layout.Rigid(d.field(th, i18n.T("settings.accountClientSecret"), &d.clientSecret, &d.clientSecretBox, i18n.T("settings.accountClientSecretHint"))),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 14) }),
 			layout.Rigid(d.proxyRow(th)),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 10) }),
@@ -278,7 +361,7 @@ func (d *accountDialog) content(gtx layout.Context, th *theme) layout.Dimensions
 }
 
 // field is one labelled editor box.
-func (d *accountDialog) field(th *theme, label string, ed *widget.Editor, hint string) layout.Widget {
+func (d *accountDialog) field(th *theme, label string, ed *widget.Editor, box *widget.Clickable, hint string) layout.Widget {
 	return func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -291,16 +374,7 @@ func (d *accountDialog) field(th *theme, label string, ed *widget.Editor, hint s
 				if h > gtx.Constraints.Max.Y {
 					h = gtx.Constraints.Max.Y
 				}
-				size := image.Pt(gtx.Constraints.Max.X, h)
-				gtx.Constraints = layout.Exact(size)
-				strokeRect(gtx, colSurface, colBorder, 6, 1)
-				layout.Inset{Left: 12, Right: 12}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					gtx.Constraints.Min.X = gtx.Constraints.Max.X
-					gtx.Constraints.Min.Y = 0
-					handleEditorEvents(gtx, ed)
-					return th.textField(gtx, ed, hint, 14)
-				})
-				return layout.Dimensions{Size: size}
+				return th.boxedField(gtx, ed, box, hint, 14, h)
 			}),
 		)
 	}

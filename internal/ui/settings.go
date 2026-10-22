@@ -16,10 +16,10 @@ import (
 )
 
 // settingsView is the modal panel opened from the gear button. It has three
-// pages picked with the underlined tabs under the title: Interface holds
-// the language list and the boolean switches, Accounts the configured
-// accounts and an "add account" placeholder, Shortcuts the read-only table of
-// the keys in shortcutTable.
+// pages picked with the underlined tabs under the title: General holds the
+// language list, the boolean switches and the network proxy, Accounts the
+// configured accounts and an "add account" placeholder, Shortcuts the
+// read-only table of the keys in shortcutTable.
 type settingsView struct {
 	app      *App
 	blocker  *tapBlocker
@@ -33,6 +33,7 @@ type settingsView struct {
 	// The network section: one proxy address shared by the accounts that opt
 	// into it. proxyErr holds the form message of the last save attempt.
 	proxy     *widget.Editor
+	proxyBox  widget.Clickable
 	proxySave *pillButton
 	proxyErr  string
 	list      layout.List
@@ -51,6 +52,9 @@ type settingsRow struct {
 	title    string
 	subtitle string
 	active   bool
+	// disabled dims the row and drops every interaction, for entries that are
+	// listed but have no implementation yet.
+	disabled bool
 	// switchCtl replaces the trailing check mark: switch rows are boolean,
 	// and the row itself stays the hit target so a click anywhere toggles
 	// the setting exactly once.
@@ -67,7 +71,7 @@ func newSettingsView(a *App) *settingsView {
 	s.list.Axis = layout.Vertical
 
 	s.tabs = []settingsTab{
-		{label: i18n.T("settings.tabInterface")},
+		{label: i18n.T("settings.tabGeneral")},
 		{label: i18n.T("settings.tabAccounts")},
 		{label: i18n.T("settings.tabShortcuts")},
 	}
@@ -285,11 +289,17 @@ func sectionHint(th *theme, text string) layout.Widget {
 	}
 }
 
-// proxySection is the network row: a proxy editor, the save button and the
-// hint or the last validation error below it.
+// proxySection is the proxy row of the network group: the field label, the
+// address editor with its save button, and the hint or the last validation
+// error below it.
 func (s *settingsView) proxySection(th *theme) layout.Widget {
 	return func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Left: 20, Right: 20, Bottom: 6}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return th.text(gtx, i18n.T("settings.proxy"), 13, colText, font.Medium, 1)
+				})
+			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Left: 20, Right: 20, Bottom: 6}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
@@ -298,18 +308,7 @@ func (s *settingsView) proxySection(th *theme) layout.Widget {
 							if h > gtx.Constraints.Max.Y {
 								h = gtx.Constraints.Max.Y
 							}
-							size := image.Pt(gtx.Constraints.Max.X, h)
-							gtx.Constraints = layout.Exact(size)
-							strokeRect(gtx, colSurface, colBorder, 6, 1)
-							layout.Inset{Left: 12, Right: 12}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-								// The editor owns the cell so the caret starts at
-								// its left edge instead of the middle.
-								gtx.Constraints.Min.X = gtx.Constraints.Max.X
-								gtx.Constraints.Min.Y = 0
-								handleEditorEvents(gtx, s.proxy)
-								return th.textField(gtx, s.proxy, i18n.T("settings.proxyHint"), 13)
-							})
-							return layout.Dimensions{Size: size}
+							return th.boxedField(gtx, s.proxy, &s.proxyBox, i18n.T("settings.proxyPlaceholder"), 13, h)
 						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -448,7 +447,7 @@ func keyCap(gtx layout.Context, th *theme, label string) layout.Dimensions {
 }
 
 func (r *settingsRow) Layout(gtx layout.Context, th *theme) layout.Dimensions {
-	if r.click.Clicked(gtx) && r.onTap != nil {
+	if r.click.Clicked(gtx) && !r.disabled && r.onTap != nil {
 		r.onTap()
 		invalidateAfterTap(gtx)
 	}
@@ -459,15 +458,21 @@ func (r *settingsRow) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 			w = gtx.Constraints.Min.X
 		}
 		size := image.Pt(w, h)
-		th.cursor(gtx, pointer.CursorPointer, size)
-		if r.click.Hovered() {
-			rr := clip.RRect{Rect: image.Rectangle{Max: size}, NW: 8, NE: 8, SE: 8, SW: 8}
-			hs := rr.Push(gtx.Ops)
-			paint.Fill(gtx.Ops, colHover)
-			hs.Pop()
+		if !r.disabled {
+			th.cursor(gtx, pointer.CursorPointer, size)
+			if r.click.Hovered() {
+				rr := clip.RRect{Rect: image.Rectangle{Max: size}, NW: 8, NE: 8, SE: 8, SW: 8}
+				hs := rr.Push(gtx.Ops)
+				paint.Fill(gtx.Ops, colHover)
+				hs.Pop()
+			}
 		}
 		gtx.Constraints = layout.Exact(size)
 		layout.Inset{Left: 12, Right: 12}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			titleCol, subtitleCol, iconCol := colText, colMuted, colMuted
+			if r.disabled {
+				titleCol, subtitleCol, iconCol = colMuted, colFaint, colFaint
+			}
 			children := []layout.FlexChild{}
 			if r.lead != nil {
 				acc := *r.lead
@@ -478,7 +483,7 @@ func (r *settingsRow) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 12) }),
 				)
 			} else if r.icon != 0 {
-				ic := icon{glyph: r.icon, col: colMuted}
+				ic := icon{glyph: r.icon, col: iconCol}
 				children = append(children,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return th.glyphIn(gtx, ic, 20, 24)
@@ -492,14 +497,14 @@ func (r *settingsRow) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 			}
 			texts := []layout.FlexChild{
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return th.text(gtx, r.title, 14, colText, weight, 1)
+					return th.text(gtx, r.title, 14, titleCol, weight, 1)
 				}),
 			}
 			if r.subtitle != "" {
 				texts = append(texts,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 1) }),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return th.text(gtx, r.subtitle, 12, colMuted, font.Normal, 1)
+						return th.text(gtx, r.subtitle, 12, subtitleCol, font.Normal, 1)
 					}),
 				)
 			}

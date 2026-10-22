@@ -61,11 +61,54 @@ func TestAccountDialogFollowsProxySetting(t *testing.T) {
 	d.Layout(gtx, a)
 }
 
+// TestAccountDialogWizardSteps covers the two-step flow: the dialog opens on
+// the type list, a disabled type stays put and Gmail can be entered and left
+// again.
+func TestAccountDialogWizardSteps(t *testing.T) {
+	a := testApp(t)
+	d := newAccountDialog(a)
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+
+	if d.step != accountStepType {
+		t.Fatalf("step = %v, want the type list", d.step)
+	}
+	if len(d.typeRows) != 2 {
+		t.Fatalf("type rows = %d, want Gmail and IMAP/SMTP", len(d.typeRows))
+	}
+	if !d.typeRows[1].disabled {
+		t.Fatal("the IMAP/SMTP row is not disabled")
+	}
+	d.Layout(gtx, a)
+	ops.Reset()
+
+	d.typeRows[1].click.Click()
+	d.Layout(gtx, a)
+	if d.step != accountStepType {
+		t.Fatalf("step = %v after clicking a disabled type, want the type list", d.step)
+	}
+	ops.Reset()
+
+	d.typeRows[0].click.Click()
+	d.Layout(gtx, a)
+	if d.step != accountStepGmail {
+		t.Fatalf("step = %v after clicking Gmail, want the form", d.step)
+	}
+	ops.Reset()
+
+	d.back.click.Click()
+	d.Layout(gtx, a)
+	if d.step != accountStepType {
+		t.Fatalf("step = %v after the back link, want the type list", d.step)
+	}
+}
+
 // TestAccountDialogRequiresClientID keeps the sign-in button disabled until
 // the OAuth client ID is typed.
 func TestAccountDialogRequiresClientID(t *testing.T) {
 	a := testApp(t)
 	d := newAccountDialog(a)
+	d.step = accountStepGmail
 	var ops op.Ops
 	gtx := testGtx(&ops, testWindow)
 

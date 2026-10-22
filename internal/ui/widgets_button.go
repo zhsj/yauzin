@@ -161,6 +161,61 @@ func (b *iconButton) readPointer(gtx layout.Context) {
 	}
 }
 
+// linkButton is an inline text action with an optional leading glyph, used for
+// navigation inside a card such as the account wizard's back step. It has no
+// background of its own: the label turns to the darker primary on hover.
+type linkButton struct {
+	click    widget.Clickable
+	label    string
+	ic       icon
+	disabled bool
+	onTap    func()
+}
+
+func newLinkButton(text string, ic icon, onTap func()) *linkButton {
+	return &linkButton{label: text, ic: ic, onTap: onTap}
+}
+
+func (b *linkButton) Layout(gtx layout.Context, th *theme) layout.Dimensions {
+	if b.click.Clicked(gtx) && !b.disabled && b.onTap != nil {
+		b.onTap()
+		invalidateAfterTap(gtx)
+	}
+	hovered := b.click.Hovered() && !b.disabled
+	return b.click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		col := colPrimary
+		switch {
+		case b.disabled:
+			col = colFaint
+		case hovered:
+			col = colPrimaryDark
+		}
+		ic := b.ic
+		ic.col = col
+		children := make([]layout.FlexChild, 0, 3)
+		if ic.glyph != 0 {
+			children = append(children,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return th.glyphIn(gtx, ic, 16, 16)
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 6) }),
+			)
+		}
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return th.text(gtx, b.label, 13, col, font.Medium, 1)
+		}))
+		// The padding is inside the clickable, so the label keeps a hit area
+		// taller than its line box without shifting the text right.
+		return layout.Inset{Top: 4, Bottom: 4, Right: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			dims := layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx, children...)
+			if !b.disabled {
+				th.cursor(gtx, pointer.CursorPointer, dims.Size)
+			}
+			return dims
+		})
+	})
+}
+
 // pillButton is Gmail's rounded action button, optionally filled with the
 // primary colour.
 type pillButton struct {

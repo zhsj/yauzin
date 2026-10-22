@@ -8,6 +8,7 @@ import (
 
 	"gioui.org/f32"
 	"gioui.org/font"
+	"gioui.org/io/key"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -203,6 +204,47 @@ func (t *theme) textField(gtx layout.Context, ed *widget.Editor, hint string, si
 	es.HintColor = colFaint
 	es.SelectionColor = colSelection
 	return es.Layout(gtx)
+}
+
+// boxedField draws a single-line editor inside a hairline-bordered box h dp
+// tall. The editor only reports the height of its own line box and paints from
+// the top of its origin, so the recorded call is measured first and then
+// shifted down by the leftover space; without that the text clings to the top
+// of the box. box, when not nil, turns the whole box into the hit target: a
+// click on the padding above or below the text moves the focus into the
+// editor, which only registers the text line itself.
+func (t *theme) boxedField(gtx layout.Context, ed *widget.Editor, box *widget.Clickable, hint string, size unit.Sp, h int) layout.Dimensions {
+	full := image.Pt(gtx.Constraints.Max.X, h)
+	field := func(gtx layout.Context) layout.Dimensions {
+		gtx.Constraints = layout.Exact(full)
+		t.cursor(gtx, pointer.CursorText, full)
+		strokeRect(gtx, colSurface, colBorder, 6, 1)
+		layout.Inset{Left: 12, Right: 12}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			// The editor must span the cell so the caret and the hint start at
+			// the left padding, but it has to keep its natural height: a
+			// minimum of h would be reported back without centring the glyphs.
+			measure := gtx
+			measure.Constraints.Min = image.Pt(measure.Constraints.Max.X, 0)
+			measure.Constraints.Max.Y = 1 << 16
+			macro := op.Record(gtx.Ops)
+			handleEditorEvents(measure, ed)
+			dims := t.textField(measure, ed, hint, size)
+			call := macro.Stop()
+			off := op.Offset(image.Pt(0, (full.Y-dims.Size.Y)/2)).Push(gtx.Ops)
+			call.Add(gtx.Ops)
+			off.Pop()
+			return layout.Dimensions{Size: image.Pt(gtx.Constraints.Max.X, full.Y)}
+		})
+		return layout.Dimensions{Size: full}
+	}
+	if box == nil {
+		return field(gtx)
+	}
+	if box.Clicked(gtx) {
+		gtx.Execute(key.FocusCmd{Tag: ed})
+		invalidateAfterTap(gtx)
+	}
+	return box.Layout(gtx, field)
 }
 
 // editor prepares a single-line editor with the shared font. Callers set the
