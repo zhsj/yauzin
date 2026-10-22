@@ -425,7 +425,11 @@ func TestRelauthRowOpensTheAuthorizationStep(t *testing.T) {
 	s.Layout(gtx, a)
 	ops.Reset()
 
-	s.accRows[1].action.click.Click()
+	s.accRows[1].click.Click()
+	s.Layout(gtx, a)
+	ops.Reset()
+
+	findAccRow(t, s, i18n.T("settings.accountRelogin")).click.Click()
 	s.Layout(gtx, a)
 
 	d, ok := a.overlay.(*accountDialog)

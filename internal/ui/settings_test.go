@@ -73,29 +73,115 @@ func TestSettingsAccountRowDoesNotSwitch(t *testing.T) {
 	}
 }
 
-// TestSettingsAccountRowsOfferRelauth adds the refresh button to real Gmail
-// accounts only: the demo mailbox has no OAuth grant behind it, and the add row
-// is a separate action.
-func TestSettingsAccountRowsOfferRelauth(t *testing.T) {
-	a := testApp(t)
-	a.accounts = append(a.accounts, mail.Account{
-		ID:    "gmail:user@example.com",
-		Kind:  mail.KindGmail,
-		Email: "user@example.com",
-	})
-	s := newSettingsView(a)
+// probeAccRow returns the accounts-page row with the given title, or nil.
+func probeAccRow(s *settingsView, title string) *settingsRow {
+	for _, row := range s.accRows {
+		if row.title == title {
+			return row
+		}
+	}
+	return nil
+}
 
-	if len(s.accRows) != 3 {
-		t.Fatalf("account rows = %d, want two accounts and the add row", len(s.accRows))
+// findAccRow is probeAccRow for tests that require the row to exist.
+func findAccRow(t *testing.T, s *settingsView, title string) *settingsRow {
+	t.Helper()
+	row := probeAccRow(s, title)
+	if row == nil {
+		t.Fatalf("no row titled %q among %d rows", title, len(s.accRows))
 	}
-	if s.accRows[0].action != nil {
-		t.Fatal("the demo account got a refresh button")
+	return row
+}
+
+// TestSettingsAccountRowExpands covers the accordion: a stored Gmail account
+// only shows its details — proxy, re-login and delete — while it is open, and
+// the demo mailbox has nothing to open.
+func TestSettingsAccountRowExpands(t *testing.T) {
+	target := mail.Account{ID: "gmail:user@example.com", Kind: mail.KindGmail, Email: "user@example.com"}
+	a, _ := newDeleteTestApp(t, []mail.Account{demoAccounts()[0], target})
+	s := newSettingsView(a)
+	s.page = settingsTabAccounts
+
+	if got := len(s.accRows); got != 3 {
+		t.Fatalf("rows = %d, want the two accounts and the add row", got)
 	}
-	if s.accRows[1].action == nil {
-		t.Fatal("the Gmail account has no refresh button")
+	if s.accRows[0].onTap != nil || s.accRows[0].valueIcon != 0 {
+		t.Fatal("the demo account is expandable")
 	}
-	if s.accRows[2].action != nil {
-		t.Fatal("the add-account row got a refresh button")
+	if s.accRows[1].valueIcon != glyphExpandMore {
+		t.Fatalf("collapsed account arrow = %v, want the expand-more glyph", s.accRows[1].valueIcon)
+	}
+
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+	s.Layout(gtx, a)
+	ops.Reset()
+
+	s.accRows[1].click.Click()
+	s.Layout(gtx, a)
+
+	if s.expanded != target.ID {
+		t.Fatalf("expanded = %q, want %q", s.expanded, target.ID)
+	}
+	if got := len(s.accRows); got != 6 {
+		t.Fatalf("rows = %d, want the account, proxy, re-login, delete and add rows", got)
+	}
+	if s.accRows[1].valueIcon != glyphExpandLess {
+		t.Fatalf("open account arrow = %v, want the expand-less glyph", s.accRows[1].valueIcon)
+	}
+	want := []string{
+		i18n.T("settings.accountUseProxy"),
+		i18n.T("settings.accountRelogin"),
+		i18n.T("settings.accountDelete"),
+	}
+	for i, title := range want {
+		if got := s.accRows[2+i].title; got != title {
+			t.Fatalf("row %d title = %q, want %q", 2+i, got, title)
+		}
+	}
+
+	// A second click collapses the account again.
+	ops.Reset()
+	s.accRows[1].click.Click()
+	s.Layout(gtx, a)
+	if s.expanded != "" {
+		t.Fatalf("expanded = %q after the second click, want it closed", s.expanded)
+	}
+	if got := len(s.accRows); got != 3 {
+		t.Fatalf("rows = %d after collapsing, want the collapsed card", got)
+	}
+}
+
+// TestSettingsAccountsAccordion keeps one account open at a time: expanding
+// another one collapses the previous.
+func TestSettingsAccountsAccordion(t *testing.T) {
+	first := mail.Account{ID: "gmail:first@example.com", Kind: mail.KindGmail, Email: "first@example.com"}
+	second := mail.Account{ID: "gmail:second@example.com", Kind: mail.KindGmail, Email: "second@example.com"}
+	a, _ := newDeleteTestApp(t, []mail.Account{demoAccounts()[0], first, second})
+	s := newSettingsView(a)
+	s.page = settingsTabAccounts
+
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+	s.Layout(gtx, a)
+	ops.Reset()
+
+	s.accRows[1].click.Click()
+	s.Layout(gtx, a)
+	ops.Reset()
+
+	findAccRow(t, s, second.DisplayName()).click.Click()
+	s.Layout(gtx, a)
+
+	if s.expanded != second.ID {
+		t.Fatalf("expanded = %q, want %q", s.expanded, second.ID)
+	}
+	if got := findAccRow(t, s, first.DisplayName()).valueIcon; got != glyphExpandMore {
+		t.Fatalf("first account arrow = %v after the second opened, want it collapsed", got)
+	}
+	// The demo row, both account rows, the three open details and the add row.
+	if got := len(s.accRows); got != 7 {
+		t.Fatalf("rows = %d, want only one account open", got)
 	}
 }
 
@@ -343,33 +429,6 @@ func TestSettingsSwitchKeepsLanguageListOpen(t *testing.T) {
 	}
 }
 
-// TestSettingsAccountRowsOfferDelete wires the delete control to stored
-// accounts only: the demo mailbox lives in memory and would come back on the
-// next start, so it must not offer one, and the add row is a separate action.
-func TestSettingsAccountRowsOfferDelete(t *testing.T) {
-	target := mail.Account{ID: "gmail:user@example.com", Kind: mail.KindGmail, Email: "user@example.com"}
-	a, _ := newDeleteTestApp(t, []mail.Account{demoAccounts()[0], target})
-	s := newSettingsView(a)
-
-	// The stored account brings its own proxy row along, so the page is the
-	// demo row, the account row, that proxy row and the add row.
-	if len(s.accRows) != 4 {
-		t.Fatalf("account rows = %d, want two accounts, the proxy row and the add row", len(s.accRows))
-	}
-	if s.accRows[0].remove != nil {
-		t.Fatal("the demo account got a delete button")
-	}
-	if s.accRows[1].remove == nil {
-		t.Fatal("the stored account has no delete button")
-	}
-	if s.accRows[2].remove != nil {
-		t.Fatal("the proxy row got a delete button")
-	}
-	if s.accRows[3].remove != nil {
-		t.Fatal("the add-account row got a delete button")
-	}
-}
-
 // TestSettingsAccountRowsDoNotMarkTheActiveOne keeps the panel neutral: which
 // mailbox is in use is answered by the check mark of the top bar's account
 // menu, not by a bold title or a check mark in this list.
@@ -385,9 +444,9 @@ func TestSettingsAccountRowsDoNotMarkTheActiveOne(t *testing.T) {
 	}
 }
 
-// TestSettingsAccountDeleteNeedsConfirmation pins the two-step delete: the
-// trash button only arms the row, and the confirmation that replaces it in
-// place performs the delete and leaves the panel on the accounts page.
+// TestSettingsAccountDeleteNeedsConfirmation pins the two-step delete behind
+// the expander: the first click only arms the row and adds a cancel row, the
+// cancel row backs out, and the confirmation removes the account.
 func TestSettingsAccountDeleteNeedsConfirmation(t *testing.T) {
 	target := mail.Account{ID: "gmail:user@example.com", Kind: mail.KindGmail, Email: "user@example.com"}
 	a, store := newDeleteTestApp(t, []mail.Account{demoAccounts()[0], target})
@@ -400,21 +459,47 @@ func TestSettingsAccountDeleteNeedsConfirmation(t *testing.T) {
 	s.Layout(gtx, a)
 	ops.Reset()
 
-	rm := s.accRows[1].remove
-	if rm == nil {
-		t.Fatal("the stored account has no delete control")
-	}
-	rm.trash.click.Click()
+	s.accRows[1].click.Click()
 	s.Layout(gtx, a)
-	if !rm.armed {
-		t.Fatal("the trash button did not arm the confirmation")
-	}
+	ops.Reset()
+
+	findAccRow(t, s, i18n.T("settings.accountDelete")).click.Click()
+	s.Layout(gtx, a)
+
 	if _, ok := store.Entry(target.ID); !ok {
 		t.Fatal("the first click deleted the account")
 	}
-	ops.Reset()
+	if s.confirmDelete != target.ID {
+		t.Fatalf("confirmDelete = %q, want %q", s.confirmDelete, target.ID)
+	}
+	if probeAccRow(s, i18n.T("settings.accountDelete")) != nil {
+		t.Fatal("the armed row still offers the first delete step")
+	}
+	if got := len(s.accRows); got != 7 {
+		t.Fatalf("rows = %d, want the confirm row and the cancel row added", got)
+	}
 
-	rm.confirm.Click()
+	// The cancel row backs out and leaves the account open.
+	ops.Reset()
+	findAccRow(t, s, i18n.T("settings.cancel")).click.Click()
+	s.Layout(gtx, a)
+
+	if s.confirmDelete != "" {
+		t.Fatalf("confirmDelete = %q after cancelling", s.confirmDelete)
+	}
+	if s.expanded != target.ID {
+		t.Fatalf("expanded = %q after cancelling, want the account still open", s.expanded)
+	}
+	if _, ok := store.Entry(target.ID); !ok {
+		t.Fatal("cancelling deleted the account")
+	}
+	findAccRow(t, s, i18n.T("settings.accountDelete"))
+
+	ops.Reset()
+	findAccRow(t, s, i18n.T("settings.accountDelete")).click.Click()
+	s.Layout(gtx, a)
+	ops.Reset()
+	findAccRow(t, s, i18n.T("settings.accountDeleteConfirm")).click.Click()
 	s.Layout(gtx, a)
 
 	if _, ok := store.Entry(target.ID); ok {
@@ -447,20 +532,24 @@ func TestSettingsDisarmsDeleteOnTabSwitch(t *testing.T) {
 	s.Layout(gtx, a)
 	ops.Reset()
 
-	rm := s.accRows[1].remove
-	rm.trash.click.Click()
+	s.accRows[1].click.Click()
 	s.Layout(gtx, a)
-	if !rm.armed {
-		t.Fatal("the trash button did not arm the confirmation")
+	ops.Reset()
+
+	findAccRow(t, s, i18n.T("settings.accountDelete")).click.Click()
+	s.Layout(gtx, a)
+	if s.confirmDelete != target.ID {
+		t.Fatalf("confirmDelete = %q, want the armed account", s.confirmDelete)
 	}
 	ops.Reset()
 
 	s.tabs[settingsTabGeneral].click.Click()
 	s.Layout(gtx, a)
 
-	if rm.armed {
-		t.Fatal("leaving the accounts page kept the confirmation armed")
+	if s.confirmDelete != "" {
+		t.Fatalf("confirmDelete = %q after leaving the accounts page", s.confirmDelete)
 	}
+	findAccRow(t, s, i18n.T("settings.accountDelete"))
 	if _, ok := store.Entry(target.ID); !ok {
 		t.Fatal("switching pages deleted the account")
 	}
@@ -614,32 +703,42 @@ func TestSetAccountProxyStoresTheChoice(t *testing.T) {
 	}
 }
 
-// TestSettingsAccountProxyRow covers the row the accounts page adds for a
-// stored Gmail account: it mirrors the store, stays inert without an address
-// and flips the account when clicked.
+// TestSettingsAccountProxyRow covers the row the accounts page adds inside the
+// expanded account: it is hidden while collapsed, mirrors the store, stays
+// inert without an address and flips the account when clicked.
 func TestSettingsAccountProxyRow(t *testing.T) {
 	target := mail.Account{ID: "gmail:user@example.com", Kind: mail.KindGmail, Email: "user@example.com"}
 	a, store := newDeleteTestApp(t, []mail.Account{demoAccounts()[0], target})
 	s := newSettingsView(a)
 	s.page = settingsTabAccounts
 
-	if len(s.accRows) != 4 {
-		t.Fatalf("account rows = %d, want the account, its proxy row and the add row", len(s.accRows))
-	}
-	row := s.accRows[2]
-	if row.switchCtl == nil {
-		t.Fatalf("row %d is not the proxy switch", 2)
-	}
-	if s.accRows[0].switchCtl != nil {
-		t.Fatal("the demo account got a proxy switch")
+	if got := probeAccRow(s, i18n.T("settings.accountUseProxy")); got != nil {
+		t.Fatal("the proxy row is visible while the account is collapsed")
 	}
 
 	var ops op.Ops
 	gtx := testGtx(&ops, testWindow)
 	s.Layout(gtx, a)
+	ops.Reset()
+
+	s.accRows[1].click.Click()
+	s.Layout(gtx, a)
+	// The rows of the open account are built during that frame, so the new
+	// proxy row mirrors the app on the following one.
+	ops.Reset()
+	s.Layout(gtx, a)
+
+	row := findAccRow(t, s, i18n.T("settings.accountUseProxy"))
+	if row.switchCtl == nil {
+		t.Fatal("the proxy row has no switch")
+	}
+	if s.accRows[0].switchCtl != nil {
+		t.Fatal("the demo account got a proxy switch")
+	}
 	if !row.disabled {
 		t.Fatal("the proxy row is switchable without a configured address")
 	}
+	ops.Reset()
 	row.click.Click()
 	s.Layout(gtx, a)
 	if entry, _ := store.Entry(target.ID); entry.UseProxy {

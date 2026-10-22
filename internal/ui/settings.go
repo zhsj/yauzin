@@ -22,8 +22,9 @@ import (
 // pages picked with the underlined tabs under the title: General holds the
 // appearance card (language, client-side title bar, performance monitor), the
 // network card (proxy address) and the logging card (console level), Accounts
-// the configured accounts and an "add account" placeholder, Shortcuts the
-// read-only table of the keys in shortcutTable.
+// the configured accounts as an accordion (one account opens its proxy switch,
+// re-login and delete rows) plus an "add account" row, Shortcuts the read-only
+// table of the keys in shortcutTable.
 type settingsView struct {
 	app     *App
 	blocker *tapBlocker
@@ -43,7 +44,12 @@ type settingsView struct {
 	logOpen  bool
 	perfRows []*settingsRow
 	accRows  []*settingsRow
-	decoRow  *settingsRow
+	// expanded is the account whose details are open: the accounts page is an
+	// accordion, so at most one account is expanded at a time. confirmDelete
+	// names the account whose delete row a first click has armed.
+	expanded      string
+	confirmDelete string
+	decoRow       *settingsRow
 	// The network section: one proxy address shared by the accounts that opt
 	// into it. proxySaved is the stored value, so the save button can stay
 	// inactive until the field differs from it; proxyErr holds the form
@@ -85,6 +91,9 @@ type settingsRow struct {
 	// disabled dims the row and drops every interaction, for entries that are
 	// listed but have no implementation yet.
 	disabled bool
+	// danger paints the title and the glyph in the error colour, for
+	// destructive actions such as deleting an account.
+	danger bool
 	// indent nests a row one level deeper, used by the language candidates
 	// under their selector row.
 	indent bool
@@ -92,76 +101,12 @@ type settingsRow struct {
 	// and the row itself stays the hit target so a click anywhere toggles
 	// the setting exactly once.
 	switchCtl *toggleSwitch
-	// action is a trailing icon button for rows that are informational but own
-	// one operation, such as re-authorizing an account.
-	action *iconButton
-	// remove is the two-step delete control of an account row. It sits after
-	// action, so the destructive operation stays the rightmost one.
-	remove *rowRemove
 	// syncState runs at the start of every layout and mirrors the state the
 	// row displays from the place that owns it (the store, the app), so a
 	// failed write or an outside change shows up on the next frame instead of
 	// leaving a stale switch behind.
 	syncState func()
 	onTap     func()
-}
-
-// rowRemove is the two-step delete control at the end of an account row. The
-// trash button only arms it; the danger label that replaces the button in place
-// performs the delete, so a stray click cannot drop an account. The armed state
-// belongs to the panel: switching pages disarms it, and rebuilding the panel
-// drops it with the old rows.
-type rowRemove struct {
-	trash    *iconButton
-	confirm  widget.Clickable
-	armed    bool
-	onDelete func()
-}
-
-func newRowRemove(onDelete func()) *rowRemove {
-	r := &rowRemove{onDelete: onDelete}
-	r.trash = newIconButton(iconDelete, 28, func() { r.armed = true })
-	r.trash.setTip(i18n.T("settings.accountDelete"))
-	return r
-}
-
-func (r *rowRemove) disarm() { r.armed = false }
-
-func (r *rowRemove) Layout(gtx layout.Context, th *theme) layout.Dimensions {
-	if !r.armed {
-		return r.trash.Layout(gtx, th)
-	}
-	if r.confirm.Clicked(gtx) {
-		r.armed = false
-		if r.onDelete != nil {
-			r.onDelete()
-		}
-		invalidateAfterTap(gtx)
-	}
-	return r.confirm.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		// The label is measured first so the button hugs it, and the fixed
-		// height keeps the row from jumping when the trash gives way to it.
-		measure := gtx
-		measure.Constraints = layout.Constraints{Max: image.Pt(1<<16, 1<<16)}
-		macro := op.Record(gtx.Ops)
-		label := th.text(measure, i18n.T("settings.accountDeleteConfirm"), 12, colDanger, font.Medium, 1)
-		call := macro.Stop()
-
-		pad := gtx.Dp(10)
-		size := image.Pt(label.Size.X+2*pad, gtx.Dp(28))
-		gtx.Constraints = layout.Exact(size)
-		th.cursor(gtx, pointer.CursorPointer, size)
-		fill := colSurface
-		if r.confirm.Hovered() {
-			fill = colDangerSoft
-		}
-		strokeRect(gtx, fill, colDanger, 6, 1)
-		layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			call.Add(gtx.Ops)
-			return label
-		})
-		return layout.Dimensions{Size: size}
-	})
 }
 
 // logLevels lists the selectable console levels from quietest to noisiest,
@@ -331,44 +276,93 @@ func newSettingsView(a *App) *settingsView {
 		s.proxySaved = raw
 	})
 
+	s.buildAccountRows(a)
+	return s
+}
+
+// buildAccountRows rebuilds the card of the accounts page. The rows are one
+// flat list, so the details of the expanded account are neighbours of its own
+// account row and the card draws its separators without extra glue.
+func (s *settingsView) buildAccountRows(a *App) {
+	s.accRows = nil
 	for _, acc := range a.accounts {
 		account := acc
 		subtitle := ""
 		if account.Email != "" && account.Email != account.DisplayName() {
 			subtitle = account.Email
 		}
-		// Account rows are informational: which mailbox is in use is answered
-		// by the check mark of the top bar's account menu, not here, so the
-		// rows stay plain and a click on them does nothing.
+		canOpen := s.expandable(a, account)
+		open := canOpen && s.expanded == account.ID
+		// Which mailbox is in use is answered by the check mark of the top
+		// bar's account menu, not here: the row opens the account's details
+		// and never switches the mailbox.
 		row := &settingsRow{
 			lead:     &account,
 			title:    account.DisplayName(),
 			subtitle: subtitle,
 		}
-		// Only a real Gmail account has an OAuth grant to refresh; the demo
-		// mailbox of the mock backend has nothing to sign in to.
-		if strings.HasPrefix(account.ID, "gmail:") {
-			target := account
-			row.action = newIconButton(iconRefresh, 28, func() { a.showRelauth(target) })
-			row.action.setTip(i18n.T("settings.accountRelogin"))
-		}
-		// Only a stored account can be deleted: the demo mailbox lives in
-		// memory and would come back on the next start.
-		if a.accountStore != nil && account.ID != demoAccountID {
-			target := account
-			row.remove = newRowRemove(func() { a.removeAccount(target) })
-		}
-		s.accRows = append(s.accRows, row)
-		// The proxy choice belongs to the account row above it. It only exists
-		// where a stored entry can record it: the demo mailbox is not in
-		// accounts.json and has no proxy of its own.
-		if strings.HasPrefix(account.ID, "gmail:") && a.accountStore != nil {
-			if _, ok := a.accountStore.Entry(account.ID); ok {
-				s.accRows = append(s.accRows, newAccountProxyRow(a, account))
+		if canOpen {
+			row.valueIcon = glyphExpandMore
+			if open {
+				row.valueIcon = glyphExpandLess
+			}
+			row.onTap = func() {
+				s.confirmDelete = ""
+				if s.expanded == account.ID {
+					s.expanded = ""
+				} else {
+					s.expanded = account.ID
+				}
+				s.buildAccountRows(a)
 			}
 		}
+		s.accRows = append(s.accRows, row)
+		if !open {
+			continue
+		}
+		s.accRows = append(s.accRows, newAccountProxyRow(a, account))
+		s.accRows = append(s.accRows, &settingsRow{
+			indent: true,
+			icon:   glyphRefresh,
+			title:  i18n.T("settings.accountRelogin"),
+			onTap:  func() { a.showRelauth(account) },
+		})
+		// Only a stored account can be deleted: the demo mailbox lives in
+		// memory and would come back on the next start.
+		if a.accountStore == nil || account.ID == demoAccountID {
+			continue
+		}
+		if s.confirmDelete == account.ID {
+			s.accRows = append(s.accRows,
+				&settingsRow{
+					indent: true,
+					icon:   glyphDelete,
+					title:  i18n.T("settings.accountDeleteConfirm"),
+					danger: true,
+					onTap:  func() { a.removeAccount(account) },
+				},
+				&settingsRow{
+					indent: true,
+					title:  i18n.T("settings.cancel"),
+					onTap: func() {
+						s.confirmDelete = ""
+						s.buildAccountRows(a)
+					},
+				},
+			)
+			continue
+		}
+		s.accRows = append(s.accRows, &settingsRow{
+			indent: true,
+			icon:   glyphDelete,
+			title:  i18n.T("settings.accountDelete"),
+			danger: true,
+			onTap: func() {
+				s.confirmDelete = account.ID
+				s.buildAccountRows(a)
+			},
+		})
 	}
-
 	s.accRows = append(s.accRows, &settingsRow{
 		icon:  glyphPlus,
 		title: i18n.T("settings.addAccount"),
@@ -376,7 +370,17 @@ func newSettingsView(a *App) *settingsView {
 			a.showOverlay(newAccountDialog(a))
 		},
 	})
-	return s
+}
+
+// expandable reports whether an account has details worth opening. Only a
+// stored Gmail account does: the demo mailbox has neither a proxy choice nor
+// a token to refresh or delete.
+func (s *settingsView) expandable(a *App, acc mail.Account) bool {
+	if a.accountStore == nil || !strings.HasPrefix(acc.ID, "gmail:") {
+		return false
+	}
+	_, ok := a.accountStore.Entry(acc.ID)
+	return ok
 }
 
 func (s *settingsView) Layout(gtx layout.Context, a *App) layout.Dimensions {
@@ -436,21 +440,22 @@ func (s *settingsView) tabsBar(gtx layout.Context, th *theme) layout.Dimensions 
 	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx, children...)
 }
 
-// disarmRemove cancels a pending delete confirmation. Leaving the accounts
-// page must not keep a row one click away from being deleted.
-func (s *settingsView) disarmRemove() {
-	for _, row := range s.accRows {
-		if row.remove != nil {
-			row.remove.disarm()
-		}
+// disarmDelete cancels a pending delete confirmation. Leaving the accounts
+// page must not keep a row one click away from being deleted; the expanded
+// account stays open, only the armed row turns back into "delete".
+func (s *settingsView) disarmDelete() {
+	if s.confirmDelete == "" || s.app == nil {
+		return
 	}
+	s.confirmDelete = ""
+	s.buildAccountRows(s.app)
 }
 
 func (s *settingsView) tab(gtx layout.Context, th *theme, i int) layout.Dimensions {
 	t := &s.tabs[i]
 	if t.click.Clicked(gtx) && s.page != i {
 		s.page = i
-		s.disarmRemove()
+		s.disarmDelete()
 		invalidateAfterTap(gtx)
 	}
 	return t.click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -855,9 +860,13 @@ func (r *settingsRow) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 			if r.click.Hovered() {
 				rect := image.Rect(gtx.Dp(4), gtx.Dp(2), size.X-gtx.Dp(4), size.Y-gtx.Dp(2))
 				if rect.Dx() > 0 && rect.Dy() > 0 {
+					fill := colHover
+					if r.danger {
+						fill = colDangerSoft
+					}
 					rr := clip.RRect{Rect: rect, NW: 8, NE: 8, SE: 8, SW: 8}
 					hs := rr.Push(gtx.Ops)
-					paint.Fill(gtx.Ops, colHover)
+					paint.Fill(gtx.Ops, fill)
 					hs.Pop()
 				}
 			}
@@ -875,6 +884,9 @@ func (r *settingsRow) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 // value with its indicator, or the check mark of an active entry).
 func (r *settingsRow) content(gtx layout.Context, th *theme) layout.Dimensions {
 	titleCol, subtitleCol, iconCol := colText, colMuted, colMuted
+	if r.danger {
+		titleCol, iconCol = colDanger, colDanger
+	}
 	if r.disabled {
 		titleCol, subtitleCol, iconCol = colMuted, colFaint, colFaint
 	}
@@ -963,20 +975,6 @@ func (r *settingsRow) content(gtx layout.Context, th *theme) layout.Dimensions {
 			children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return th.glyphIn(gtx, iconCheckPrimary, 18, 20)
 			}))
-		}
-		if r.action != nil {
-			action := r.action
-			children = append(children,
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return action.Layout(gtx, th) }),
-			)
-		}
-		if r.remove != nil {
-			remove := r.remove
-			children = append(children,
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return remove.Layout(gtx, th) }),
-			)
 		}
 		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx, children...)
 	})
