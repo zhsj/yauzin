@@ -181,6 +181,13 @@ func (d *accountDialog) finish(res gmail.SignInResult, clientID, clientSecret st
 	a.addAccount(acc)
 	a.rebuildSettingsPanel()
 	a.notify(i18n.T("toast.accountAdded", map[string]string{"Name": acc.DisplayName()}), false)
+	if a.activeAcc == id {
+		// Signing in again replaces the backend of the mailbox on screen; its
+		// data has to be fetched with the new token.
+		a.hideOverlay()
+		a.reloadAll()
+		return
+	}
 	a.switchAccount(id)
 }
 
