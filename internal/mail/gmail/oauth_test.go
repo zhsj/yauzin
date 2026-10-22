@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -349,6 +350,35 @@ func TestSignInBrowserFailure(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "no browser") {
 		t.Fatalf("error = %v, want the browser failure", err)
+	}
+}
+
+// TestSignInLogsRequestsWithTheAccount labels the sign-in traffic with the
+// account being re-authorized, so a refresh reports like any other request of
+// that account.
+func TestSignInLogsRequestsWithTheAccount(t *testing.T) {
+	buf := captureLogs(t, slog.LevelDebug)
+	o := newOAuthServer(t, tokenOK, http.StatusOK)
+	f := testFlow(o)
+	f.openBrowser = browse(t, url.Values{"code": {"test-code"}})
+
+	const account = "gmail:user@example.com"
+	if _, err := signIn(context.Background(), f, SignInOptions{
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+		Account:      account,
+		OpenBrowser:  f.openBrowser,
+		Timeout:      2 * time.Second,
+	}); err != nil {
+		t.Fatalf("signIn: %v", err)
+	}
+
+	line := buf.String()
+	if !strings.Contains(line, "account="+account) {
+		t.Fatalf("sign-in requests are not labelled with the account: %q", line)
+	}
+	if strings.Contains(line, "client-secret") {
+		t.Fatalf("log leaked the client secret: %q", line)
 	}
 }
 

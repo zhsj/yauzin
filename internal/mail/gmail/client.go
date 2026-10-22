@@ -46,7 +46,12 @@ type client struct {
 	tokenURL string
 	store    Store
 	http     *http.Client
-	now      func() time.Time
+	// ownTransport is the transport this client built for the account (the
+	// proxy one), nil when the client shares another one. The logging wrapper
+	// and the shared default transport must not be closed, so close works off
+	// this field rather than off the http.Client it ended up with.
+	ownTransport *http.Transport
+	now          func() time.Time
 
 	refreshMu sync.Mutex
 }
@@ -120,20 +125,21 @@ func newClient(accountID string, store Store, opts []Option) (*client, error) {
 		}
 		if tr != nil {
 			c.http = &http.Client{Transport: tr}
+			c.ownTransport = tr
 		} else {
 			c.http = http.DefaultClient
 		}
 	}
+	// Every request of the account, including the token refresh that runs on
+	// this same client, passes through the logging transport.
+	c.http = withRequestLogging(c.http, accountID)
 	return c, nil
 }
 
 // close releases the idle connections of a transport this client owns.
 func (c *client) close() {
-	if c.http == nil || c.http == http.DefaultClient {
-		return
-	}
-	if tr, ok := c.http.Transport.(*http.Transport); ok && tr != nil {
-		tr.CloseIdleConnections()
+	if c.ownTransport != nil {
+		c.ownTransport.CloseIdleConnections()
 	}
 }
 

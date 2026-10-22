@@ -62,6 +62,10 @@ type SignInOptions struct {
 	// HTTPClient carries the token exchange and the profile request. A client
 	// with a proxy is how an account that opts into the shared proxy signs in.
 	HTTPClient *http.Client
+	// Account labels the request log lines of this authorization. It is the
+	// account being re-authorized; empty while adding one, which has no
+	// stored ID yet.
+	Account string
 	// OnAuthURL receives the consent URL as soon as the loopback listener is
 	// ready. The UI shows it so the user can copy it or open it with a button;
 	// it is called on the sign-in goroutine and must not block.
@@ -135,6 +139,10 @@ func signIn(ctx context.Context, f flow, opts SignInOptions) (SignInResult, erro
 	if f.client == nil {
 		f.client = http.DefaultClient
 	}
+	// The token exchange and the profile reads make up the network traffic of
+	// a sign-in; reporting them alongside the account requests needs the same
+	// label, which a re-login has and a new account does not.
+	f.client = withRequestLogging(f.client, opts.Account)
 	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = defaultAuthTimeout

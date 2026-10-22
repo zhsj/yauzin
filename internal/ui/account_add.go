@@ -203,11 +203,19 @@ func (d *accountDialog) start() {
 	d.authField.SetText("")
 	d.list.ScrollTo(0)
 
+	// A re-login refreshes a known account, so its request log lines can name
+	// it; a new account has no stored ID until the authorization returns.
+	account := ""
+	if d.relogin != nil {
+		account = d.relogin.ID
+	}
+
 	go func() {
 		res, err := gmail.SignIn(ctx, gmail.SignInOptions{
 			ClientID:     clientID,
 			ClientSecret: clientSecret,
 			HTTPClient:   client,
+			Account:      account,
 			// The browser is opened on demand from the authorization step, so
 			// the dialog only receives the URL here.
 			OnAuthURL: func(raw string) {
