@@ -137,6 +137,56 @@ func (a *App) setProxy(raw string) error {
 	return nil
 }
 
+// setAccountProxy switches one account between the shared proxy and a direct
+// connection. The choice is stored first, so a failed write leaves the running
+// backends on the setting the user already had and the row simply snaps back.
+func (a *App) setAccountProxy(acc mail.Account, on bool) {
+	if a.accountStore == nil {
+		return
+	}
+	entry, ok := a.accountStore.Entry(acc.ID)
+	if !ok {
+		return
+	}
+	// Upsert replaces the whole entry: it needs to carry the token and the
+	// display name of the account it is rewriting.
+	if entry.UseProxy == on {
+		return
+	}
+	entry.UseProxy = on
+	if err := a.accountStore.Upsert(entry); err != nil {
+		logErr("save account proxy", err)
+		a.notify(err.Error(), true)
+		return
+	}
+	if acc.ID == a.activeAcc {
+		// In-flight callbacks belong to the backend that is about to be closed.
+		a.cancelRequests()
+	}
+	a.swapService(acc)
+	if acc.ID == a.activeAcc {
+		a.reloadAll()
+	}
+}
+
+// swapService replaces the backend of one account with a freshly built one. The
+// old backend is closed before the new one is constructed: requests already in
+// flight were issued with the previous proxy and must not outlive the change.
+func (a *App) swapService(acc mail.Account) {
+	if a.newService == nil {
+		return
+	}
+	if old := a.services[acc.ID]; old != nil {
+		_ = old.Close()
+		delete(a.services, acc.ID)
+	}
+	// A backend that fails to build leaves the account without one instead of
+	// keeping the closed client in the map, where every request would fail.
+	if svc := a.newService(acc); svc != nil {
+		a.services[acc.ID] = svc
+	}
+}
+
 // removeAccount deletes an account and its stored token, then drops it from the
 // running app. Removing the active account leaves the mailbox empty instead of
 // picking another one: the next mailbox is the user's choice in the account
@@ -195,7 +245,7 @@ func (a *App) clearAccountView() {
 // into the proxy, so a new address is used without a restart. In-flight
 // requests are cancelled first: they belong to the clients being replaced.
 func (a *App) rebuildProxiedServices() {
-	if a.factory == nil || a.accountStore == nil {
+	if a.newService == nil || a.accountStore == nil {
 		return
 	}
 	var targets []mail.Account
@@ -212,14 +262,7 @@ func (a *App) rebuildProxiedServices() {
 	}
 	a.cancelRequests()
 	for _, acc := range targets {
-		svc := a.factory.newService(acc)
-		if svc == nil {
-			continue
-		}
-		if old := a.services[acc.ID]; old != nil {
-			_ = old.Close()
-		}
-		a.services[acc.ID] = svc
+		a.swapService(acc)
 	}
 	a.reloadFolders()
 	a.refreshThreads()

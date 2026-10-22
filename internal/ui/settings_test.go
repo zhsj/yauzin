@@ -4,6 +4,9 @@ import (
 	"image"
 	"testing"
 
+	"gioui.org/f32"
+	"gioui.org/io/input"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 
@@ -348,8 +351,10 @@ func TestSettingsAccountRowsOfferDelete(t *testing.T) {
 	a, _ := newDeleteTestApp(t, []mail.Account{demoAccounts()[0], target})
 	s := newSettingsView(a)
 
-	if len(s.accRows) != 3 {
-		t.Fatalf("account rows = %d, want two accounts and the add row", len(s.accRows))
+	// The stored account brings its own proxy row along, so the page is the
+	// demo row, the account row, that proxy row and the add row.
+	if len(s.accRows) != 4 {
+		t.Fatalf("account rows = %d, want two accounts, the proxy row and the add row", len(s.accRows))
 	}
 	if s.accRows[0].remove != nil {
 		t.Fatal("the demo account got a delete button")
@@ -358,6 +363,9 @@ func TestSettingsAccountRowsOfferDelete(t *testing.T) {
 		t.Fatal("the stored account has no delete button")
 	}
 	if s.accRows[2].remove != nil {
+		t.Fatal("the proxy row got a delete button")
+	}
+	if s.accRows[3].remove != nil {
 		t.Fatal("the add-account row got a delete button")
 	}
 }
@@ -522,5 +530,147 @@ func TestToggleSwitchOnChange(t *testing.T) {
 	sw.Layout(gtx, a.th)
 	if sw.on || got {
 		t.Fatalf("on = %v, onChange saw %v; want both false after a second click", sw.on, got)
+	}
+}
+
+// TestToggleSwitchHitArea feeds a real pointer press and release to the
+// standalone switch. A programmatic Click cannot catch a switch that never
+// registers a hit area, which is how the proxy switch of the add-account
+// dialog ignored the mouse.
+func TestToggleSwitchHitArea(t *testing.T) {
+	a := testApp(t)
+	var got bool
+	sw := newToggleSwitch(false, func(on bool) { got = on })
+
+	ops := new(op.Ops)
+	router := new(input.Router)
+	gtx := testGtx(ops, image.Pt(200, 100))
+	gtx.Source = router.Source()
+	frame := func() {
+		ops.Reset()
+		sw.Layout(gtx, a.th)
+		router.Frame(ops)
+	}
+
+	frame() // register the hit area
+	at := f32.Pt(18, 10)
+	router.Queue(pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Position: at, Buttons: pointer.ButtonPrimary})
+	router.Queue(pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: at})
+	frame() // route the events to the switch
+	frame() // the switch drains them
+
+	if !sw.on || !got {
+		t.Fatalf("on = %v, onChange saw %v after a pointer click; want both true", sw.on, got)
+	}
+}
+
+// TestSetAccountProxyStoresTheChoice pins the per-account switch: only that
+// account is written to and rebuilt, its token survives the rewrite, and the
+// other backends keep running.
+func TestSetAccountProxyStoresTheChoice(t *testing.T) {
+	target := mail.Account{ID: "gmail:user@example.com", Kind: mail.KindGmail, Email: "user@example.com"}
+	a, store := newDeleteTestApp(t, []mail.Account{demoAccounts()[0], target})
+	a.proxy = "127.0.0.1:1080"
+	demo := a.services[demoAccountID]
+	old, ok := a.services[target.ID].(*closeSpyService)
+	if !ok {
+		t.Fatalf("backend = %T, want the spy", a.services[target.ID])
+	}
+
+	a.setAccountProxy(target, true)
+
+	entry, ok := store.Entry(target.ID)
+	if !ok {
+		t.Fatal("the account disappeared from accounts.json")
+	}
+	if !entry.UseProxy {
+		t.Fatal("the choice was not stored")
+	}
+	if entry.Token.RefreshToken != "refresh" || entry.Kind != mail.KindGmail || entry.Email != target.Email {
+		t.Fatalf("stored entry = %+v, want the account fields kept", entry)
+	}
+	if !old.closed {
+		t.Fatal("the proxied account kept its old backend")
+	}
+	next, ok := a.services[target.ID].(*closeSpyService)
+	if !ok || next == old {
+		t.Fatalf("backend = %v, want it replaced", a.services[target.ID])
+	}
+	if a.services[demoAccountID] != demo {
+		t.Fatal("switching the proxy replaced the backend of another account")
+	}
+
+	a.setAccountProxy(target, false)
+
+	entry, ok = store.Entry(target.ID)
+	if !ok || entry.UseProxy {
+		t.Fatalf("stored entry = %+v after switching the proxy off", entry)
+	}
+	if !next.closed {
+		t.Fatal("the proxied backend was not closed when the proxy was switched off")
+	}
+	if got := a.services[target.ID]; got == next || got == old {
+		t.Fatal("switching the proxy off did not rebuild the backend")
+	}
+}
+
+// TestSettingsAccountProxyRow covers the row the accounts page adds for a
+// stored Gmail account: it mirrors the store, stays inert without an address
+// and flips the account when clicked.
+func TestSettingsAccountProxyRow(t *testing.T) {
+	target := mail.Account{ID: "gmail:user@example.com", Kind: mail.KindGmail, Email: "user@example.com"}
+	a, store := newDeleteTestApp(t, []mail.Account{demoAccounts()[0], target})
+	s := newSettingsView(a)
+	s.page = settingsTabAccounts
+
+	if len(s.accRows) != 4 {
+		t.Fatalf("account rows = %d, want the account, its proxy row and the add row", len(s.accRows))
+	}
+	row := s.accRows[2]
+	if row.switchCtl == nil {
+		t.Fatalf("row %d is not the proxy switch", 2)
+	}
+	if s.accRows[0].switchCtl != nil {
+		t.Fatal("the demo account got a proxy switch")
+	}
+
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+	s.Layout(gtx, a)
+	if !row.disabled {
+		t.Fatal("the proxy row is switchable without a configured address")
+	}
+	row.click.Click()
+	s.Layout(gtx, a)
+	if entry, _ := store.Entry(target.ID); entry.UseProxy {
+		t.Fatal("a disabled proxy row wrote the choice")
+	}
+
+	a.proxy = "127.0.0.1:1080"
+	ops.Reset()
+	s.Layout(gtx, a)
+	if row.disabled {
+		t.Fatal("the proxy row stayed disabled after the address was configured")
+	}
+	if row.switchCtl.on {
+		t.Fatal("the proxy switch is on although the account is direct")
+	}
+
+	row.click.Click()
+	s.Layout(gtx, a)
+	entry, ok := store.Entry(target.ID)
+	if !ok || !entry.UseProxy {
+		t.Fatalf("stored entry = %+v after clicking the row", entry)
+	}
+
+	// The row mirrors the store on the next frame, which is also what makes a
+	// failed write fall back to the choice that actually took effect.
+	ops.Reset()
+	s.Layout(gtx, a)
+	if !row.switchCtl.on {
+		t.Fatal("the switch does not mirror the stored choice")
+	}
+	if row.subtitle != a.proxy {
+		t.Fatalf("subtitle = %q, want the proxy address", row.subtitle)
 	}
 }

@@ -98,7 +98,12 @@ type settingsRow struct {
 	// remove is the two-step delete control of an account row. It sits after
 	// action, so the destructive operation stays the rightmost one.
 	remove *rowRemove
-	onTap  func()
+	// syncState runs at the start of every layout and mirrors the state the
+	// row displays from the place that owns it (the store, the app), so a
+	// failed write or an outside change shows up on the next frame instead of
+	// leaving a stale switch behind.
+	syncState func()
+	onTap     func()
 }
 
 // rowRemove is the two-step delete control at the end of an account row. The
@@ -179,6 +184,40 @@ func logLevelLabel(name string) string {
 		}
 	}
 	return i18n.T("settings.logLevelInfo")
+}
+
+// newAccountProxyRow is the per-account proxy choice of the accounts page. It
+// is an ordinary switch row: the row itself is the hit target, while the switch
+// only displays the stored value, like the other boolean rows of the panel.
+func newAccountProxyRow(a *App, acc mail.Account) *settingsRow {
+	row := &settingsRow{
+		indent:    true,
+		title:     i18n.T("settings.accountUseProxy"),
+		switchCtl: newToggleSwitch(false, nil),
+	}
+	row.onTap = func() { a.setAccountProxy(acc, !row.switchCtl.on) }
+	row.syncState = func() {
+		on := false
+		if a.accountStore != nil {
+			if entry, ok := a.accountStore.Entry(acc.ID); ok {
+				on = entry.UseProxy
+			}
+		}
+		row.switchCtl.on = on
+		// Without an address there is nothing to connect through: the row
+		// stays visible so the option can be found, but it cannot be switched.
+		if strings.TrimSpace(a.proxy) == "" {
+			row.disabled = true
+			row.subtitle = i18n.T("settings.proxyUnset")
+			return
+		}
+		row.disabled = false
+		row.subtitle = ""
+		if on {
+			row.subtitle = a.proxy
+		}
+	}
+	return row
 }
 
 func newSettingsView(a *App) *settingsView {
@@ -320,6 +359,14 @@ func newSettingsView(a *App) *settingsView {
 			row.remove = newRowRemove(func() { a.removeAccount(target) })
 		}
 		s.accRows = append(s.accRows, row)
+		// The proxy choice belongs to the account row above it. It only exists
+		// where a stored entry can record it: the demo mailbox is not in
+		// accounts.json and has no proxy of its own.
+		if strings.HasPrefix(account.ID, "gmail:") && a.accountStore != nil {
+			if _, ok := a.accountStore.Entry(account.ID); ok {
+				s.accRows = append(s.accRows, newAccountProxyRow(a, account))
+			}
+		}
 	}
 
 	s.accRows = append(s.accRows, &settingsRow{
@@ -773,6 +820,9 @@ func (r *settingsRow) interactive() bool {
 }
 
 func (r *settingsRow) Layout(gtx layout.Context, th *theme) layout.Dimensions {
+	if r.syncState != nil {
+		r.syncState()
+	}
 	if r.click.Clicked(gtx) && r.interactive() {
 		r.onTap()
 		invalidateAfterTap(gtx)
