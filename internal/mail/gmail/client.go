@@ -3,7 +3,6 @@ package gmail
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -276,6 +275,3 @@ func apiError(op string, resp *http.Response) error {
 	}
 	return fmt.Errorf("gmail %s: %s: %s", op, resp.Status, detail)
 }
-
-// isNotFound reports the 404 category wrapped by apiError.
-func isNotFound(err error) bool { return errors.Is(err, mail.ErrNotFound) }

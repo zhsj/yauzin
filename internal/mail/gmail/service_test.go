@@ -377,49 +377,138 @@ const t2Body = `{"id":"t2","messages":[
 		"parts":[{"filename":"report.pdf","mimeType":"application/pdf","body":{"attachmentId":"a1","size":1234}}]}}
 ]}`
 
-func threadHandler(t *testing.T, list, thread1, thread2 string) http.Handler {
+// threadBatchServer answers the batch endpoint with one metadata thread per
+// embedded threads.get. threads maps a thread ID to its body; a thread missing
+// there answers 404, as if it had been deleted after the list.
+type threadBatchServer struct {
+	mu       sync.Mutex
+	batches  [][]string // thread IDs per batch request, in request order
+	threads  map[string]string
+	statuses map[string]int
+}
+
+func (b *threadBatchServer) handler(t *testing.T) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/batch" {
+			t.Errorf("batch path = %q", r.URL.Path)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer access-token" {
+			t.Errorf("batch authorization = %q", got)
+		}
+		mr, err := r.MultipartReader()
+		if err != nil {
+			t.Errorf("batch request: %v", err)
+			return
+		}
+		var ids []string
+		for {
+			p, err := mr.NextPart()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Errorf("batch request part: %v", err)
+				return
+			}
+			raw, _ := io.ReadAll(p)
+			line, _, _ := strings.Cut(string(raw), "\r\n")
+			fields := strings.Fields(line)
+			if len(fields) != 3 || fields[0] != http.MethodGet {
+				t.Errorf("batch request line = %q", line)
+				continue
+			}
+			target, err := url.Parse(fields[1])
+			if err != nil {
+				t.Errorf("batch request target %q: %v", fields[1], err)
+				continue
+			}
+			q := target.Query()
+			if got := q.Get("format"); got != "metadata" {
+				t.Errorf("format = %q, want metadata", got)
+			}
+			if got := q.Get("fields"); got != metadataFields {
+				t.Errorf("fields = %q, want %q", got, metadataFields)
+			}
+			if got := q["metadataHeaders"]; len(got) != 5 {
+				t.Errorf("metadataHeaders = %v, want From/To/Cc/Subject/Date", got)
+			}
+			ids = append(ids, path.Base(target.Path))
+		}
+		b.mu.Lock()
+		b.batches = append(b.batches, ids)
+		b.mu.Unlock()
+
+		mw := multipart.NewWriter(w)
+		w.Header().Set("Content-Type", "multipart/mixed; boundary="+mw.Boundary())
+		for i, id := range ids {
+			status, body := http.StatusOK, b.threads[id]
+			if s, ok := b.statuses[id]; ok {
+				status = s
+			}
+			if status == http.StatusOK && body == "" {
+				status = http.StatusNotFound
+			}
+			if status != http.StatusOK {
+				body = `{"error":{"code":` + strconv.Itoa(status) + `,"message":"Requested entity was not found."}}`
+			}
+			header := make(textproto.MIMEHeader)
+			header.Set("Content-Type", "application/http")
+			header.Set("Content-ID", fmt.Sprintf("<response-call-%d>", i))
+			part, err := mw.CreatePart(header)
+			if err != nil {
+				t.Errorf("batch response part: %v", err)
+				return
+			}
+			fmt.Fprintf(part, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\n\r\n%s\n",
+				status, http.StatusText(status), body)
+		}
+		if err := mw.Close(); err != nil {
+			t.Errorf("batch response: %v", err)
+		}
+	}
+}
+
+func (b *threadBatchServer) calls() [][]string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([][]string(nil), b.batches...)
+}
+
+// newThreadService serves list as threads.list and batch as the batch endpoint.
+func newThreadService(t *testing.T, batch *threadBatchServer, list http.HandlerFunc) *Service {
 	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/users/me/threads", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(t, w, list)
-	})
-	mux.HandleFunc("/users/me/threads/t1", func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("format"); got != "metadata" {
-			t.Errorf("format = %q, want metadata", got)
-		}
-		writeJSON(t, w, thread1)
-	})
-	mux.HandleFunc("/users/me/threads/t2", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(t, w, thread2)
-	})
-	return mux
+	mux.HandleFunc("/users/me/threads", list)
+	mux.HandleFunc("/batch", batch.handler(t))
+	svc, _ := newTestService(t, mux)
+	return svc
 }
 
 func TestListThreadsAssemblesConversations(t *testing.T) {
 	var queryAsked bool
-	mux := threadHandler(t, listBody, t1Body, t2Body)
-	svc, _ := newTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/users/me/threads" {
-			queryAsked = true
-			q := r.URL.Query()
-			if got := q.Get("maxResults"); got != "50" {
-				t.Errorf("maxResults = %q, want 50", got)
-			}
-			if got := q.Get("labelIds"); got != "INBOX" {
-				t.Errorf("labelIds = %q, want INBOX", got)
-			}
-			if got := q.Get("q"); got != "invoice" {
-				t.Errorf("q = %q, want invoice", got)
-			}
-			if got := q.Get("pageToken"); got != "prev" {
-				t.Errorf("pageToken = %q, want prev", got)
-			}
-			if got := q.Get("fields"); !strings.Contains(got, "resultSizeEstimate") {
-				t.Errorf("fields = %q, want resultSizeEstimate", got)
-			}
+	batch := &threadBatchServer{threads: map[string]string{"t1": t1Body, "t2": t2Body}}
+	svc := newThreadService(t, batch, func(w http.ResponseWriter, r *http.Request) {
+		queryAsked = true
+		q := r.URL.Query()
+		if got := q.Get("maxResults"); got != "50" {
+			t.Errorf("maxResults = %q, want 50", got)
 		}
-		mux.ServeHTTP(w, r)
-	}))
+		if got := q.Get("labelIds"); got != "INBOX" {
+			t.Errorf("labelIds = %q, want INBOX", got)
+		}
+		if got := q.Get("q"); got != "invoice" {
+			t.Errorf("q = %q, want invoice", got)
+		}
+		if got := q.Get("pageToken"); got != "prev" {
+			t.Errorf("pageToken = %q, want prev", got)
+		}
+		if got := q.Get("fields"); !strings.Contains(got, "resultSizeEstimate") {
+			t.Errorf("fields = %q, want resultSizeEstimate", got)
+		}
+		writeJSON(t, w, listBody)
+	})
 
 	page, err := svc.ListThreads(context.Background(), mail.ListRequest{
 		FolderID:  "inbox",
@@ -465,20 +554,22 @@ func TestListThreadsAssemblesConversations(t *testing.T) {
 	if !page.Threads[1].HasAttachments {
 		t.Fatal("t2 should carry an attachment")
 	}
+	// The metadata of both conversations must arrive in a single batch
+	// request, in list order.
+	batches := batch.calls()
+	if len(batches) != 1 {
+		t.Fatalf("batch requests = %d, want 1", len(batches))
+	}
+	if got := strings.Join(batches[0], ","); got != "t1,t2" {
+		t.Fatalf("batch calls = %q, want t1,t2", got)
+	}
 }
 
 func TestListThreadsSkipsThreadDeletedBetweenCalls(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/users/me/threads", func(w http.ResponseWriter, r *http.Request) {
+	batch := &threadBatchServer{threads: map[string]string{"t1": t1Body}}
+	svc := newThreadService(t, batch, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, `{"threads":[{"id":"t1"},{"id":"gone"}]}`)
 	})
-	mux.HandleFunc("/users/me/threads/t1", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(t, w, t1Body)
-	})
-	mux.HandleFunc("/users/me/threads/gone", func(w http.ResponseWriter, r *http.Request) {
-		writeErrorJSON(t, w, http.StatusNotFound, `{"error":{"code":404,"message":"Requested entity was not found."}}`)
-	})
-	svc, _ := newTestService(t, mux)
 
 	page, err := svc.ListThreads(context.Background(), mail.ListRequest{FolderID: "inbox"})
 	if err != nil {
@@ -487,17 +578,20 @@ func TestListThreadsSkipsThreadDeletedBetweenCalls(t *testing.T) {
 	if len(page.Threads) != 1 || page.Threads[0].ID != "t1" {
 		t.Fatalf("threads = %+v, want only t1", page.Threads)
 	}
+	batches := batch.calls()
+	if len(batches) != 1 || strings.Join(batches[0], ",") != "t1,gone" {
+		t.Fatalf("batch calls = %v, want one batch with both listed threads", batches)
+	}
 }
 
 func TestListThreadsFailsOnOtherErrors(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/users/me/threads", func(w http.ResponseWriter, r *http.Request) {
+	batch := &threadBatchServer{
+		threads:  map[string]string{"t1": t1Body},
+		statuses: map[string]int{"t1": http.StatusInternalServerError},
+	}
+	svc := newThreadService(t, batch, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, `{"threads":[{"id":"t1"}]}`)
 	})
-	mux.HandleFunc("/users/me/threads/t1", func(w http.ResponseWriter, r *http.Request) {
-		writeErrorJSON(t, w, http.StatusInternalServerError, `{"error":{"code":500,"message":"backend error"}}`)
-	})
-	svc, _ := newTestService(t, mux)
 
 	if _, err := svc.ListThreads(context.Background(), mail.ListRequest{FolderID: "inbox"}); err == nil {
 		t.Fatal("ListThreads hid a backend failure")
@@ -508,12 +602,11 @@ func TestListThreadsFailsOnOtherErrors(t *testing.T) {
 
 func TestListThreadsUsesUserLabelIDVerbatim(t *testing.T) {
 	var got string
-	mux := http.NewServeMux()
-	mux.HandleFunc("/users/me/threads", func(w http.ResponseWriter, r *http.Request) {
+	batch := &threadBatchServer{}
+	svc := newThreadService(t, batch, func(w http.ResponseWriter, r *http.Request) {
 		got = r.URL.Query().Get("labelIds")
 		writeJSON(t, w, `{"threads":[]}`)
 	})
-	svc, _ := newTestService(t, mux)
 	if _, err := svc.ListThreads(context.Background(), mail.ListRequest{FolderID: "Label_1"}); err != nil {
 		t.Fatalf("ListThreads: %v", err)
 	}
@@ -522,17 +615,85 @@ func TestListThreadsUsesUserLabelIDVerbatim(t *testing.T) {
 	}
 }
 
+func TestListThreadsSendsNoBatchForEmptyPage(t *testing.T) {
+	batch := &threadBatchServer{}
+	svc := newThreadService(t, batch, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, `{"threads":[],"resultSizeEstimate":0}`)
+	})
+
+	page, err := svc.ListThreads(context.Background(), mail.ListRequest{FolderID: "inbox"})
+	if err != nil {
+		t.Fatalf("ListThreads: %v", err)
+	}
+	if page.Total != 0 || len(page.Threads) != 0 {
+		t.Fatalf("page = %+v, want an empty page", page)
+	}
+	if got := batch.calls(); len(got) != 0 {
+		t.Fatalf("batch requests = %v, want none for an empty page", got)
+	}
+}
+
 func TestListThreadsTotalWithoutEstimate(t *testing.T) {
-	svc, _ := newTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// t1 is gone by the time the batch runs; losing its metadata must not hide
+	// the list, and the missing estimate must read as "unknown".
+	batch := &threadBatchServer{}
+	svc := newThreadService(t, batch, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, `{"threads":[{"id":"t1"}]}`)
-	}))
-	// t1 metadata is missing from this server, which must not hide the list.
+	})
+
 	page, err := svc.ListThreads(context.Background(), mail.ListRequest{FolderID: "inbox"})
 	if err != nil {
 		t.Fatalf("ListThreads: %v", err)
 	}
 	if page.Total != -1 {
 		t.Fatalf("total = %d, want -1 when Gmail omits the estimate", page.Total)
+	}
+	if len(page.Threads) != 0 {
+		t.Fatalf("threads = %+v, want the deleted one dropped", page.Threads)
+	}
+}
+
+func TestListThreadsSplitsLargeMetadataBatches(t *testing.T) {
+	const threads = 250
+	var list strings.Builder
+	list.WriteString(`{"threads":[`)
+	metadata := make(map[string]string, threads)
+	for i := 0; i < threads; i++ {
+		id := fmt.Sprintf("t%d", i)
+		if i > 0 {
+			list.WriteString(",")
+		}
+		fmt.Fprintf(&list, `{"id":%q}`, id)
+		metadata[id] = fmt.Sprintf(`{"id":%q,"messages":[]}`, id)
+	}
+	list.WriteString(`]}`)
+
+	batch := &threadBatchServer{threads: metadata}
+	svc := newThreadService(t, batch, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, list.String())
+	})
+
+	page, err := svc.ListThreads(context.Background(), mail.ListRequest{FolderID: "inbox"})
+	if err != nil {
+		t.Fatalf("ListThreads: %v", err)
+	}
+	if len(page.Threads) != threads {
+		t.Fatalf("threads = %d, want %d", len(page.Threads), threads)
+	}
+	for i, th := range page.Threads {
+		if want := fmt.Sprintf("t%d", i); th.ID != want {
+			t.Fatalf("thread %d = %q, want %q", i, th.ID, want)
+		}
+	}
+	batches := batch.calls()
+	if len(batches) != 3 {
+		t.Fatalf("batch requests = %d, want 3 (100+100+50)", len(batches))
+	}
+	sizes := []int{batchLimit, batchLimit, threads - 2*batchLimit}
+	for i, size := range sizes {
+		if len(batches[i]) != size {
+			t.Fatalf("batch %d = %d calls, want %d", i, len(batches[i]), size)
+		}
 	}
 }
 

@@ -9,6 +9,10 @@ package gmail
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -21,16 +25,22 @@ import (
 const (
 	defaultPageSize = 50
 	maxPageSize     = 500
-	// metadataWorkers bounds the threads.get calls issued for one page. Gmail
-	// has no batch endpoint for thread metadata, so a 50-row page is 50 calls;
-	// six at a time keeps the first screen fast without running into the rate
-	// limit.
-	metadataWorkers = 6
 	// metadataFields trims the thread response to what the list row renders.
 	// payload is requested whole: the metadata format carries no bodies, but
 	// the part tree is what tells the row whether a file is attached.
 	metadataFields = "id,messages(id,labelIds,snippet,internalDate,payload)"
 )
+
+// metadataQuery is the query of one threads.get call that fills a list row.
+func metadataQuery() url.Values {
+	q := url.Values{}
+	q.Set("format", "metadata")
+	q.Set("fields", metadataFields)
+	for _, h := range []string{"From", "To", "Cc", "Subject", "Date"} {
+		q.Add("metadataHeaders", h)
+	}
+	return q
+}
 
 // folderSpec is one of the fixed folders the sidebar shows. Gmail identifies
 // them with uppercase system label IDs; the app uses semantic IDs so the
@@ -191,60 +201,48 @@ func (s *Service) ListThreads(ctx context.Context, req mail.ListRequest) (mail.T
 	}, nil
 }
 
-// fetchThreadMetadata loads the messages of every listed conversation with
-// bounded concurrency, keeping the list order. A conversation deleted between
-// the two calls is dropped instead of failing the whole page.
+// fetchThreadMetadata loads the messages of every listed conversation in one
+// batch request per 100 conversations, keeping the list order. A conversation
+// deleted between the two calls is dropped instead of failing the whole page.
 func (s *Service) fetchThreadMetadata(ctx context.Context, refs []*Thread) ([]*Thread, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
 	out := make([]*Thread, len(refs))
 	found := make([]bool, len(refs))
-
-	var (
-		wg       sync.WaitGroup
-		mu       sync.Mutex
-		firstErr error
-	)
-	sem := make(chan struct{}, metadataWorkers)
+	targets := make([]batchTarget, len(refs))
+	q := metadataQuery()
 	for i, ref := range refs {
-		if ctx.Err() != nil {
-			break
+		targets[i] = batchTarget{path: "/users/me/threads/" + url.PathEscape(ref.ID), query: q}
+	}
+
+	errs, fatal := s.c.batchGet(ctx, "threads.get", targets, func(i, status int, body io.Reader) error {
+		switch status {
+		case http.StatusOK:
+		case http.StatusNotFound:
+			// The conversation was deleted between the list and the batch:
+			// drop the row and keep the rest of the page.
+			return nil
+		default:
+			detail, _ := io.ReadAll(io.LimitReader(body, 8<<10))
+			return fmt.Errorf("gmail threads.get %s: %s: %s",
+				refs[i].ID, http.StatusText(status), strings.TrimSpace(string(detail)))
 		}
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(i int, id string) {
-			defer wg.Done()
-			defer func() { <-sem }()
+		var th Thread
+		if err := json.NewDecoder(body).Decode(&th); err != nil {
+			return fmt.Errorf("gmail threads.get %s: decode response: %w", refs[i].ID, err)
+		}
+		out[i] = &th
+		found[i] = true
+		return nil
+	})
+	if fatal != nil {
+		return nil, fatal
+	}
+	if len(errs) > 0 {
+		return nil, errs[0]
+	}
 
-			q := url.Values{}
-			q.Set("format", "metadata")
-			q.Set("fields", metadataFields)
-			for _, h := range []string{"From", "To", "Cc", "Subject", "Date"} {
-				q.Add("metadataHeaders", h)
-			}
-			var th Thread
-			err := s.c.do(ctx, "threads.get", "GET", "/users/me/threads/"+url.PathEscape(id), q, &th)
-			if err != nil {
-				if isNotFound(err) {
-					return
-				}
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = err
-				}
-				mu.Unlock()
-				return
-			}
-			out[i] = &th
-			found[i] = true
-		}(i, ref.ID)
-	}
-	wg.Wait()
-
-	if firstErr != nil {
-		return nil, firstErr
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	live := out[:0]
 	for i := range out {
 		if found[i] {
