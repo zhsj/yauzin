@@ -222,7 +222,9 @@ func (d *accountDetails) actions(gtx layout.Context, th *theme) layout.Dimension
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.confirm.Layout(gtx, th) }),
 			)
 		}
-		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle, Spacing: layout.SpaceEnd}.Layout(gtx,
+		// SpaceStart keeps the leftover space in front, so the links sit on the
+		// right edge of the sub-card like the other trailing actions.
+		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle, Spacing: layout.SpaceStart}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.relogin.Layout(gtx, th) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 12) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.remove.Layout(gtx, th) }),
