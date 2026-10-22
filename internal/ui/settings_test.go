@@ -206,6 +206,51 @@ func TestSettingsLanguageDropdown(t *testing.T) {
 	}
 }
 
+// TestSettingsSwitchKeepsLanguageListOpen pins the panel state across a switch
+// toggle: turning client-side decorations on used to rebuild the whole panel,
+// which closed the expanded language list and dropped the proxy draft.
+func TestSettingsSwitchKeepsLanguageListOpen(t *testing.T) {
+	t.Setenv("YAUZIN_CONFIG_DIR", t.TempDir())
+
+	a := testApp(t)
+	a.settings = newSettingsView(a)
+	a.overlay = a.settings
+	s := a.settings
+
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+	s.Layout(gtx, a)
+	ops.Reset()
+
+	s.langRow.click.Click()
+	s.Layout(gtx, a)
+	if !s.langOpen {
+		t.Fatal("language candidates did not expand")
+	}
+	ops.Reset()
+
+	s.proxy.SetText("http://127.0.0.1:9")
+	want := !a.csd
+	s.decoRow.click.Click()
+	s.Layout(gtx, a)
+
+	if a.csd != want {
+		t.Fatalf("client-side decorations = %v after the click, want %v", a.csd, want)
+	}
+	if !s.langOpen {
+		t.Fatal("toggling a switch closed the language candidates")
+	}
+	if a.overlay != s {
+		t.Fatalf("overlay = %T after the toggle, want the same settings panel", a.overlay)
+	}
+	if got := s.decoRow.switchCtl.on; got != a.csd {
+		t.Fatalf("switch shows %v, want the state that took effect: %v", got, a.csd)
+	}
+	if got := s.proxy.Text(); got != "http://127.0.0.1:9" {
+		t.Fatalf("proxy draft = %q after the toggle, want it untouched", got)
+	}
+}
+
 // TestSettingsRowSubtitleFitsCell keeps a wrapped explanation inside an exact
 // row cell: a caller that hands the row a fixed height must get that height
 // back, never more.

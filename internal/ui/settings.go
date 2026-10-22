@@ -135,21 +135,30 @@ func newSettingsView(a *App) *settingsView {
 	// Boolean settings render as switch rows; switching off falls back to
 	// the system behaviour on both. The explanation sits on the row itself so
 	// it never turns into a paragraph floating between two groups.
-	s.decoRow = &settingsRow{
+	deco := &settingsRow{
 		title:     i18n.T("settings.decorationSwitch"),
 		subtitle:  i18n.T("settings.decorationHint"),
 		switchCtl: newToggleSwitch(a.csd, nil),
-		onTap:     func() { a.setClientDecorations(!a.csd) },
 	}
+	deco.onTap = func() {
+		a.setClientDecorations(!a.csd)
+		// The row is the hit target, so the switch never flips on its own:
+		// mirror the state that actually took effect, which also covers a
+		// setter that returned early.
+		deco.switchCtl.on = a.csd
+	}
+	s.decoRow = deco
 
-	s.perfRows = []*settingsRow{
-		{
-			title:     i18n.T("settings.perfMonitor"),
-			subtitle:  i18n.T("settings.perfHint"),
-			switchCtl: newToggleSwitch(a.perf.isVisible(), nil),
-			onTap:     func() { a.setPerfMonitor(!a.perf.isVisible()) },
-		},
+	perf := &settingsRow{
+		title:     i18n.T("settings.perfMonitor"),
+		subtitle:  i18n.T("settings.perfHint"),
+		switchCtl: newToggleSwitch(a.perf.isVisible(), nil),
 	}
+	perf.onTap = func() {
+		a.setPerfMonitor(!a.perf.isVisible())
+		perf.switchCtl.on = a.perf.isVisible()
+	}
+	s.perfRows = []*settingsRow{perf}
 
 	s.proxy = &widget.Editor{SingleLine: true}
 	s.proxy.SetText(a.proxy)

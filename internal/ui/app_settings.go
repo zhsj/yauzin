@@ -74,7 +74,10 @@ func (a *App) setLanguage(tag string) {
 
 // setClientDecorations switches between the system decoration and the title bar
 // drawn by the app. It applies on the next frame: the window was already opened
-// with decoration left to the app, so only the layout changes.
+// with decoration left to the app, so only the layout changes. The settings
+// panel is left alone rather than rebuilt: its switch row mirrors the new
+// state and the layout reads a.csd every frame, so rebuilding would only throw
+// away view state such as the expanded language list.
 func (a *App) setClientDecorations(on bool) {
 	if a.csd == on {
 		return
@@ -83,7 +86,6 @@ func (a *App) setClientDecorations(on bool) {
 		return
 	}
 	a.csd = on
-	a.rebuildSettingsPanel()
 }
 
 // setPerfMonitor shows or hides the performance readout in the top bar and
@@ -96,7 +98,6 @@ func (a *App) setPerfMonitor(on bool) {
 		return
 	}
 	a.perf.setVisible(on)
-	a.rebuildSettingsPanel()
 }
 
 // setProxy validates and stores the shared proxy address, then replaces the
