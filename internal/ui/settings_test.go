@@ -6,6 +6,8 @@ import (
 
 	"gioui.org/layout"
 	"gioui.org/op"
+
+	"github.com/zhsj/yauzin/internal/i18n"
 )
 
 // TestSettingsPagesFrame lays out every page of the settings panel: none may
@@ -138,6 +140,88 @@ func TestShortcutSections(t *testing.T) {
 	}
 	if total != len(shortcutTable) {
 		t.Fatalf("sections cover %d rows, table has %d", total, len(shortcutTable))
+	}
+}
+
+// TestSettingsLanguageDropdown pins the in-panel language choice: the
+// candidates stay hidden until the selector row is clicked, and picking one
+// switches the language and rebuilds the panel with the list collapsed again.
+// It must not go through App.showMenu: that would close the settings panel.
+func TestSettingsLanguageDropdown(t *testing.T) {
+	t.Cleanup(func() { i18n.SetLanguage(i18n.DefaultLanguage) })
+	t.Setenv("YAUZIN_CONFIG_DIR", t.TempDir())
+
+	a := testApp(t)
+	a.settings = newSettingsView(a)
+	a.overlay = a.settings
+	s := a.settings
+
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+	s.Layout(gtx, a)
+	if s.langOpen {
+		t.Fatal("language candidates are open before the selector row is clicked")
+	}
+	ops.Reset()
+
+	s.langRow.click.Click()
+	s.Layout(gtx, a)
+	if !s.langOpen {
+		t.Fatal("language candidates did not expand on the selector row click")
+	}
+	ops.Reset()
+
+	// Pick the language that is not active right now.
+	var pick *settingsRow
+	wantTag := ""
+	for _, loc := range i18n.Languages() {
+		if loc.Tag == i18n.Language() {
+			continue
+		}
+		wantTag = loc.Tag
+		for _, row := range s.langRows {
+			if row.title == loc.Name {
+				pick = row
+			}
+		}
+	}
+	if pick == nil || wantTag == "" {
+		t.Fatal("no inactive language row to pick")
+	}
+	pick.click.Click()
+	s.Layout(gtx, a)
+
+	panel, ok := a.overlay.(*settingsView)
+	if !ok {
+		t.Fatalf("overlay = %T after picking a language, want the settings panel", a.overlay)
+	}
+	if panel == s {
+		t.Fatal("the settings panel was not rebuilt after the language switch")
+	}
+	if panel.langOpen {
+		t.Fatal("language candidates stayed open after the rebuild")
+	}
+	if got := i18n.Language(); got != wantTag {
+		t.Fatalf("language after picking %q = %q", wantTag, got)
+	}
+}
+
+// TestSettingsRowSubtitleFitsCell keeps a wrapped explanation inside an exact
+// row cell: a caller that hands the row a fixed height must get that height
+// back, never more.
+func TestSettingsRowSubtitleFitsCell(t *testing.T) {
+	a := testApp(t)
+	row := &settingsRow{
+		title:    "Row with explanation",
+		subtitle: "An explanation long enough to wrap onto a second line inside the cell it was given.",
+	}
+
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+	gtx.Constraints = layout.Constraints{Min: image.Pt(400, 46), Max: image.Pt(400, 46)}
+	dims := row.Layout(gtx, a.th)
+	if dims.Size.Y > 46 {
+		t.Fatalf("row height = %d, want at most the 46dp cell", dims.Size.Y)
 	}
 }
 
