@@ -38,6 +38,9 @@ func appWithManyLabels(t *testing.T, labels int) *App {
 		LastDate:     time.Now(),
 		MessageCount: 1,
 		MessageIDs:   []string{"m0"},
+		// More long labels than a narrow row can hold: the strip has to give
+		// the width back to the subject instead of overflowing.
+		Labels: []string{"label:0", "label:1", "label:2", "label:3"},
 	}})
 	return a
 }
@@ -47,6 +50,13 @@ func TestSmallWindowLayout(t *testing.T) {
 
 	// The mailbox alone.
 	a.layout(testGtx(new(op.Ops), smallWindow))
+
+	// The same row laid out on its own at the smallest width: the label strip
+	// is dropped there, and the row keeps its height.
+	dims := a.list.rows[0].Layout(testGtx(new(op.Ops), smallWindow), a.list.threads[0], false, false)
+	if want := image.Pt(smallWindow.X, testGtx(new(op.Ops), smallWindow).Dp(listRowHeight)); dims.Size != want {
+		t.Fatalf("narrow row size = %v, want %v", dims.Size, want)
+	}
 
 	// Every panel, one after another: none of them may panic or depend on a
 	// window that is wider than the minimums they assume.

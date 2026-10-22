@@ -36,11 +36,18 @@ func TestLayoutFrames(t *testing.T) {
 		{ID: "inbox", Name: "Inbox", Kind: mail.FolderInbox, Unread: 2},
 		{ID: "starred", Name: "Starred", Kind: mail.FolderStarred},
 		{ID: "work", Name: "Work", Kind: mail.FolderLabel, Color: "#0B57D0", Unread: 1},
+		{ID: "bills", Name: "Bills", Kind: mail.FolderLabel, Color: "#1E8E3E"},
 	}
 	a.side.reload()
 
 	threads := make([]mail.ThreadSummary, 0, 60)
 	for i := 0; i < 60; i++ {
+		// Half the rows carry two labels, the rest one; the system ids in the
+		// backend list must not turn into chips.
+		labels := []string{"work", "INBOX"}
+		if i%2 == 0 {
+			labels = []string{"work", "bills", "CATEGORY_PERSONAL"}
+		}
 		threads = append(threads, mail.ThreadSummary{
 			ID:             "t" + strconv.Itoa(i),
 			Subject:        "Subject " + strconv.Itoa(i) + " 中文主题",
@@ -51,6 +58,7 @@ func TestLayoutFrames(t *testing.T) {
 			UnreadCount:    1,
 			MessageIDs:     []string{"m" + strconv.Itoa(i)},
 			HasAttachments: i%3 == 0,
+			Labels:         labels,
 		})
 	}
 	a.list.setThreads(threads)
@@ -302,5 +310,55 @@ func TestTextKeepsLineHeightInFixedRow(t *testing.T) {
 	}
 	if dims.Size.X != 200 {
 		t.Fatalf("label width = %d, want the full 200px cell", dims.Size.X)
+	}
+}
+
+// TestMessageRowShowsLabelChips covers the label pills of a row: the full slash
+// name is drawn, the active label and the system ids are filtered out, and the
+// pills stay inside the strip width without changing the row height.
+func TestMessageRowShowsLabelChips(t *testing.T) {
+	a := testApp(t)
+	a.folders = []mail.Folder{
+		{ID: "inbox", Name: "Inbox", Kind: mail.FolderInbox},
+		{ID: "work", Name: "Work", Kind: mail.FolderLabel, Color: "#0B57D0"},
+		{ID: "proj", Name: "Work/Project A", Kind: mail.FolderLabel, Color: "#C2185B"},
+	}
+	a.side.reload()
+	a.list.setThreads([]mail.ThreadSummary{{
+		ID:           "t0",
+		Subject:      "Subject",
+		Snippet:      "Snippet",
+		Participants: []mail.Address{{Name: "Ada", Email: "ada@example.com"}},
+		LastDate:     time.Now(),
+		MessageCount: 1,
+		MessageIDs:   []string{"m0"},
+		Labels:       []string{"work", "proj", "INBOX", "UNREAD"},
+	}})
+
+	sum := a.list.threads[0]
+	chips := a.rowLabels(sum)
+	if len(chips) != 2 || chips[0].name != "Work" || chips[1].name != "Work/Project A" {
+		t.Fatalf("row labels = %+v, want the two user labels with full names", chips)
+	}
+
+	// The label being viewed is what the row sits under, so it is not repeated.
+	a.activeFolder = "work"
+	if chips := a.rowLabels(sum); len(chips) != 1 || chips[0].name != "Work/Project A" {
+		t.Fatalf("row labels under the Work label = %+v, want only the child", chips)
+	}
+	a.activeFolder = "inbox"
+
+	gtx := testGtx(new(op.Ops), image.Pt(900, 40))
+	dims := a.list.rows[0].Layout(gtx, sum, false, false)
+	if want := image.Pt(900, gtx.Dp(listRowHeight)); dims.Size != want {
+		t.Fatalf("row size = %v, want %v", dims.Size, want)
+	}
+
+	strip := a.list.rows[0].labelStrip(testGtx(new(op.Ops), image.Pt(900, 40)), chips, 150)
+	if strip.Size.X <= 0 || strip.Size.X > 150 {
+		t.Fatalf("label strip width = %d, want a positive width within 150px", strip.Size.X)
+	}
+	if strip.Size.Y <= 0 || strip.Size.Y >= gtx.Dp(listRowHeight) {
+		t.Fatalf("label strip height = %d, want it inside the %vdp row", strip.Size.Y, listRowHeight)
 	}
 }

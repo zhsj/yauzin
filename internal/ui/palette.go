@@ -27,9 +27,12 @@ var (
 	colDanger      = color.NRGBA{R: 0xD9, G: 0x30, B: 0x25, A: 0xFF}
 	colDangerSoft  = color.NRGBA{R: 0xFC, G: 0xE8, B: 0xE6, A: 0xFF}
 	colAmber       = color.NRGBA{R: 0xF4, G: 0xB4, B: 0x00, A: 0xFF}
-	colStarIdle    = color.NRGBA{R: 0xB8, G: 0xBD, B: 0xC4, A: 0xFF}
-	colSelection   = color.NRGBA{R: 0x0B, G: 0x57, B: 0xD0, A: 0x33}
-	colOverlay     = color.NRGBA{R: 0x1F, G: 0x1F, B: 0x1F, A: 0x3D}
+	// colChipFallback backs the label chips of labels without a colour of
+	// their own: Gmail uses the same light grey for them.
+	colChipFallback = color.NRGBA{R: 0xE8, G: 0xEA, B: 0xED, A: 0xFF}
+	colStarIdle     = color.NRGBA{R: 0xB8, G: 0xBD, B: 0xC4, A: 0xFF}
+	colSelection    = color.NRGBA{R: 0x0B, G: 0x57, B: 0xD0, A: 0x33}
+	colOverlay      = color.NRGBA{R: 0x1F, G: 0x1F, B: 0x1F, A: 0x3D}
 )
 
 // colOnDeco is the glyph colour on the red close-button hover, the only place

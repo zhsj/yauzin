@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"image/color"
+	"math"
 	"sort"
 	"strings"
 
@@ -32,6 +34,88 @@ type labelNode struct {
 type labelTree struct {
 	roots []*labelNode
 	byID  map[string]*labelNode
+}
+
+// labelChip is one label as a message row draws it: the full name, slash
+// hierarchy included, and the colour of the chip background.
+type labelChip struct {
+	name string
+	bg   color.NRGBA
+}
+
+// labelIndex resolves label ids to row chips. Only user labels enter the
+// index, so the system ids a backend merges into a thread (INBOX, UNREAD,
+// CATEGORY_*) can never be drawn as chips.
+type labelIndex map[string]labelChip
+
+// newLabelIndex builds the lookup of the user labels of an account.
+func newLabelIndex(folders []mail.Folder) labelIndex {
+	idx := make(labelIndex, len(folders))
+	for _, f := range folders {
+		if f.Kind != mail.FolderLabel || f.ID == "" || strings.TrimSpace(f.Name) == "" {
+			continue
+		}
+		bg := colChipFallback
+		if strings.TrimSpace(f.Color) != "" {
+			bg = hexColor(f.Color)
+		}
+		idx[f.ID] = labelChip{name: f.Name, bg: bg}
+	}
+	return idx
+}
+
+// chips resolves the label ids of one conversation in backend order, skipping
+// the label the list is currently filtered by as well as unknown and duplicate
+// ids. A conversation without labels allocates nothing.
+func (i labelIndex) chips(ids []string, skip string) []labelChip {
+	if len(ids) == 0 {
+		return nil
+	}
+	var out []labelChip
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id == "" || id == skip || seen[id] {
+			continue
+		}
+		chip, ok := i[id]
+		if !ok {
+			continue
+		}
+		seen[id] = true
+		out = append(out, chip)
+	}
+	return out
+}
+
+// chipTextColor picks the text colour with the better contrast on bg, so a
+// pale label keeps dark text while a saturated one turns white, as Gmail does.
+func chipTextColor(bg color.NRGBA) color.NRGBA {
+	light := color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}
+	bgLum := relativeLuminance(bg)
+	if contrastRatio(bgLum, relativeLuminance(light)) >= contrastRatio(bgLum, relativeLuminance(colText)) {
+		return light
+	}
+	return colText
+}
+
+// relativeLuminance is the WCAG relative luminance of a colour.
+func relativeLuminance(c color.NRGBA) float64 {
+	linear := func(v uint8) float64 {
+		s := float64(v) / 255
+		if s <= 0.04045 {
+			return s / 12.92
+		}
+		return math.Pow((s+0.055)/1.055, 2.4)
+	}
+	return 0.2126*linear(c.R) + 0.7152*linear(c.G) + 0.0722*linear(c.B)
+}
+
+// contrastRatio is the WCAG contrast ratio of two relative luminances.
+func contrastRatio(a, b float64) float64 {
+	if a < b {
+		a, b = b, a
+	}
+	return (a + 0.05) / (b + 0.05)
 }
 
 // buildLabelTree groups the labels by the "/" in their names. System folders

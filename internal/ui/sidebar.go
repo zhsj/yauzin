@@ -41,6 +41,9 @@ func newSidebar(a *App) *sidebarView {
 
 func (s *sidebarView) reload() {
 	a := s.app
+	// The list draws the same labels the sidebar does, so the index is rebuilt
+	// here: this is the one place a fetched folder list reaches the views.
+	a.labels = newLabelIndex(a.folders)
 	s.folders = s.folders[:0]
 	labelFolders := make([]mail.Folder, 0, len(a.folders))
 	for _, f := range a.folders {

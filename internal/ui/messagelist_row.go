@@ -7,12 +7,30 @@ import (
 	"gioui.org/font"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
+	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
+	"gioui.org/unit"
 	"gioui.org/widget"
 
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
+)
+
+// The label pill of a conversation row follows Gmail's 40dp row: a small
+// solid chip around the label name.
+const (
+	labelChipText   unit.Sp = 11
+	labelChipPadX   unit.Dp = 6
+	labelChipPadY   unit.Dp = 2
+	labelChipGap    unit.Dp = 4
+	labelChipRadius unit.Dp = 4
+	// labelChipMin is the narrowest chip worth drawing: a narrower one would
+	// show an ellipsis instead of a readable name.
+	labelChipMin unit.Dp = 24
+	// labelStripMin is the narrowest subject cell that still gets chips. Below
+	// it the strip would squeeze the subject it annotates.
+	labelStripMin unit.Dp = 48
 )
 
 type messageRow struct {
@@ -177,10 +195,22 @@ func (r *messageRow) senderCell(gtx layout.Context, sum mail.ThreadSummary, weig
 	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx, names...)
 }
 
-// subjectSnippetCell splits the free width evenly between the subject and the
+// subjectSnippetCell shows the labels of the conversation in front of the
+// subject, then splits the remaining width evenly between the subject and the
 // snippet.
 func (r *messageRow) subjectSnippetCell(gtx layout.Context, sum mail.ThreadSummary, weight font.Weight) layout.Dimensions {
-	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+	children := make([]layout.FlexChild, 0, 5)
+	if chips := r.app.rowLabels(sum); len(chips) > 0 {
+		if w := labelStripWidth(gtx, gtx.Constraints.Max.X); w > 0 {
+			children = append(children,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return r.labelStrip(gtx, chips, w)
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
+			)
+		}
+	}
+	children = append(children,
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			return r.app.th.text(gtx, subjectOrPlaceholder(sum.Subject), 14, colText, weight, 1)
 		}),
@@ -189,6 +219,69 @@ func (r *messageRow) subjectSnippetCell(gtx layout.Context, sum mail.ThreadSumma
 			return r.app.th.text(gtx, snippetText(sum.Snippet), 14, colMuted, font.Normal, 1)
 		}),
 	)
+	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx, children...)
+}
+
+// labelStripWidth caps the label strip at half of the subject cell, so the
+// subject and the snippet keep the rest. A cell too narrow for chips reports 0
+// and the row draws no labels at all.
+func labelStripWidth(gtx layout.Context, cell int) int {
+	w := cell / 2
+	if w < gtx.Dp(labelStripMin) {
+		return 0
+	}
+	return w
+}
+
+// labelStrip draws the chips of one row left to right, stopping when the
+// remaining width cannot hold another readable chip.
+func (r *messageRow) labelStrip(gtx layout.Context, chips []labelChip, maxWidth int) layout.Dimensions {
+	th := r.app.th
+	padX, padY := gtx.Dp(labelChipPadX), gtx.Dp(labelChipPadY)
+	gap := gtx.Dp(labelChipGap)
+	radius := gtx.Dp(labelChipRadius)
+	minWidth := gtx.Dp(labelChipMin)
+	// The chips share one line box, so the tallest one fixes the pill height.
+	// Measuring it first would shape the same text twice; instead the first
+	// chip's height is reused for the rest.
+	height := 0
+	x := 0
+	for _, chip := range chips {
+		remain := maxWidth - x
+		if remain < minWidth {
+			break
+		}
+		textMax := remain - 2*padX
+		if textMax <= 0 {
+			break
+		}
+		// Recording the text measures it and keeps the draw operations, so the
+		// name is shaped once and replayed inside the pill.
+		macro := op.Record(gtx.Ops)
+		measure := gtx
+		measure.Constraints = layout.Constraints{Max: image.Pt(textMax, 1<<16)}
+		text := th.text(measure, chip.name, labelChipText, chipTextColor(chip.bg), font.Normal, 1)
+		call := macro.Stop()
+
+		w := min(text.Size.X+2*padX, remain)
+		if height == 0 {
+			height = text.Size.Y + 2*padY
+		}
+		area := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
+		rr := clip.RRect{Rect: image.Rectangle{Max: image.Pt(w, height)}, NW: radius, NE: radius, SE: radius, SW: radius}.Push(gtx.Ops)
+		paint.Fill(gtx.Ops, chip.bg)
+		rr.Pop()
+		label := op.Offset(image.Pt(padX, (height-text.Size.Y)/2)).Push(gtx.Ops)
+		call.Add(gtx.Ops)
+		label.Pop()
+		area.Pop()
+		x += w + gap
+	}
+	if x == 0 {
+		return layout.Dimensions{}
+	}
+	// The loop leaves a trailing gap after the last chip.
+	return layout.Dimensions{Size: image.Pt(x-gap, height)}
 }
 
 // tailCell reserves the trailing column: the attachment slot and the date, or

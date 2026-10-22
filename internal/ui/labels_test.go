@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image"
+	"image/color"
 	"reflect"
 	"testing"
 
@@ -231,6 +232,65 @@ func TestLabelMarkerKeepsOneCell(t *testing.T) {
 		if dims.Size != cell {
 			t.Fatalf("%s marker = %v, want the %v cell", tc.name, dims.Size, cell)
 		}
+	}
+}
+
+func TestLabelIndexResolvesRowChips(t *testing.T) {
+	folders := []mail.Folder{
+		{ID: "inbox", Name: "Inbox", Kind: mail.FolderInbox},
+		{ID: "label:a", Name: "LabelA", Kind: mail.FolderLabel, Color: "#0B57D0"},
+		{ID: "label:a1", Name: "LabelA/LabelA.1", Kind: mail.FolderLabel, Color: "#C2185B"},
+		{ID: "label:plain", Name: "Plain", Kind: mail.FolderLabel},
+	}
+	idx := newLabelIndex(folders)
+
+	// The active label is dropped, system and unknown ids never resolve, and a
+	// repeated id is drawn once. The chip keeps the full slash name.
+	got := idx.chips([]string{"label:a", "INBOX", "label:a1", "label:a", "unknown", "label:a1"}, "label:a")
+	want := []labelChip{{name: "LabelA/LabelA.1", bg: hexColor("#C2185B")}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("chips = %+v, want %+v", got, want)
+	}
+
+	if got := idx.chips(nil, ""); got != nil {
+		t.Fatalf("chips of a conversation without labels = %+v, want nil", got)
+	}
+	if chip := idx["label:plain"]; chip.bg != colChipFallback {
+		t.Fatalf("uncoloured label bg = %v, want the fallback %v", chip.bg, colChipFallback)
+	}
+	if _, ok := idx["inbox"]; ok {
+		t.Fatal("a system folder entered the label index")
+	}
+}
+
+func TestChipTextColorPicksContrast(t *testing.T) {
+	light := color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}
+	for _, tc := range []struct {
+		name string
+		bg   color.NRGBA
+		want color.NRGBA
+	}{
+		{"primary blue", colPrimary, light},
+		{"magenta", hexColor("#C2185B"), light},
+		{"amber", colAmber, colText},
+		{"fallback grey", colChipFallback, colText},
+		{"mid grey", colFaint, colText},
+	} {
+		if got := chipTextColor(tc.bg); got != tc.want {
+			t.Fatalf("%s text = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestLabelStripWidthKeepsSubjectRoom(t *testing.T) {
+	gtx := testGtx(new(op.Ops), testWindow)
+	if got := labelStripWidth(gtx, 200); got != 100 {
+		t.Fatalf("strip width = %d, want half of the cell", got)
+	}
+	// 80/2 = 40dp is below the 48dp floor: the row keeps the width for the
+	// subject instead of showing a strip nothing would fit in.
+	if got := labelStripWidth(gtx, 80); got != 0 {
+		t.Fatalf("strip width = %d, want 0 for a narrow cell", got)
 	}
 }
 

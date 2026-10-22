@@ -87,6 +87,9 @@ type App struct {
 	activeFolder string
 	query        string
 	folders      []mail.Folder
+	// labels resolves the ids a thread carries to the chips its row draws. The
+	// sidebar rebuilds it whenever it applies a new folder list.
+	labels labelIndex
 
 	// Cursor paging and the sidebar fold.
 	// page is the 1-based page number shown in the list toolbar. Backends hand
@@ -379,6 +382,13 @@ func (a *App) startInitialLoad() {
 		a.reloadAll()
 		a.loaded = true
 	})
+}
+
+// rowLabels returns the chips a conversation row draws: the user labels of the
+// conversation except the one the list is currently filtered by, which every
+// row would repeat.
+func (a *App) rowLabels(sum mail.ThreadSummary) []labelChip {
+	return a.labels.chips(sum.Labels, a.activeFolder)
 }
 
 // resolveLanguage picks the language for this run: an explicit preference
