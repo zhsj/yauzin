@@ -152,6 +152,43 @@ func TestClientTitleBarFrame(t *testing.T) {
 	}
 }
 
+// TestMailboxFitsBelowClientTitleBar pins the space the mailbox gets under a
+// client-side title bar: the bar covers the top of the window, so the mailbox
+// has to be laid out in the remainder. It used to keep the full window height,
+// which put the bottom of the reader (its reply row) below the window edge and
+// out of reach of the scroll.
+func TestMailboxFitsBelowClientTitleBar(t *testing.T) {
+	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
+	a := testApp(t)
+	a.selectedThread = "t0"
+	a.thread = mail.ThreadSummary{ID: "t0", Subject: "Subject", MessageCount: 1}
+	a.msgs = []*mail.Message{{
+		MessageSummary: mail.MessageSummary{ID: "m0", From: mail.Address{Name: "Ada", Email: "ada@example.com"}, Date: time.Now()},
+		TextBody:       strings.Repeat("a line of the plain text body\n", 80),
+	}}
+	a.expanded["m0"] = true
+
+	// viewport is the height the reader's list is given, measured by asking for
+	// more scroll than exists and reading back the clamped position.
+	viewport := func(csd bool) int {
+		a.csd = csd
+		var ops op.Ops
+		gtx := testGtx(&ops, testWindow)
+		a.layout(gtx)
+		ops.Reset()
+		a.reader.list.Position.Offset = 1 << 20
+		a.layout(gtx)
+		p := a.reader.list.Position
+		return p.Length - p.Offset
+	}
+
+	flow := viewport(false)
+	below := viewport(true)
+	if want := flow + int(topBarHeight-topBarHeightCSD); below != want {
+		t.Fatalf("reader viewport under the title bar = %d, want %d: the %vdp bar replaces the %vdp header", below, want, topBarHeightCSD, topBarHeight)
+	}
+}
+
 // TestBrandWordmarkFitsTitleBar keeps the wordmark inside the combined title
 // bar: the label shares the 40dp content row with the 36dp mark, so a later
 // size bump has to fail here instead of clipping the text.

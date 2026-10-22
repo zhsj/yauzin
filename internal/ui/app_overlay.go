@@ -36,8 +36,14 @@ func (a *App) layout(gtx layout.Context) {
 		bar = gtx.Dp(a.headerHeight())
 	}
 	if bar > 0 && gtx.Constraints.Max.Y > bar {
+		// The mailbox gets the window minus the bar, in both directions: a
+		// Max that kept the full height made the mailbox half a title bar
+		// taller than the space it is drawn in, which pushed the bottom of
+		// the reader (the reply row) below the window edge.
 		content := gtx
-		content.Constraints.Min = image.Pt(content.Constraints.Max.X, content.Constraints.Max.Y-bar)
+		area := image.Pt(content.Constraints.Max.X, content.Constraints.Max.Y-bar)
+		content.Constraints.Min = area
+		content.Constraints.Max = area
 		off := op.Offset(image.Pt(0, bar)).Push(gtx.Ops)
 		a.shell(content, false)
 		off.Pop()
