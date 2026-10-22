@@ -252,6 +252,45 @@ func TestAccountDialogReusesExistingAccount(t *testing.T) {
 	}
 }
 
+// TestAccountDialogAuthStepFrames lays out the authorization panel in both
+// states: waiting without a link, and with the link that enables the copy and
+// browser buttons.
+func TestAccountDialogAuthStepFrames(t *testing.T) {
+	a := testApp(t)
+	d := newAccountDialog(a)
+	d.step = accountStepAuth
+
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+	d.Layout(gtx, a)
+	if !d.copyLink.disabled || !d.openLink.disabled {
+		t.Fatal("the copy/open buttons are enabled before the URL exists")
+	}
+	ops.Reset()
+
+	d.authURL = "https://accounts.example/authorize?client_id=test"
+	d.authField.SetText(d.authURL)
+	d.Layout(gtx, a)
+	if d.copyLink.disabled || d.openLink.disabled {
+		t.Fatal("the copy/open buttons are disabled although the URL is shown")
+	}
+
+	// The copy click is carried to the frame that writes the clipboard.
+	d.copyLink.click.Click()
+	d.Layout(gtx, a)
+	if d.copyPending {
+		t.Fatal("the copy click was not consumed by the frame")
+	}
+
+	target := mail.Account{ID: "gmail:user@example.com", Kind: mail.KindGmail, Name: "Grace Hopper", Email: "user@example.com"}
+	d.relogin = &target
+	ops.Reset()
+	d.Layout(gtx, a)
+	if got := d.titleText(); got != i18n.T("settings.accountRelauthTitle") {
+		t.Fatalf("title = %q, want the re-login heading", got)
+	}
+}
+
 // TestRelauthRejectsAnotherMailbox keeps a "sign in again" click from writing a
 // different Google account: the tokens of a row belong to that row's address,
 // so nothing may be stored when the user picks another mailbox.
