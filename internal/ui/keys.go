@@ -100,11 +100,10 @@ var shortcutTable = []shortcut{
 
 // handleKeys routes the keyboard before anything is laid out. The rules, in
 // order: the window and process shortcuts (Ctrl+W, Ctrl+Q) run first, even
-// while an editor owns the keyboard; Esc keeps its "status bar, then overlay,
-// then conversation, then search" priority; the search field owns every other
-// key while it has focus, because its editor needs the characters; an overlay
-// owns the rest, also for its editors; the remaining keys act on the keyboard
-// cursor in the list, or on the open conversation.
+// while an editor owns the keyboard; the search field owns every other key
+// while it has focus, because its editor needs the characters; an overlay owns
+// the rest as well, so only Esc is read above its editors; the remaining keys
+// act on the keyboard cursor in the list, or on the open conversation.
 //
 // Reading a shortcut is destructive: Router.Event deletes the matched event
 // from the frame, so a filter for a bare key would swallow the very characters
@@ -143,13 +142,22 @@ func (a *App) handleKeys(gtx layout.Context) {
 		return
 	}
 
+	if a.overlay != nil {
+		// An overlay owns the keyboard for its editors, so the shortcut table
+		// is not read at all: doing so would drain the very keys they need
+		// (Del is also the list's delete). Esc is the one key read above them,
+		// because it is what closes the panel.
+		if pressed(gtx, key.NameEscape) {
+			a.escape(gtx)
+		}
+		return
+	}
+
 	bits := readShortcuts(gtx, false)
-	// Esc runs before the overlay gate, because it is the key that closes it.
+	// Esc runs before the remaining keys: it closes the status bar, the open
+	// conversation or the search instead of acting on the list.
 	if bits&keyEscape != 0 {
 		a.escape(gtx)
-	}
-	if a.overlay != nil {
-		return
 	}
 	if bits&keySlash != 0 {
 		a.focusSearch(gtx)

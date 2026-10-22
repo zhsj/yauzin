@@ -125,6 +125,31 @@ func TestGlobalShortcuts(t *testing.T) {
 	}
 }
 
+// TestOverlayKeepsEditorKeys pins the overlay rule: while a panel is open its
+// editors own the keyboard, so handleKeys must leave Del for the focused
+// editor instead of draining it through the list's delete shortcut.
+func TestOverlayKeepsEditorKeys(t *testing.T) {
+	a := testApp(t)
+	a.showSettings()
+	s := a.settings
+
+	router, ops, gtx := newRouterFrame(testWindow)
+	// The first frame registers the editor's filters, which the router needs
+	// before it will accept the event.
+	runFrame(a, router, ops, gtx)
+
+	// Hand the keyboard to the proxy editor, the field the regression was
+	// reported on, so the router routes the event to it.
+	gtx.Execute(key.FocusCmd{Tag: s.proxy})
+	router.Queue(key.Event{Name: key.NameDeleteForward, State: key.Press})
+
+	a.handleKeys(gtx)
+	if _, ok := gtx.Event(key.Filter{Name: key.NameDeleteForward}); !ok {
+		t.Fatal("Del was consumed before the overlay editor could read it")
+	}
+	ops.Reset()
+}
+
 func cursorThreads(n int) []mail.ThreadSummary {
 	out := make([]mail.ThreadSummary, 0, n)
 	for i := 0; i < n; i++ {
