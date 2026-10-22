@@ -54,7 +54,7 @@ func TestSmallWindowLayout(t *testing.T) {
 		"settings": a.showSettings,
 		"shortcuts": func() {
 			a.showSettings()
-			a.settings.page = 2
+			a.settings.page = settingsTabShortcuts
 		},
 		"compose": func() { a.openCompose(composeNew, nil) },
 		"menu":    a.showAccountMenu,
@@ -75,7 +75,7 @@ func TestSmallWindowLayout(t *testing.T) {
 func TestShortcutsPageScrollsInSmallWindow(t *testing.T) {
 	a := testApp(t)
 	a.showSettings()
-	a.settings.page = 2
+	a.settings.page = settingsTabShortcuts
 	a.layout(testGtx(new(op.Ops), smallWindow))
 	if got := a.settings.list.Position.Offset; got != 0 {
 		t.Fatalf("shortcuts page starts at offset %d, want the top", got)

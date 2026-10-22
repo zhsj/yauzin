@@ -39,7 +39,15 @@ type settingsView struct {
 	list      layout.List
 }
 
-// settingsTab is one tab of the page switcher.
+// Indices of settingsView.tabs, used to open the panel on a given page.
+const (
+	settingsTabGeneral = iota
+	settingsTabAccounts
+	settingsTabShortcuts
+)
+
+// settingsTab is one tab of the page switcher. The order of settingsView.tabs
+// has to match the settingsTab* indices.
 type settingsTab struct {
 	click widget.Clickable
 	label string
@@ -120,14 +128,14 @@ func newSettingsView(a *App) *settingsView {
 		if account.Email != "" && account.Email != account.DisplayName() {
 			subtitle = account.Email
 		}
+		// Account rows are informational: the check mark shows the active
+		// mailbox, switching lives in the top bar's account menu. Without an
+		// action the row gets no hover and no hand cursor either.
 		s.accRows = append(s.accRows, &settingsRow{
 			lead:     &account,
 			title:    account.DisplayName(),
 			subtitle: subtitle,
 			active:   account.ID == a.activeAcc,
-			onTap: func() {
-				a.switchAccount(account.ID)
-			},
 		})
 	}
 
@@ -239,7 +247,7 @@ func (s *settingsView) pageContent(gtx layout.Context) layout.Dimensions {
 	th := s.app.th
 	var children []layout.FlexChild
 	switch s.page {
-	case 0:
+	case settingsTabGeneral:
 		children = append(children,
 			layout.Rigid(sectionHeading(th, i18n.T("settings.language"))),
 			layout.Rigid(rows(s.langRows, th)),
@@ -252,7 +260,7 @@ func (s *settingsView) pageContent(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(sectionHeading(th, i18n.T("settings.network"))),
 			layout.Rigid(s.proxySection(th)),
 		)
-	case 2:
+	case settingsTabShortcuts:
 		sections := shortcutSections()
 		for i := range sections {
 			sec := sections[i]
@@ -263,6 +271,8 @@ func (s *settingsView) pageContent(gtx layout.Context) layout.Dimensions {
 		}
 		children = append(children, layout.Rigid(sectionHint(th, i18n.T("shortcut.hint"))))
 	default:
+		// settingsTabAccounts, and the fallback for an index the tabs do not
+		// offer.
 		children = append(children,
 			layout.Rigid(sectionHeading(th, i18n.T("settings.accounts"))),
 			layout.Rigid(rows(s.accRows, th)),
@@ -446,8 +456,14 @@ func keyCap(gtx layout.Context, th *theme, label string) layout.Dimensions {
 	return layout.Dimensions{Size: size}
 }
 
+// interactive reports whether the row has an action behind it. Rows without
+// one are informational (the account list) and must not hint at a click.
+func (r *settingsRow) interactive() bool {
+	return !r.disabled && r.onTap != nil
+}
+
 func (r *settingsRow) Layout(gtx layout.Context, th *theme) layout.Dimensions {
-	if r.click.Clicked(gtx) && !r.disabled && r.onTap != nil {
+	if r.click.Clicked(gtx) && r.interactive() {
 		r.onTap()
 		invalidateAfterTap(gtx)
 	}
@@ -458,7 +474,7 @@ func (r *settingsRow) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 			w = gtx.Constraints.Min.X
 		}
 		size := image.Pt(w, h)
-		if !r.disabled {
+		if r.interactive() {
 			th.cursor(gtx, pointer.CursorPointer, size)
 			if r.click.Hovered() {
 				rr := clip.RRect{Rect: image.Rectangle{Max: size}, NW: 8, NE: 8, SE: 8, SW: 8}

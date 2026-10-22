@@ -40,6 +40,59 @@ func TestSettingsPagesFrame(t *testing.T) {
 	}
 }
 
+// TestSettingsAccountRowDoesNotSwitch keeps the account list informational:
+// clicking a row must neither switch the mailbox nor close the panel.
+func TestSettingsAccountRowDoesNotSwitch(t *testing.T) {
+	a := testApp(t)
+	s := newSettingsView(a)
+	a.showOverlay(s)
+	s.page = settingsTabAccounts
+
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+	s.Layout(gtx, a)
+	ops.Reset()
+
+	before := a.activeAcc
+	s.accRows[0].click.Click()
+	s.Layout(gtx, a)
+
+	if a.activeAcc != before {
+		t.Fatalf("active account = %q after clicking its row, want %q", a.activeAcc, before)
+	}
+	if _, ok := a.overlay.(*settingsView); !ok {
+		t.Fatalf("overlay = %T after clicking an account row, want the settings panel", a.overlay)
+	}
+}
+
+// TestManageAccountsOpensAccountsPage pins the account menu entry: managing
+// accounts lands on the accounts tab, not on the general page.
+func TestManageAccountsOpensAccountsPage(t *testing.T) {
+	a := testApp(t)
+	a.showAccountMenu()
+	m, ok := a.overlay.(*menuOverlay)
+	if !ok {
+		t.Fatalf("overlay = %T after the account menu, want *menuOverlay", a.overlay)
+	}
+
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+	m.Layout(gtx, a)
+	ops.Reset()
+
+	manage := m.rows[len(m.rows)-1]
+	manage.click.Click()
+	m.Layout(gtx, a)
+
+	panel, ok := a.overlay.(*settingsView)
+	if !ok {
+		t.Fatalf("overlay = %T after manage accounts, want *settingsView", a.overlay)
+	}
+	if panel.page != settingsTabAccounts {
+		t.Fatalf("page = %d after manage accounts, want the accounts tab", panel.page)
+	}
+}
+
 // TestSettingsRowDisabledIgnoresClicks covers rows that are listed but have no
 // implementation behind them: they must not react to a click.
 func TestSettingsRowDisabledIgnoresClicks(t *testing.T) {

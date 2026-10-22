@@ -235,8 +235,27 @@ func (a *App) showMenu(rect image.Rectangle, items []menuItem) {
 	a.showOverlay(newMenuOverlay(a, rect, items))
 }
 
+// showSettings opens the panel on its first page, the way the gear button
+// does.
 func (a *App) showSettings() {
-	a.showOverlay(newSettingsView(a))
+	a.showSettingsPage(settingsTabGeneral)
+}
+
+// showSettingsPage opens the panel on the given tab, so an entry point such as
+// the account menu can land where the user is heading.
+func (a *App) showSettingsPage(page int) {
+	s := newSettingsView(a)
+	if page >= 0 && page < len(s.tabs) {
+		s.page = page
+	}
+	a.showOverlay(s)
+}
+
+// backToAccounts leaves the add-account wizard for the settings panel it was
+// opened from. The account has not been added, so the list the user came from
+// is where they should land instead of the whole overlay disappearing.
+func (a *App) backToAccounts() {
+	a.showSettingsPage(settingsTabAccounts)
 }
 
 func (a *App) showAccountMenu() {
@@ -254,7 +273,7 @@ func (a *App) showAccountMenu() {
 	items = append(items, menuItem{
 		Label: i18n.T("settings.manageAccounts"),
 		Icon:  iconSettings,
-		OnTap: a.showSettings,
+		OnTap: func() { a.showSettingsPage(settingsTabAccounts) },
 	})
 	a.showMenu(a.top.menuAnchor, items)
 }

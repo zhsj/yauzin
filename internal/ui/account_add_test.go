@@ -24,7 +24,7 @@ func TestAddAccountRowOpensTheDialog(t *testing.T) {
 	gtx := testGtx(&ops, testWindow)
 	s.tabs[1].click.Click()
 	s.Layout(gtx, a)
-	if s.page != 1 {
+	if s.page != settingsTabAccounts {
 		t.Fatalf("page = %d, want the accounts page", s.page)
 	}
 	ops.Reset()
@@ -38,6 +38,43 @@ func TestAddAccountRowOpensTheDialog(t *testing.T) {
 	}
 	if a.accountAdd == nil {
 		t.Fatal("the open dialog is not reachable from App")
+	}
+}
+
+// TestAccountDialogCancelReturnsToSettings pins the way out of the wizard:
+// cancel closes the dialog and shows the settings panel again on its accounts
+// page instead of dropping the user into the mailbox.
+func TestAccountDialogCancelReturnsToSettings(t *testing.T) {
+	a := testApp(t)
+	s := newSettingsView(a)
+	a.showOverlay(s)
+	s.page = settingsTabAccounts
+
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+	s.accRows[len(s.accRows)-1].click.Click()
+	s.Layout(gtx, a)
+
+	d, ok := a.overlay.(*accountDialog)
+	if !ok {
+		t.Fatalf("overlay = %T after clicking add account, want *accountDialog", a.overlay)
+	}
+	ops.Reset()
+	d.Layout(gtx, a)
+	ops.Reset()
+
+	d.cancel.click.Click()
+	d.Layout(gtx, a)
+
+	panel, ok := a.overlay.(*settingsView)
+	if !ok {
+		t.Fatalf("overlay = %T after cancel, want *settingsView", a.overlay)
+	}
+	if panel.page != settingsTabAccounts {
+		t.Fatalf("page = %d after cancel, want the accounts tab", panel.page)
+	}
+	if a.accountAdd != nil {
+		t.Fatal("the wizard is still reachable after cancel")
 	}
 }
 

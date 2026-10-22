@@ -69,10 +69,13 @@ type accountDialog struct {
 }
 
 func newAccountDialog(a *App) *accountDialog {
+	// Every way out of the wizard except a successful sign-in returns to the
+	// settings panel it was opened from; closing the whole overlay would drop
+	// the user back into the mailbox.
 	d := &accountDialog{
 		app:      a,
-		blocker:  newTapBlocker(colOverlay, func() { a.hideOverlay() }),
-		close:    newIconButton(iconClose, 32, func() { a.hideOverlay() }),
+		blocker:  newTapBlocker(colOverlay, a.backToAccounts),
+		close:    newIconButton(iconClose, 32, a.backToAccounts),
 		proxy:    a.proxy,
 		hasProxy: strings.TrimSpace(a.proxy) != "",
 	}
@@ -118,7 +121,7 @@ func newAccountDialog(a *App) *accountDialog {
 	}
 	d.signIn = newPillButton(i18n.T("settings.accountSignIn"), icon{}, true, d.start)
 	d.signIn.disabled = true
-	d.cancel = newPillButton(i18n.T("settings.cancel"), icon{}, false, func() { a.hideOverlay() })
+	d.cancel = newPillButton(i18n.T("settings.cancel"), icon{}, false, a.backToAccounts)
 	d.list.Axis = layout.Vertical
 	return d
 }
