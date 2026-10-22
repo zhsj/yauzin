@@ -117,12 +117,24 @@ func newToggleSwitch(on bool, onChange func(bool)) *toggleSwitch {
 }
 
 func (s *toggleSwitch) Layout(gtx layout.Context, th *theme) layout.Dimensions {
-	clicked := s.click.Clicked(gtx)
-	if clicked && s.onChange != nil {
+	if s.click.Clicked(gtx) && s.onChange != nil {
 		s.on = !s.on
 		s.onChange(s.on)
 		invalidateAfterTap(gtx)
 	}
+	// Only the standalone switch keeps a hit area of its own. A display-only
+	// switch stays a plain drawing so the clickable of the surrounding row
+	// sees the whole row instead of a second overlapping target.
+	if s.onChange == nil {
+		return s.draw(gtx, th)
+	}
+	return s.click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return s.draw(gtx, th)
+	})
+}
+
+// draw paints the track and the knob at the current origin.
+func (s *toggleSwitch) draw(gtx layout.Context, th *theme) layout.Dimensions {
 	w := gtx.Dp(36)
 	h := gtx.Dp(20)
 	size := image.Pt(w, h)
