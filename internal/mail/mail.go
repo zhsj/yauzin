@@ -236,6 +236,11 @@ type Service interface {
 	Delete(ctx context.Context, ids []string) error
 	Send(ctx context.Context, draft Draft) error
 	SaveAttachment(ctx context.Context, messageID, attachmentID, dir string) (string, error)
+	// RawMessage returns the message source as the backend stores it, for the
+	// reader's "view original" page. It is a separate read from GetThread: the
+	// parsed bodies are all the reader shows, so the source is only fetched
+	// when the user asks for it.
+	RawMessage(ctx context.Context, messageID string) ([]byte, error)
 	Close() error
 }
 

@@ -290,6 +290,33 @@ func (s *Service) SaveAttachment(context.Context, string, string, string) (strin
 	return "", mail.ErrUnsupported
 }
 
+// RawMessage returns the RFC 822 source of one message.
+//
+// format=raw is the only way to see the headers Gmail parsed away, so this is a
+// read of its own instead of a field on GetThread: the reader only asks for it
+// when the user opens the original.
+func (s *Service) RawMessage(ctx context.Context, messageID string) ([]byte, error) {
+	if strings.TrimSpace(messageID) == "" {
+		return nil, mail.ErrInvalidArgument
+	}
+	q := url.Values{}
+	q.Set("format", "raw")
+	var m Message
+	if err := s.c.do(ctx, "messages.get", "GET", "/users/me/messages/"+url.PathEscape(messageID), q, &m); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(m.Raw) == "" {
+		// A message the account can no longer see answers with the same shape
+		// and no source, so an empty raw is reported as missing.
+		return nil, mail.ErrNotFound
+	}
+	raw, err := decodeBase64URL(m.Raw)
+	if err != nil {
+		return nil, fmt.Errorf("gmail messages.get: undecodable raw message: %w", err)
+	}
+	return raw, nil
+}
+
 // Close releases the idle connections this account owns.
 func (s *Service) Close() error {
 	s.closeOnce.Do(func() { s.c.close() })

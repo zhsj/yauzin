@@ -691,6 +691,60 @@ func (s *Service) SaveAttachment(ctx context.Context, messageID, attachmentID, d
 	return path, nil
 }
 
+// RawMessage implements mail.Service. The demo data keeps no source, so the
+// RFC 822 document is rendered from the parsed message: the headers a real
+// backend would return, plus the plain-text part.
+func (s *Service) RawMessage(ctx context.Context, messageID string) ([]byte, error) {
+	if strings.TrimSpace(messageID) == "" {
+		return nil, fmt.Errorf("%w: empty message ID", mail.ErrInvalidArgument)
+	}
+	if err := s.wait(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	var msg *mail.Message
+	s.eachStored([]string{messageID}, func(e *stored) { msg = e.msg })
+	s.mu.Unlock()
+	if msg == nil {
+		return nil, mail.ErrNotFound
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return []byte(sourceOf(msg)), nil
+}
+
+// sourceOf renders one message as RFC 822 text. Header order and CRLF line
+// endings follow the wire format so the reader's source page looks like what a
+// real backend returns.
+func sourceOf(m *mail.Message) string {
+	var b strings.Builder
+	write := func(name, value string) {
+		if strings.TrimSpace(value) == "" {
+			return
+		}
+		fmt.Fprintf(&b, "%s: %s\r\n", name, value)
+	}
+	write("Message-ID", "<"+m.ID+"@yauzin.invalid>")
+	write("From", m.From.String())
+	write("To", mail.FormatAddressList(m.To))
+	write("Cc", mail.FormatAddressList(m.Cc))
+	write("Subject", m.Subject)
+	if !m.Date.IsZero() {
+		write("Date", m.Date.Format(time.RFC1123Z))
+	}
+	write("MIME-Version", "1.0")
+	write("Content-Type", `text/plain; charset="utf-8"`)
+
+	body := m.TextBody
+	if strings.TrimSpace(body) == "" {
+		body = "[此邮件只有 HTML 正文]"
+	}
+	b.WriteString("\r\n")
+	b.WriteString(strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "\n", "\r\n"))
+	return b.String()
+}
+
 // Close implements mail.Service.
 func (s *Service) Close() error { return nil }
 

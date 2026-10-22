@@ -2,6 +2,7 @@ package gmail
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -795,6 +796,67 @@ func TestGetThreadRejectsEmptyID(t *testing.T) {
 	if _, err := svc.GetThread(context.Background(), " "); !errors.Is(err, mail.ErrInvalidArgument) {
 		t.Fatalf("error = %v, want ErrInvalidArgument", err)
 	}
+}
+
+// TestRawMessageDecodesSource pins the raw read: it asks for format=raw on the
+// message itself and turns the base64url field back into the stored bytes, in
+// both the padded and the unpadded spelling the API uses.
+func TestRawMessageDecodesSource(t *testing.T) {
+	const source = "Message-ID: <m1@example.com>\r\nSubject: Hello\r\n\r\nbody"
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "unpadded", raw: base64.RawURLEncoding.EncodeToString([]byte(source))},
+		{name: "padded", raw: base64.URLEncoding.EncodeToString([]byte(source))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotPath string
+			svc, _ := newTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				if got := r.URL.Query().Get("format"); got != "raw" {
+					t.Errorf("format = %q, want raw", got)
+				}
+				writeJSON(t, w, `{"id":"m1","raw":"`+tc.raw+`"}`)
+			}))
+
+			raw, err := svc.RawMessage(context.Background(), "m1")
+			if err != nil {
+				t.Fatalf("RawMessage: %v", err)
+			}
+			if string(raw) != source {
+				t.Fatalf("source = %q, want %q", raw, source)
+			}
+			if want := "/users/me/messages/m1"; gotPath != want {
+				t.Fatalf("path = %q, want %q", gotPath, want)
+			}
+		})
+	}
+}
+
+func TestRawMessageErrorCategories(t *testing.T) {
+	t.Run("empty id", func(t *testing.T) {
+		svc, _ := newTestService(t, http.NotFoundHandler())
+		if _, err := svc.RawMessage(context.Background(), " "); !errors.Is(err, mail.ErrInvalidArgument) {
+			t.Fatalf("error = %v, want ErrInvalidArgument", err)
+		}
+	})
+	t.Run("missing source", func(t *testing.T) {
+		svc, _ := newTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(t, w, `{"id":"m1"}`)
+		}))
+		if _, err := svc.RawMessage(context.Background(), "m1"); !errors.Is(err, mail.ErrNotFound) {
+			t.Fatalf("error = %v, want ErrNotFound", err)
+		}
+	})
+	t.Run("not found", func(t *testing.T) {
+		svc, _ := newTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeErrorJSON(t, w, http.StatusNotFound, `{"error":{"code":404,"message":"nope"}}`)
+		}))
+		if _, err := svc.RawMessage(context.Background(), "m1"); !errors.Is(err, mail.ErrNotFound) {
+			t.Fatalf("error = %v, want ErrNotFound", err)
+		}
+	})
 }
 
 func TestUnauthorizedRefreshesOnceAndPersists(t *testing.T) {

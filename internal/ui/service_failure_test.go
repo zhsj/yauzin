@@ -60,6 +60,10 @@ func (f *fakeService) SaveAttachment(context.Context, string, string, string) (s
 	return "", mail.ErrUnsupported
 }
 
+func (f *fakeService) RawMessage(context.Context, string) ([]byte, error) {
+	return nil, mail.ErrUnsupported
+}
+
 func (f *fakeService) Close() error { return nil }
 
 // useService installs svc as the backend of the test app's only account.

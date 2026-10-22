@@ -500,6 +500,54 @@ func TestDeleteIgnoresUnknownIDs(t *testing.T) {
 	}
 }
 
+// TestRawMessageRendersSource covers the demo backend's raw read: the source
+// carries the headers the reader's "view original" page shows, including the
+// message ID, and the text part.
+func TestRawMessageRendersSource(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+
+	page, err := s.ListThreads(ctx, mail.ListRequest{FolderID: "inbox", Limit: 1})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(page.Threads) == 0 {
+		t.Fatal("the seeded inbox is empty")
+	}
+	msgs, err := s.GetThread(ctx, page.Threads[0].ID)
+	if err != nil {
+		t.Fatalf("get thread: %v", err)
+	}
+	msg := msgs[0]
+
+	raw, err := s.RawMessage(ctx, msg.ID)
+	if err != nil {
+		t.Fatalf("raw message: %v", err)
+	}
+	text := string(raw)
+	// Line endings are CRLF on the wire, so compare the body with them folded.
+	folded := strings.ReplaceAll(text, "\r\n", "\n")
+	for _, want := range []string{
+		"Message-ID: <" + msg.ID + "@yauzin.invalid>",
+		"From: " + msg.From.String(),
+		"Subject: " + msg.Subject,
+		`Content-Type: text/plain; charset="utf-8"`,
+		msg.TextBody,
+	} {
+		haystack := text
+		if strings.Contains(want, "\n") {
+			haystack = folded
+		}
+		if !strings.Contains(haystack, want) {
+			t.Fatalf("source misses %q:\n%s", want, text)
+		}
+	}
+
+	if _, err := s.RawMessage(ctx, "no-such-message"); !errors.Is(err, mail.ErrNotFound) {
+		t.Fatalf("unknown message returned %v, want ErrNotFound", err)
+	}
+}
+
 func TestSaveAttachment(t *testing.T) {
 	s := newTestService(t)
 	ctx := context.Background()
