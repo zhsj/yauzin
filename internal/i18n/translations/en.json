@@ -114,7 +114,7 @@
   "reader.menu.safePreview": "Safe preview",
   "reader.menu.fullPreview": "Full preview (unsafe)",
   "reader.menu.viewSource": "View original message",
-  "reader.noPlainText": "This message has no plain-text part. Preview the HTML version from \"More actions\".",
+  "reader.noPlainText": "This message has no plain-text part.",
   "reader.messageCount": {
     "one": "{{.Count}} message",
     "other": "{{.Count}} messages"

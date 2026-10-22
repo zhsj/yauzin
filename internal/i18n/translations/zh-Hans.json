@@ -113,7 +113,7 @@
   "reader.menu.safePreview": "安全预览",
   "reader.menu.fullPreview": "完整预览（不安全）",
   "reader.menu.viewSource": "查看原始邮件",
-  "reader.noPlainText": "此邮件没有纯文本正文，可从「更多操作」在浏览器预览 HTML 版本。",
+  "reader.noPlainText": "此邮件没有纯文本正文。",
   "reader.messageCount": {
     "other": "{{.Count}} 封邮件"
   },
