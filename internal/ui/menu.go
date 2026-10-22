@@ -65,9 +65,11 @@ func (m *menuOverlay) geometry(gtx layout.Context) (size, origin image.Point) {
 	// The card is capped to the window first: a menu with more entries than fit
 	// scrolls instead of growing past the edge and being clamped into a
 	// negative origin.
-	cardW := min(gtx.Dp(240), max(maxX-16, 1))
+	cardW := min(gtx.Dp(200), max(maxX-16, 1))
 	cardH := min(len(m.items)*gtx.Dp(40)+gtx.Dp(12), max(maxY-16, 1))
-	x := min(max(m.anchor.Min.X, 8), max(maxX-cardW-8, 8))
+	// Right-align the card to the anchor: the ⋮ button sits at the right edge
+	// of the message card, so opening leftwards keeps the menu inside it.
+	x := min(max(m.anchor.Max.X-cardW, 8), max(maxX-cardW-8, 8))
 	y := m.anchor.Max.Y + 4
 	if y+cardH > maxY-8 {
 		// No room below the anchor: open upwards.

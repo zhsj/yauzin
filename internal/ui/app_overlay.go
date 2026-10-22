@@ -233,7 +233,7 @@ func (a *App) discardCompose(next overlay) {
 	a.compose.discard()
 }
 
-// showMenu opens a dropdown whose top left corner is anchored under rect.
+// showMenu opens a dropdown right-aligned under rect.
 func (a *App) showMenu(rect image.Rectangle, items []menuItem) {
 	if len(items) == 0 {
 		return
