@@ -25,7 +25,7 @@ var (
 	colBorder      = color.NRGBA{R: 0xE0, G: 0xE3, B: 0xE7, A: 0xFF}
 	colHover       = color.NRGBA{R: 0xE8, G: 0xF0, B: 0xFE, A: 0xFF}
 	colDanger      = color.NRGBA{R: 0xD9, G: 0x30, B: 0x25, A: 0xFF}
-	colDangerDark  = color.NRGBA{R: 0xB3, G: 0x26, B: 0x1E, A: 0xFF}
+	colDangerSoft  = color.NRGBA{R: 0xFC, G: 0xE8, B: 0xE6, A: 0xFF}
 	colAmber       = color.NRGBA{R: 0xF4, G: 0xB4, B: 0x00, A: 0xFF}
 	// colChipFallback backs the label chips of labels without a colour of
 	// their own: Gmail uses the same light grey for them.

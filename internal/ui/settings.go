@@ -138,10 +138,10 @@ func logLevelLabel(name string) string {
 // action line in place instead of adding another row.
 type accountDetails struct {
 	proxy   *settingsRow
-	relogin *linkButton
-	remove  *linkButton
-	cancel  *linkButton
-	confirm *linkButton
+	relogin *outlineButton
+	remove  *outlineButton
+	cancel  *outlineButton
+	confirm *outlineButton
 	armed   bool
 }
 
@@ -151,10 +151,10 @@ type accountDetails struct {
 func newAccountDetails(a *App, s *settingsView, acc mail.Account) *accountDetails {
 	d := &accountDetails{
 		proxy:   newAccountProxyRow(a, acc),
-		relogin: newLinkButton(i18n.T("settings.accountRelogin"), icon{}, func() { a.showRelauth(acc) }),
-		remove:  newLinkButton(i18n.T("settings.accountDelete"), icon{}, nil),
-		cancel:  newLinkButton(i18n.T("settings.cancel"), icon{}, nil),
-		confirm: newLinkButton(i18n.T("settings.accountDeleteConfirm"), icon{}, func() { a.removeAccount(acc) }),
+		relogin: newOutlineButton(i18n.T("settings.accountRelogin"), func() { a.showRelauth(acc) }),
+		remove:  newOutlineButton(i18n.T("settings.accountDelete"), nil),
+		cancel:  newOutlineButton(i18n.T("settings.cancel"), nil),
+		confirm: newOutlineButton(i18n.T("settings.accountDeleteConfirm"), func() { a.removeAccount(acc) }),
 		armed:   s.confirmDelete == acc.ID,
 	}
 	d.remove.danger = true
@@ -218,7 +218,7 @@ func (d *accountDetails) actions(gtx layout.Context, th *theme) layout.Dimension
 					return th.text(gtx, i18n.T("settings.accountDeletePrompt"), 12, colDanger, font.Normal, 1)
 				}),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.cancel.Layout(gtx, th) }),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 12) }),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.confirm.Layout(gtx, th) }),
 			)
 		}
@@ -226,7 +226,7 @@ func (d *accountDetails) actions(gtx layout.Context, th *theme) layout.Dimension
 		// right edge of the sub-card like the other trailing actions.
 		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle, Spacing: layout.SpaceStart}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.relogin.Layout(gtx, th) }),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 12) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.remove.Layout(gtx, th) }),
 		)
 	})

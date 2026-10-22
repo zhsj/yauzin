@@ -478,6 +478,11 @@ func TestSettingsAccountDeleteNeedsConfirmation(t *testing.T) {
 
 	accountDetailsOf(t, s, target.DisplayName()).remove.click.Click()
 	s.Layout(gtx, a)
+	// Lay the confirmation out once at the real width: its bordered buttons are
+	// wider than the links they replaced, so this is where an overflow would
+	// show up.
+	ops.Reset()
+	s.Layout(gtx, a)
 
 	if _, ok := store.Entry(target.ID); !ok {
 		t.Fatal("the first click deleted the account")

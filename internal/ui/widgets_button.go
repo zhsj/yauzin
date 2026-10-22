@@ -163,16 +163,12 @@ func (b *iconButton) readPointer(gtx layout.Context) {
 
 // linkButton is an inline text action with an optional leading glyph, used for
 // navigation inside a card such as the account wizard's back step. It has no
-// background of its own: the label turns to the darker primary on hover. A
-// danger link uses the error colour (and a darker shade on hover), which keeps
-// destructive actions recognisable without giving them the weight of a filled
-// button.
+// background of its own: the label turns to the darker primary on hover.
 type linkButton struct {
 	click    widget.Clickable
 	label    string
 	ic       icon
 	disabled bool
-	danger   bool
 	onTap    func()
 }
 
@@ -191,10 +187,6 @@ func (b *linkButton) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 		switch {
 		case b.disabled:
 			col = colFaint
-		case b.danger && hovered:
-			col = colDangerDark
-		case b.danger:
-			col = colDanger
 		case hovered:
 			col = colPrimaryDark
 		}
@@ -221,6 +213,63 @@ func (b *linkButton) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 			}
 			return dims
 		})
+	})
+}
+
+// outlineButton is a compact bordered action for the details of a card. Unlike
+// a link it carries a hairline border, which keeps secondary actions visible on
+// a tinted background without the weight of a filled pill.
+type outlineButton struct {
+	click    widget.Clickable
+	label    string
+	danger   bool
+	disabled bool
+	onTap    func()
+}
+
+func newOutlineButton(text string, onTap func()) *outlineButton {
+	return &outlineButton{label: text, onTap: onTap}
+}
+
+func (b *outlineButton) Layout(gtx layout.Context, th *theme) layout.Dimensions {
+	if b.click.Clicked(gtx) && !b.disabled && b.onTap != nil {
+		b.onTap()
+		invalidateAfterTap(gtx)
+	}
+	hovered := b.click.Hovered() && !b.disabled
+	return b.click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		textCol, border, fill := colText, colBorder, colSurface
+		switch {
+		case b.disabled:
+			textCol = colFaint
+		case b.danger:
+			textCol, border = colDanger, colDanger
+			if hovered {
+				fill = colDangerSoft
+			}
+		case hovered:
+			fill = colSurface2
+		}
+
+		measure := gtx
+		measure.Constraints = layout.Constraints{Max: image.Pt(1<<20, 1<<20)}
+		macro := op.Record(gtx.Ops)
+		label := th.text(measure, b.label, 13, textCol, font.Medium, 1)
+		call := macro.Stop()
+
+		// The height is fixed so the action line keeps its rhythm no matter
+		// which labels the row carries, while the width hugs the text.
+		size := image.Pt(label.Size.X+2*gtx.Dp(14), gtx.Dp(32))
+		gtx.Constraints = layout.Exact(size)
+		if !b.disabled {
+			th.cursor(gtx, pointer.CursorPointer, size)
+		}
+		strokeRect(gtx, fill, border, 8, 1)
+		layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			call.Add(gtx.Ops)
+			return label
+		})
+		return layout.Dimensions{Size: size}
 	})
 }
 
