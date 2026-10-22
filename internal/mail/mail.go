@@ -215,6 +215,10 @@ var (
 	// ErrInvalidArgument reports a request the backend cannot make sense of,
 	// such as an unknown page token or a draft without recipients.
 	ErrInvalidArgument = errors.New("mail: invalid argument")
+	// ErrUnauthorized reports that the account's credentials no longer work:
+	// the token was revoked, expired without a usable refresh token, or the
+	// OAuth client was removed. The account has to be authorized again.
+	ErrUnauthorized = errors.New("mail: unauthorized")
 )
 
 // Service is the single abstraction the UI depends on. Implementations must be
