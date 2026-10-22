@@ -1,7 +1,7 @@
 // Package prefs stores the small amount of user configuration the UI keeps
 // between runs. The file is deliberately plain JSON so it can be inspected and
-// edited by hand; account credentials will live elsewhere once real backends
-// are added.
+// edited by hand; account credentials live in accounts.json, which shares this
+// directory through Dir.
 package prefs
 
 import (
@@ -26,6 +26,11 @@ type Settings struct {
 	// ShowPerfMonitor displays the compact CPU/memory/goroutine/FPS readout in
 	// the top bar. Sampling only runs while it is visible.
 	ShowPerfMonitor bool `json:"showPerfMonitor,omitempty"`
+	// Proxy is the outbound HTTP proxy for mail backends, written as
+	// scheme://[user:password@]host:port with the http, https or socks5 scheme.
+	// Empty means a direct connection. It is one shared setting: each account
+	// only records whether it opts in.
+	Proxy string `json:"proxy,omitempty"`
 }
 
 const (
@@ -39,7 +44,7 @@ const (
 // JSON document) is reported: the caller decides whether to warn, but it must
 // not write the zero value back over settings it failed to read.
 func LoadOrZero() (Settings, error) {
-	s, err := loadFrom(configDir())
+	s, err := loadFrom(Dir())
 	if err != nil {
 		if IsNotExist(err) {
 			return Settings{}, nil
@@ -51,13 +56,13 @@ func LoadOrZero() (Settings, error) {
 
 // Save writes the settings atomically with owner-only permissions.
 func Save(s Settings) error {
-	return saveTo(configDir(), s)
+	return saveTo(Dir(), s)
 }
 
-// configDir returns the directory holding settings.json. YAUZIN_CONFIG_DIR
-// overrides the platform default, which is useful for portable setups and
-// tests.
-func configDir() string {
+// Dir returns the directory holding settings.json and accounts.json.
+// YAUZIN_CONFIG_DIR overrides the platform default, which is useful for
+// portable setups and tests.
+func Dir() string {
 	if dir := os.Getenv("YAUZIN_CONFIG_DIR"); dir != "" {
 		return dir
 	}

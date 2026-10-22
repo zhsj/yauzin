@@ -49,8 +49,8 @@ func TestLoadCorruptFallsBack(t *testing.T) {
 func TestConfigDirOverride(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("YAUZIN_CONFIG_DIR", dir)
-	if got := configDir(); got != dir {
-		t.Fatalf("configDir = %q, want %q", got, dir)
+	if got := Dir(); got != dir {
+		t.Fatalf("Dir = %q, want %q", got, dir)
 	}
 	if err := Save(Settings{Language: "en"}); err != nil {
 		t.Fatalf("Save: %v", err)
