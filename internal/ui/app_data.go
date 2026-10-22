@@ -183,14 +183,14 @@ func (a *App) selectFolder(id string) {
 	a.side.reload()
 }
 
+// activeAccount returns the mailbox in use. An empty activeAcc means no
+// mailbox is selected (the account was removed); it must not fall back to the
+// first one, or the header would name a mailbox the list never loaded.
 func (a *App) activeAccount() mail.Account {
 	for _, acc := range a.accounts {
 		if acc.ID == a.activeAcc {
 			return acc
 		}
-	}
-	if len(a.accounts) > 0 {
-		return a.accounts[0]
 	}
 	return mail.Account{}
 }

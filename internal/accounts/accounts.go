@@ -158,6 +158,22 @@ func (s *Store) SaveToken(id string, t Token) error {
 	})
 }
 
+// Remove deletes the account with the given ID together with its token. The
+// OAuth client is deployment wide, not per account, so it stays behind. It
+// reports ErrNotExist for an unknown ID instead of rewriting the file, so a
+// stale list cannot silently drop another entry.
+func (s *Store) Remove(id string) error {
+	return s.update(func(f *file) error {
+		for i := range f.Accounts {
+			if f.Accounts[i].ID == id {
+				f.Accounts = append(f.Accounts[:i], f.Accounts[i+1:]...)
+				return nil
+			}
+		}
+		return ErrNotExist
+	})
+}
+
 // Upsert inserts an account or replaces the one with the same ID, which is how
 // signing in again refreshes the credentials of an existing account. Both the
 // ID and the backend kind are required: an entry without a kind could not be

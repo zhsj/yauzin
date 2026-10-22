@@ -1,10 +1,12 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 
 	"gioui.org/app"
 
+	"github.com/zhsj/yauzin/internal/accounts"
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/logging"
 	"github.com/zhsj/yauzin/internal/mail"
@@ -133,6 +135,60 @@ func (a *App) setProxy(raw string) error {
 	a.rebuildProxiedServices()
 	a.notify(i18n.T("toast.proxySaved"), false)
 	return nil
+}
+
+// removeAccount deletes an account and its stored token, then drops it from the
+// running app. Removing the active account leaves the mailbox empty instead of
+// picking another one: the next mailbox is the user's choice in the account
+// menu. A failed write leaves both the list and the backends untouched.
+func (a *App) removeAccount(acc mail.Account) {
+	if a.accountStore != nil {
+		// ErrNotExist means the file no longer holds the account, which is the
+		// state the caller asked for; the running copy still has to go.
+		if err := a.accountStore.Remove(acc.ID); err != nil && !errors.Is(err, accounts.ErrNotExist) {
+			logErr("remove account", err)
+			a.notify(i18n.T("toast.accountRemoveFailed"), true)
+			return
+		}
+	}
+	// In-flight callbacks belong to the backend that is about to be closed.
+	a.cancelRequests()
+	if svc := a.services[acc.ID]; svc != nil {
+		_ = svc.Close()
+		delete(a.services, acc.ID)
+	}
+	kept := make([]mail.Account, 0, len(a.accounts))
+	for _, other := range a.accounts {
+		if other.ID != acc.ID {
+			kept = append(kept, other)
+		}
+	}
+	a.accounts = kept
+	if a.activeAcc == acc.ID {
+		a.clearAccountView()
+	}
+	a.notify(i18n.T("toast.accountRemoved", map[string]string{"Name": acc.DisplayName()}), false)
+	// Reopen the panel on the same page: the deleted row has to disappear
+	// without the user leaving and reopening the settings.
+	a.showSettingsPage(settingsTabAccounts)
+}
+
+// clearAccountView empties the mailbox after the account showing it was
+// removed. activeFolder stays on the inbox, so switching to another account
+// from the menu lands where it always does.
+func (a *App) clearAccountView() {
+	a.activeAcc = ""
+	a.cancelRequests()
+	a.folders = nil
+	a.side.reload()
+	a.query = ""
+	a.top.clearSearch()
+	a.page, a.tokens = 1, []string{""}
+	a.resetSelection()
+	a.list.clearSelection()
+	a.list.setThreads(nil)
+	a.toolbar.setLoading(false)
+	a.toolbar.setPage(1, 0, 0, false)
 }
 
 // rebuildProxiedServices swaps the backend of every Gmail account that opts

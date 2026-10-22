@@ -166,6 +166,61 @@ func TestSaveToken(t *testing.T) {
 	}
 }
 
+func TestRemoveDropsEntryAndToken(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	client := OAuth{Provider: mail.KindGmail, ClientID: "id", ClientSecret: "secret"}
+	if err := s.SetCredentials(client); err != nil {
+		t.Fatalf("SetCredentials: %v", err)
+	}
+	gone := Entry{ID: "gmail:gone@example.com", Kind: mail.KindGmail, Email: "gone@example.com"}
+	gone.Token = Token{AccessToken: "a", RefreshToken: "r"}
+	kept := Entry{ID: "gmail:kept@example.com", Kind: mail.KindGmail, Email: "kept@example.com"}
+	kept.Token = Token{RefreshToken: "r2"}
+	for _, e := range []Entry{gone, kept} {
+		if err := s.Upsert(e); err != nil {
+			t.Fatalf("Upsert %q: %v", e.ID, err)
+		}
+	}
+
+	if err := s.Remove(gone.ID); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, ok := s.Entry(gone.ID); ok {
+		t.Fatal("removed account is still listed")
+	}
+	if _, ok := s.Token(gone.ID); ok {
+		t.Fatal("removed account kept its token")
+	}
+	if got, ok := s.Entry(kept.ID); !ok || got.Token != kept.Token {
+		t.Fatalf("other account = %+v/%v, want %+v", got, ok, kept)
+	}
+	if o, ok := s.Credentials(mail.KindGmail); !ok || o != client {
+		t.Fatalf("credentials = %+v/%v, want them kept", o, ok)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if _, ok := reopened.Entry(gone.ID); ok {
+		t.Fatal("removed account came back after reopen")
+	}
+	if list := reopened.List(); len(list) != 1 || list[0].ID != kept.ID {
+		t.Fatalf("List = %+v, want only %q", list, kept.ID)
+	}
+	if o, ok := reopened.Credentials(mail.KindGmail); !ok || o != client {
+		t.Fatalf("credentials after reopen = %+v/%v, want them kept", o, ok)
+	}
+
+	if err := s.Remove(gone.ID); !errors.Is(err, ErrNotExist) {
+		t.Fatalf("Remove(unknown) = %v, want ErrNotExist", err)
+	}
+}
+
 func TestWriteUsesOwnerOnlyPermissions(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(dir)

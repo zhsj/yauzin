@@ -32,7 +32,7 @@
 ### 3.1 Gmail 只读接入（`internal/mail/gmail`）
 
 - **授权**：用户自带 Google Cloud「桌面应用」OAuth 客户端，在「设置 → 账号 → 添加账号」中填写 Client ID / Secret。流程是授权码 + PKCE（`oauth2.GenerateVerifier` / `S256ChallengeOption`），回调走 `http://127.0.0.1:<随机端口>/oauth2/callback` 的一次性本地服务；scope 为 `gmail.readonly` + `userinfo.profile`（不加 `openid`：不需要 ID Token），并带 `access_type=offline` 与 `prompt=consent` 以取得 refresh token。没有 refresh token 视为授权失败。授权链接不再自动交给浏览器，而是显示在对话框里（只读可选中，另有「复制链接」「在浏览器中打开」按钮），回环回调仍要求浏览器在本机。姓名取自 `https://www.googleapis.com/oauth2/v3/userinfo`，属于尽力而为：旧授权没有 profile scope 时该请求失败只记告警，账号仍以邮箱显示，重新登录一次即补齐。授权码、令牌、client secret、含密码的代理地址一律不写日志。
-- **存储**：`accounts.json`（与 `settings.json` 同目录，0600，临时文件 + rename 原子写）保存 `oauth{provider, clientId, clientSecret}` 与每账号 `{id,kind,email,name,useProxy,token{accessToken,refreshToken,tokenType,expiresAt}}`；`provider`/`kind` 都写 `gmail`（`oauth.provider` 标明凭据属于哪个后端，`kind` 复现 `mail.Kind`）。`accounts.Store.Credentials(kind)` 只在 `provider` 匹配时返回客户端，`Upsert` 拒绝空 `kind`。文件是人可读的显式格式，不兼容旧版无 `provider`/`kind` 的文件：旧条目在启动时跳过、旧凭据不被读取，重新登录一次即写出新格式（不做迁移）。`id` 为 `gmail:` + 小写邮箱，重复登录同一邮箱即覆盖（重新授权）。`name` 来自 userinfo，为空时 UI 回退显示邮箱；重新登录取不到姓名时保留已存的值。账号行尾的刷新按钮复用已存客户端凭据重新授权，若授权得到的邮箱与目标账号不一致则报错且不写盘。一个 `*accounts.Store` 同时被 UI 与所有后端持有，后端刷新令牌后立即回写。文件损坏只告警并退化为「仅 demo 账号」，不阻止启动。
+- **存储**：`accounts.json`（与 `settings.json` 同目录，0600，临时文件 + rename 原子写）保存 `oauth{provider, clientId, clientSecret}` 与每账号 `{id,kind,email,name,useProxy,token{accessToken,refreshToken,tokenType,expiresAt}}`；`provider`/`kind` 都写 `gmail`（`oauth.provider` 标明凭据属于哪个后端，`kind` 复现 `mail.Kind`）。`accounts.Store.Credentials(kind)` 只在 `provider` 匹配时返回客户端，`Upsert` 拒绝空 `kind`。文件是人可读的显式格式，不兼容旧版无 `provider`/`kind` 的文件：旧条目在启动时跳过、旧凭据不被读取，重新登录一次即写出新格式（不做迁移）。`id` 为 `gmail:` + 小写邮箱，重复登录同一邮箱即覆盖（重新授权）。`name` 来自 userinfo，为空时 UI 回退显示邮箱；重新登录取不到姓名时保留已存的值。账号行尾的刷新按钮复用已存客户端凭据重新授权，若授权得到的邮箱与目标账号不一致则报错且不写盘。同一行尾的垃圾桶是两段式删除：首次点击原地变为「确认删除」，再点一次才从 `accounts.json` 移除该条目与令牌（`oauth` 客户端凭据保留；demo 账号不在文件里，不提供删除）。删除当前使用的账号会让邮箱进入空状态（文件夹、列表、阅读器清空，顶栏回到品牌名），下一个账号由用户在顶栏账号菜单选择。设置页不再高亮当前账号：切换标记只保留在顶栏菜单里。一个 `*accounts.Store` 同时被 UI 与所有后端持有，后端刷新令牌后立即回写。文件损坏只告警并退化为「仅 demo 账号」，不阻止启动。
 - **代理**：代理地址是通用设置（`settings.json` 的 `proxy`，在「设置 → 通用 → 网络 → 代理」维护），账号条目只记 `useProxy`。保存代理后，使用代理的 Gmail 后端被关闭并重建（先取消在途请求），新 Transport 立即生效。`net/url` 只接受 `http` / `https` / `socks5` 且必须有 host 与端口；`socks5` 由 `http.Transport` 原生支持（`socks5h` 不接受：net/http 没有对应 dialer）。回环回调不经代理。
 - **请求日志**：每个账号的每次 HTTP 请求在 DEBUG 级别各记一行 `gmail request`，字段为 `account`（账号 ID，新增账号授权时为 `-`）、`method`、`endpoint`（host + path，不含 query）与 `status`；传输层失败时改记 `err`、不记状态。日志装在 `transport.go` 的 `http.RoundTripper` 上，覆盖单次 REST、batch、令牌刷新与授权交换；包装只克隆 `*http.Client`，不改 `http.DefaultClient` 或测试注入的 client。级别来自「设置 → 通用 → 日志」（`settings.json` 的 `logLevel`），默认 `info`，改后对运行中的后端立即生效。
 - **读取映射**：Gmail 系统标签 `INBOX/STARRED/SENT/TRASH` 映射为 `inbox/starred/sent/trash` 与对应 `FolderKind`（名称留给 UI 按 kind 翻译），`DRAFT/SPAM/IMPORTANT/UNREAD/CATEGORY_*` 不展示；用户标签保留 Gmail label ID 与名称；`labels.list` 返回的是部分资源（只有 id/name/type），因此未读数与颜色来自一次 **batch** 请求：`POST /batch/gmail/v1`（multipart/mixed）里每个子请求是 `labels.get?fields=messagesUnread,color/backgroundColor`，单批最多 100 个子请求、超出则分片，子请求用 `Content-ID` 索引回填，响应乱序也能对应。一次文件夹加载因此是 2 个 HTTP 请求；单个子请求失败（标签刚被删除）只告警并按 0 显示，全部失败才报错。列表用 `threads.list`，随后用同样的一次 **batch** 请求补全本页每个会话的 `threads.get?format=metadata`（参与者、未读数、星标、附件标记与最新时间），单批最多 100 个子请求、超出则分片，同样按 `Content-ID` 回填并按 list 顺序输出；子请求 404（会话在两次调用之间被删除）只丢弃该行，其它子请求失败或整批失败则整页报错，空页不发 batch。一次列表加载因此是 `1 + ceil(N/100)` 个 HTTP 请求。`Total` 取 `resultSizeEstimate`，缺省或用空时为 -1。正文用 `format=full` 递归解析 MIME：首个 `text/plain` 与首个 `text/html` 作正文，带 `filename` 的部件只留元数据（附件下载不在本期范围）。
@@ -329,7 +329,7 @@ internal/ui/app_lifecycle.go   窗口生命周期、post 队列、临时目录
 internal/ui/app_data.go        账号、文件夹、分页与加载
 internal/ui/app_thread.go      会话打开与批量动作
 internal/ui/app_overlay.go     帧骨架、指针区域与浮层编排
-internal/ui/app_settings.go    设置读写与语言/装饰/性能/日志级别/代理
+internal/ui/app_settings.go    设置读写与语言/装饰/性能/日志级别/代理、账号删除
 internal/ui/errors.go          错误分类 → i18n 键映射
 internal/ui/keys.go            键盘路由、列表光标与快捷键
 internal/ui/shell.go           顶栏 + 侧栏/内容区两栏布局
@@ -349,7 +349,7 @@ internal/ui/reader.go          阅读器容器与工具栏
 internal/ui/messagecard.go     可折叠消息卡片
 internal/ui/compose_view.go    写信浮层布局
 internal/ui/compose_actions.go 发送、附件暂存与丢弃
-internal/ui/settings.go        设置浮层（通用/账号/快捷键，含网络代理与日志级别）
+internal/ui/settings.go        设置浮层（通用/账号/快捷键，含网络代理、日志级别与两段式删除账号）
 internal/ui/account_add.go     添加账号 / 重新登录浮层（类型选择、授权链接复制与打开）
 internal/ui/menu.go            下拉菜单
 internal/ui/status.go          轻量状态条

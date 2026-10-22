@@ -340,6 +340,124 @@ func TestSettingsSwitchKeepsLanguageListOpen(t *testing.T) {
 	}
 }
 
+// TestSettingsAccountRowsOfferDelete wires the delete control to stored
+// accounts only: the demo mailbox lives in memory and would come back on the
+// next start, so it must not offer one, and the add row is a separate action.
+func TestSettingsAccountRowsOfferDelete(t *testing.T) {
+	target := mail.Account{ID: "gmail:user@example.com", Kind: mail.KindGmail, Email: "user@example.com"}
+	a, _ := newDeleteTestApp(t, []mail.Account{demoAccounts()[0], target})
+	s := newSettingsView(a)
+
+	if len(s.accRows) != 3 {
+		t.Fatalf("account rows = %d, want two accounts and the add row", len(s.accRows))
+	}
+	if s.accRows[0].remove != nil {
+		t.Fatal("the demo account got a delete button")
+	}
+	if s.accRows[1].remove == nil {
+		t.Fatal("the stored account has no delete button")
+	}
+	if s.accRows[2].remove != nil {
+		t.Fatal("the add-account row got a delete button")
+	}
+}
+
+// TestSettingsAccountRowsDoNotMarkTheActiveOne keeps the panel neutral: which
+// mailbox is in use is answered by the check mark of the top bar's account
+// menu, not by a bold title or a check mark in this list.
+func TestSettingsAccountRowsDoNotMarkTheActiveOne(t *testing.T) {
+	target := mail.Account{ID: "gmail:user@example.com", Kind: mail.KindGmail, Email: "user@example.com"}
+	a, _ := newDeleteTestApp(t, []mail.Account{demoAccounts()[0], target})
+	s := newSettingsView(a)
+
+	for i, row := range s.accRows {
+		if row.active {
+			t.Fatalf("row %d is marked as the current account", i)
+		}
+	}
+}
+
+// TestSettingsAccountDeleteNeedsConfirmation pins the two-step delete: the
+// trash button only arms the row, and the confirmation that replaces it in
+// place performs the delete and leaves the panel on the accounts page.
+func TestSettingsAccountDeleteNeedsConfirmation(t *testing.T) {
+	target := mail.Account{ID: "gmail:user@example.com", Kind: mail.KindGmail, Email: "user@example.com"}
+	a, store := newDeleteTestApp(t, []mail.Account{demoAccounts()[0], target})
+	s := newSettingsView(a)
+	a.showOverlay(s)
+	s.page = settingsTabAccounts
+
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+	s.Layout(gtx, a)
+	ops.Reset()
+
+	rm := s.accRows[1].remove
+	if rm == nil {
+		t.Fatal("the stored account has no delete control")
+	}
+	rm.trash.click.Click()
+	s.Layout(gtx, a)
+	if !rm.armed {
+		t.Fatal("the trash button did not arm the confirmation")
+	}
+	if _, ok := store.Entry(target.ID); !ok {
+		t.Fatal("the first click deleted the account")
+	}
+	ops.Reset()
+
+	rm.confirm.Click()
+	s.Layout(gtx, a)
+
+	if _, ok := store.Entry(target.ID); ok {
+		t.Fatal("the account survived the confirmation")
+	}
+	panel, ok := a.overlay.(*settingsView)
+	if !ok {
+		t.Fatalf("overlay = %T after the delete, want the settings panel", a.overlay)
+	}
+	if panel.page != settingsTabAccounts {
+		t.Fatalf("page = %d after the delete, want the accounts tab", panel.page)
+	}
+	if got := len(panel.accRows); got != 2 {
+		t.Fatalf("account rows = %d after the delete, want the demo row and the add row", got)
+	}
+}
+
+// TestSettingsDisarmsDeleteOnTabSwitch makes sure a pending confirmation does
+// not survive a page change: a row must never stay one click away from being
+// deleted while the user is looking at a different page.
+func TestSettingsDisarmsDeleteOnTabSwitch(t *testing.T) {
+	target := mail.Account{ID: "gmail:user@example.com", Kind: mail.KindGmail, Email: "user@example.com"}
+	a, store := newDeleteTestApp(t, []mail.Account{demoAccounts()[0], target})
+	s := newSettingsView(a)
+	a.showOverlay(s)
+	s.page = settingsTabAccounts
+
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+	s.Layout(gtx, a)
+	ops.Reset()
+
+	rm := s.accRows[1].remove
+	rm.trash.click.Click()
+	s.Layout(gtx, a)
+	if !rm.armed {
+		t.Fatal("the trash button did not arm the confirmation")
+	}
+	ops.Reset()
+
+	s.tabs[settingsTabGeneral].click.Click()
+	s.Layout(gtx, a)
+
+	if rm.armed {
+		t.Fatal("leaving the accounts page kept the confirmation armed")
+	}
+	if _, ok := store.Entry(target.ID); !ok {
+		t.Fatal("switching pages deleted the account")
+	}
+}
+
 // TestSettingsRowSubtitleFitsCell keeps a wrapped explanation inside an exact
 // row cell: a caller that hands the row a fixed height must get that height
 // back, never more.

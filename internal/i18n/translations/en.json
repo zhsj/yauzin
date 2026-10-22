@@ -53,6 +53,8 @@
   "settings.accountSignInFailed": "Could not add the account.",
   "settings.accountUseProxy": "Connect through the proxy",
   "settings.accountRelogin": "Sign in again",
+  "settings.accountDelete": "Delete account",
+  "settings.accountDeleteConfirm": "Confirm delete",
   "settings.accountRelauthTitle": "Sign in again",
   "settings.accountAuthURL": "Authorization link",
   "settings.accountAuthHint": "Open this link in a browser and approve access. The app waits for the answer on 127.0.0.1, so the browser has to run on this machine.",
@@ -167,6 +169,8 @@
   "toast.accountSwitched": "Switched to {{.Name}}",
   "toast.accountAdded": "Added {{.Name}}",
   "toast.accountUpdated": "Updated {{.Name}}",
+  "toast.accountRemoved": "Removed {{.Name}}",
+  "toast.accountRemoveFailed": "Could not delete the account",
   "toast.linkCopied": "Link copied",
   "toast.proxySaved": "Proxy setting saved",
 

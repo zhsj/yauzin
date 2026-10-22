@@ -95,7 +95,68 @@ type settingsRow struct {
 	// action is a trailing icon button for rows that are informational but own
 	// one operation, such as re-authorizing an account.
 	action *iconButton
+	// remove is the two-step delete control of an account row. It sits after
+	// action, so the destructive operation stays the rightmost one.
+	remove *rowRemove
 	onTap  func()
+}
+
+// rowRemove is the two-step delete control at the end of an account row. The
+// trash button only arms it; the danger label that replaces the button in place
+// performs the delete, so a stray click cannot drop an account. The armed state
+// belongs to the panel: switching pages disarms it, and rebuilding the panel
+// drops it with the old rows.
+type rowRemove struct {
+	trash    *iconButton
+	confirm  widget.Clickable
+	armed    bool
+	onDelete func()
+}
+
+func newRowRemove(onDelete func()) *rowRemove {
+	r := &rowRemove{onDelete: onDelete}
+	r.trash = newIconButton(iconDelete, 28, func() { r.armed = true })
+	r.trash.setTip(i18n.T("settings.accountDelete"))
+	return r
+}
+
+func (r *rowRemove) disarm() { r.armed = false }
+
+func (r *rowRemove) Layout(gtx layout.Context, th *theme) layout.Dimensions {
+	if !r.armed {
+		return r.trash.Layout(gtx, th)
+	}
+	if r.confirm.Clicked(gtx) {
+		r.armed = false
+		if r.onDelete != nil {
+			r.onDelete()
+		}
+		invalidateAfterTap(gtx)
+	}
+	return r.confirm.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		// The label is measured first so the button hugs it, and the fixed
+		// height keeps the row from jumping when the trash gives way to it.
+		measure := gtx
+		measure.Constraints = layout.Constraints{Max: image.Pt(1<<16, 1<<16)}
+		macro := op.Record(gtx.Ops)
+		label := th.text(measure, i18n.T("settings.accountDeleteConfirm"), 12, colDanger, font.Medium, 1)
+		call := macro.Stop()
+
+		pad := gtx.Dp(10)
+		size := image.Pt(label.Size.X+2*pad, gtx.Dp(28))
+		gtx.Constraints = layout.Exact(size)
+		th.cursor(gtx, pointer.CursorPointer, size)
+		fill := colSurface
+		if r.confirm.Hovered() {
+			fill = colDangerSoft
+		}
+		strokeRect(gtx, fill, colDanger, 6, 1)
+		layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			call.Add(gtx.Ops)
+			return label
+		})
+		return layout.Dimensions{Size: size}
+	})
 }
 
 // logLevels lists the selectable console levels from quietest to noisiest,
@@ -237,14 +298,13 @@ func newSettingsView(a *App) *settingsView {
 		if account.Email != "" && account.Email != account.DisplayName() {
 			subtitle = account.Email
 		}
-		// Account rows are informational: the check mark shows the active
-		// mailbox, switching lives in the top bar's account menu. Without an
-		// action the row gets no hover and no hand cursor either.
+		// Account rows are informational: which mailbox is in use is answered
+		// by the check mark of the top bar's account menu, not here, so the
+		// rows stay plain and a click on them does nothing.
 		row := &settingsRow{
 			lead:     &account,
 			title:    account.DisplayName(),
 			subtitle: subtitle,
-			active:   account.ID == a.activeAcc,
 		}
 		// Only a real Gmail account has an OAuth grant to refresh; the demo
 		// mailbox of the mock backend has nothing to sign in to.
@@ -252,6 +312,12 @@ func newSettingsView(a *App) *settingsView {
 			target := account
 			row.action = newIconButton(iconRefresh, 28, func() { a.showRelauth(target) })
 			row.action.setTip(i18n.T("settings.accountRelogin"))
+		}
+		// Only a stored account can be deleted: the demo mailbox lives in
+		// memory and would come back on the next start.
+		if a.accountStore != nil && account.ID != demoAccountID {
+			target := account
+			row.remove = newRowRemove(func() { a.removeAccount(target) })
 		}
 		s.accRows = append(s.accRows, row)
 	}
@@ -323,10 +389,21 @@ func (s *settingsView) tabsBar(gtx layout.Context, th *theme) layout.Dimensions 
 	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx, children...)
 }
 
+// disarmRemove cancels a pending delete confirmation. Leaving the accounts
+// page must not keep a row one click away from being deleted.
+func (s *settingsView) disarmRemove() {
+	for _, row := range s.accRows {
+		if row.remove != nil {
+			row.remove.disarm()
+		}
+	}
+}
+
 func (s *settingsView) tab(gtx layout.Context, th *theme, i int) layout.Dimensions {
 	t := &s.tabs[i]
 	if t.click.Clicked(gtx) && s.page != i {
 		s.page = i
+		s.disarmRemove()
 		invalidateAfterTap(gtx)
 	}
 	return t.click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -842,6 +919,13 @@ func (r *settingsRow) content(gtx layout.Context, th *theme) layout.Dimensions {
 			children = append(children,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return action.Layout(gtx, th) }),
+			)
+		}
+		if r.remove != nil {
+			remove := r.remove
+			children = append(children,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return remove.Layout(gtx, th) }),
 			)
 		}
 		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx, children...)
