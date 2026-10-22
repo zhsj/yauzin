@@ -21,9 +21,23 @@ import (
 	"github.com/zhsj/yauzin/internal/mail"
 )
 
-// readonlyScope is the only scope this backend asks for: the account can be
-// read but not modified, which matches the operations Service implements.
-const readonlyScope = "https://www.googleapis.com/auth/gmail.readonly"
+const (
+	// readonlyScope keeps the account readable but not modifiable, which
+	// matches the operations Service implements.
+	readonlyScope = "https://www.googleapis.com/auth/gmail.readonly"
+	// profileScope is what makes the Google account name available. It is the
+	// only addition: no ID token is needed, so openid stays out of the grant and
+	// the OAuth 2.0 userinfo endpoint returns the name for this scope alone.
+	profileScope = "https://www.googleapis.com/auth/userinfo.profile"
+)
+
+// defaultUserInfoURL is the OAuth 2.0 profile endpoint of Google.
+const defaultUserInfoURL = "https://www.googleapis.com/oauth2/v3/userinfo"
+
+// requestedScopes is the grant of a sign-in. Growing this list makes Google
+// show the consent screen again, so accounts authorized with an older list have
+// to sign in once more before their name is known.
+func requestedScopes() []string { return []string{readonlyScope, profileScope} }
 
 // googleEndpoint is Google's installed-application OAuth endpoint. The client
 // credentials travel in the request body (AuthStyleInParams), which is what
@@ -48,8 +62,13 @@ type SignInOptions struct {
 	// HTTPClient carries the token exchange and the profile request. A client
 	// with a proxy is how an account that opts into the shared proxy signs in.
 	HTTPClient *http.Client
-	// OpenBrowser hands the authorization URL to the system browser. The UI
-	// passes openPath; tests pass a fake that performs the redirect itself.
+	// OnAuthURL receives the consent URL as soon as the loopback listener is
+	// ready. The UI shows it so the user can copy it or open it with a button;
+	// it is called on the sign-in goroutine and must not block.
+	OnAuthURL func(url string)
+	// OpenBrowser hands the authorization URL to the system browser. Optional:
+	// a caller that presents the URL itself leaves it nil, and then OnAuthURL
+	// has to be set instead.
 	OpenBrowser func(url string) error
 	// Timeout bounds the wait for the browser callback. Zero means defaultTimeout.
 	Timeout time.Duration
@@ -59,6 +78,10 @@ type SignInOptions struct {
 type SignInResult struct {
 	// Email is the address the token belongs to, from users.getProfile.
 	Email string
+	// Name is the Google account name. It is empty when the grant carries no
+	// profileScope (an account authorized before it was requested) or the
+	// profile request failed.
+	Name  string
 	Token accounts.Token
 }
 
@@ -74,6 +97,7 @@ type flow struct {
 	authURL     string
 	tokenURL    string
 	apiBaseURL  string
+	userInfoURL string
 	client      *http.Client
 	openBrowser func(string) error
 	listen      func(network, addr string) (net.Listener, error)
@@ -81,11 +105,12 @@ type flow struct {
 
 func defaultFlow() flow {
 	return flow{
-		authURL:    googleEndpoint.AuthURL,
-		tokenURL:   googleEndpoint.TokenURL,
-		apiBaseURL: defaultBaseURL,
-		client:     http.DefaultClient,
-		listen:     net.Listen,
+		authURL:     googleEndpoint.AuthURL,
+		tokenURL:    googleEndpoint.TokenURL,
+		apiBaseURL:  defaultBaseURL,
+		userInfoURL: defaultUserInfoURL,
+		client:      http.DefaultClient,
+		listen:      net.Listen,
 	}
 }
 
@@ -129,7 +154,7 @@ func signIn(ctx context.Context, f flow, opts SignInOptions) (SignInResult, erro
 		ClientID:     clientID,
 		ClientSecret: strings.TrimSpace(opts.ClientSecret),
 		RedirectURL:  redirectURL,
-		Scopes:       []string{readonlyScope},
+		Scopes:       requestedScopes(),
 		Endpoint: oauth2.Endpoint{
 			AuthURL:   f.authURL,
 			TokenURL:  f.tokenURL,
@@ -171,11 +196,18 @@ func signIn(ctx context.Context, f flow, opts SignInOptions) (SignInResult, erro
 	if opts.OpenBrowser != nil {
 		f.openBrowser = opts.OpenBrowser
 	}
-	if f.openBrowser == nil {
-		return SignInResult{}, fmt.Errorf("%w: no browser opener", mail.ErrInvalidArgument)
+	if opts.OnAuthURL == nil && f.openBrowser == nil {
+		// Without a way to reach the consent page the flow would wait for a
+		// callback nobody can trigger.
+		return SignInResult{}, fmt.Errorf("%w: no browser opener or authorization URL handler", mail.ErrInvalidArgument)
 	}
-	if err := f.openBrowser(authURL); err != nil {
-		return SignInResult{}, fmt.Errorf("gmail: open browser: %w", err)
+	if opts.OnAuthURL != nil {
+		opts.OnAuthURL(authURL)
+	}
+	if f.openBrowser != nil {
+		if err := f.openBrowser(authURL); err != nil {
+			return SignInResult{}, fmt.Errorf("gmail: open browser: %w", err)
+		}
 	}
 
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -211,7 +243,7 @@ func signIn(ctx context.Context, f flow, opts SignInOptions) (SignInResult, erro
 	if err != nil {
 		return SignInResult{}, err
 	}
-	return SignInResult{Email: email, Token: tokenFromOAuth(tok)}, nil
+	return SignInResult{Email: email, Name: profileName(exchangeCtx, f, tok), Token: tokenFromOAuth(tok)}, nil
 }
 
 // callbackHandler serves the single redirect Google makes after consent.
@@ -288,6 +320,22 @@ func profileEmail(ctx context.Context, f flow, tok *oauth2.Token) (string, error
 		return "", fmt.Errorf("%w: profile has no email address", mail.ErrUnauthorized)
 	}
 	return profile.EmailAddress, nil
+}
+
+// profileName reads the display name of the authorized account. It is best
+// effort: the profile endpoint rejects a grant without profileScope, which is
+// exactly what an account authorized before the scope existed carries, so the
+// caller falls back to the address instead of failing the sign-in.
+func profileName(ctx context.Context, f flow, tok *oauth2.Token) string {
+	client := oauth2.NewClient(withHTTPClient(ctx, f.client), oauth2.StaticTokenSource(tok))
+	var profile struct {
+		Name string `json:"name"`
+	}
+	if err := getJSON(ctx, client, f.userInfoURL, &profile); err != nil {
+		slog.Warn("gmail: read profile name", "err", err)
+		return ""
+	}
+	return strings.TrimSpace(profile.Name)
 }
 
 // getJSON performs one authorized GET and decodes a JSON object.

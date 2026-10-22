@@ -15,12 +15,18 @@ import (
 	"github.com/zhsj/yauzin/internal/mail"
 )
 
-// oauthServer serves the token endpoint and the profile endpoint of a sign-in.
+// oauthServer serves the token endpoint, the profile endpoint and the userinfo
+// endpoint of a sign-in.
 type oauthServer struct {
-	token   *httptest.Server
-	profile *httptest.Server
-	form    url.Values
-	auths   []string
+	token    *httptest.Server
+	profile  *httptest.Server
+	userinfo *httptest.Server
+	form     url.Values
+	auths    []string
+	// userinfoStatus and userinfoBody shape the name answer; zero values mean a
+	// successful request for a known name.
+	userinfoStatus int
+	userinfoBody   string
 }
 
 func newOAuthServer(t *testing.T, tokenBody string, tokenStatus int) *oauthServer {
@@ -40,6 +46,21 @@ func newOAuthServer(t *testing.T, tokenBody string, tokenStatus int) *oauthServe
 		writeJSON(t, w, `{"emailAddress":"user@example.com"}`)
 	}))
 	t.Cleanup(o.profile.Close)
+	o.userinfo = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/userinfo" {
+			t.Errorf("userinfo path = %q", r.URL.Path)
+		}
+		if o.userinfoStatus != 0 && o.userinfoStatus != http.StatusOK {
+			writeErrorJSON(t, w, o.userinfoStatus, `{"error":{"code":403,"message":"insufficient scope"}}`)
+			return
+		}
+		body := o.userinfoBody
+		if body == "" {
+			body = `{"name":"Ada Chen","email":"user@example.com"}`
+		}
+		writeJSON(t, w, body)
+	}))
+	t.Cleanup(o.userinfo.Close)
 	return o
 }
 
@@ -56,8 +77,8 @@ func browse(t *testing.T, extra url.Values) func(string) error {
 			return nil
 		}
 		q := u.Query()
-		if got := q.Get("scope"); got != readonlyScope {
-			t.Errorf("scope = %q, want %q", got, readonlyScope)
+		if got := strings.Fields(q.Get("scope")); len(got) != 2 || got[0] != readonlyScope || got[1] != profileScope {
+			t.Errorf("scope = %q, want %q and %q", q.Get("scope"), readonlyScope, profileScope)
 		}
 		if got := q.Get("code_challenge_method"); got != "S256" {
 			t.Errorf("code_challenge_method = %q, want S256", got)
@@ -92,6 +113,7 @@ func testFlow(o *oauthServer) flow {
 		authURL:     "https://auth.example/authorize",
 		tokenURL:    o.token.URL,
 		apiBaseURL:  o.profile.URL,
+		userInfoURL: o.userinfo.URL + "/userinfo",
 		client:      http.DefaultClient,
 		openBrowser: func(string) error { return nil },
 	}
@@ -114,6 +136,9 @@ func TestSignInCompletesThePKCEFlow(t *testing.T) {
 	}
 	if res.Email != "user@example.com" {
 		t.Fatalf("email = %q", res.Email)
+	}
+	if res.Name != "Ada Chen" {
+		t.Fatalf("name = %q, want the Google profile name", res.Name)
 	}
 	if res.Token.AccessToken != "access" || res.Token.RefreshToken != "refresh" {
 		t.Fatalf("token = %+v", res.Token)
@@ -141,6 +166,69 @@ func TestSignInCompletesThePKCEFlow(t *testing.T) {
 	}
 	if len(o.auths) != 1 || o.auths[0] != "Bearer access" {
 		t.Fatalf("profile authorizations = %v", o.auths)
+	}
+}
+
+func TestSignInWithoutProfileScopeStillSucceeds(t *testing.T) {
+	o := newOAuthServer(t, tokenOK, http.StatusOK)
+	// An account authorized before profileScope existed carries a grant the
+	// userinfo endpoint rejects; the sign-in must still go through.
+	o.userinfoStatus = http.StatusForbidden
+	f := testFlow(o)
+	f.openBrowser = browse(t, url.Values{"code": {"test-code"}})
+
+	res, err := signIn(context.Background(), f, SignInOptions{
+		ClientID:    "client-id",
+		OpenBrowser: f.openBrowser,
+		Timeout:     2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("signIn: %v", err)
+	}
+	if res.Name != "" {
+		t.Fatalf("name = %q, want empty without profile scope", res.Name)
+	}
+	if res.Email != "user@example.com" {
+		t.Fatalf("email = %q", res.Email)
+	}
+}
+
+func TestSignInReportsTheAuthorizationURL(t *testing.T) {
+	o := newOAuthServer(t, tokenOK, http.StatusOK)
+	f := testFlow(o)
+	// No browser: the caller shows the URL and opens it on demand.
+	f.openBrowser = nil
+
+	var got string
+	res, err := signIn(context.Background(), f, SignInOptions{
+		ClientID: "client-id",
+		OnAuthURL: func(raw string) {
+			got = raw
+			if err := browse(t, url.Values{"code": {"test-code"}})(raw); err != nil {
+				t.Errorf("browse: %v", err)
+			}
+		},
+		Timeout: 2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("signIn: %v", err)
+	}
+	if res.Email != "user@example.com" {
+		t.Fatalf("email = %q", res.Email)
+	}
+	if !strings.HasPrefix(got, "https://auth.example/authorize?") || !strings.Contains(got, "code_challenge=") {
+		t.Fatalf("authorization URL = %q", got)
+	}
+}
+
+func TestSignInNeedsAwayToReachTheConsentPage(t *testing.T) {
+	o := newOAuthServer(t, tokenOK, http.StatusOK)
+	f := testFlow(o)
+	f.openBrowser = nil
+
+	_, err := signIn(context.Background(), f, SignInOptions{ClientID: "client-id", Timeout: time.Second})
+	if !errors.Is(err, mail.ErrInvalidArgument) {
+		t.Fatalf("error = %v, want ErrInvalidArgument", err)
 	}
 }
 
@@ -235,9 +323,9 @@ func TestSignInUsesTheInjectedHTTPClient(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("signIn: %v", err)
 	}
-	// Token exchange and profile request, both through the same client.
-	if got := requests.Load(); got < 2 {
-		t.Fatalf("client requests = %d, want at least 2", got)
+	// Token exchange, address and name, all through the same client.
+	if got := requests.Load(); got < 3 {
+		t.Fatalf("client requests = %d, want at least 3", got)
 	}
 }
 
