@@ -224,10 +224,12 @@ func (a *App) removeAccount(acc mail.Account) {
 }
 
 // clearAccountView empties the mailbox after the account showing it was
-// removed. activeFolder stays on the inbox, so switching to another account
-// from the menu lands where it always does.
+// removed. The folder goes back to the inbox, so switching to another account
+// from the menu lands where it always does: a label of the account that just
+// went away must not be carried over.
 func (a *App) clearAccountView() {
 	a.activeAcc = ""
+	a.activeFolder = "inbox"
 	a.cancelRequests()
 	a.folders = nil
 	a.side.reload()

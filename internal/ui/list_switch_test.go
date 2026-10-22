@@ -1,9 +1,14 @@
 package ui
 
 import (
+	"context"
+	"sync"
 	"testing"
 
 	"gioui.org/layout"
+
+	"github.com/zhsj/yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/prefs"
 )
 
 // assertListCleared checks the state every folder, query and account change
@@ -65,4 +70,77 @@ func TestSetQueryClearsTheListImmediately(t *testing.T) {
 		t.Fatalf("query = %q, want invoice", a.query)
 	}
 	assertListCleared(t, a)
+}
+
+// listRecorderService remembers the list requests the UI sent, so a test can
+// assert which folder the mailbox was asked for. The worker goroutines call it
+// while the test reads it, hence the lock.
+type listRecorderService struct {
+	fakeService
+	mu   sync.Mutex
+	reqs []mail.ListRequest
+}
+
+func (s *listRecorderService) ListThreads(_ context.Context, req mail.ListRequest) (mail.ThreadPage, error) {
+	s.mu.Lock()
+	s.reqs = append(s.reqs, req)
+	s.mu.Unlock()
+	return mail.ThreadPage{}, nil
+}
+
+// lastFolder returns the folder of the newest request, or "" before the first.
+func (s *listRecorderService) lastFolder() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.reqs) == 0 {
+		return ""
+	}
+	return s.reqs[len(s.reqs)-1].FolderID
+}
+
+// TestSwitchAccountResetsTheFolder covers the label of the account being left:
+// its id belongs to that mailbox, so the next account must be asked for its
+// inbox instead of a folder it does not know.
+func TestSwitchAccountResetsTheFolder(t *testing.T) {
+	accounts := []mail.Account{
+		{ID: "one", Kind: mail.KindGmail, Email: "one@example.com"},
+		{ID: "two", Kind: mail.KindGmail, Email: "two@example.com"},
+	}
+	recorders := make(map[string]*listRecorderService, len(accounts))
+	a := newAppWith(prefs.Settings{}, appOptions{
+		accounts: accounts,
+		newService: func(acc mail.Account) mail.Service {
+			svc := &listRecorderService{}
+			recorders[acc.ID] = svc
+			return svc
+		},
+	})
+	// The first account is showing a label when the switch happens.
+	a.folders = []mail.Folder{
+		{ID: "inbox", Kind: mail.FolderInbox},
+		{ID: "work", Name: "Work", Kind: mail.FolderLabel},
+	}
+	a.side.reload()
+	a.activeFolder = "work"
+	seedList(a)
+
+	a.switchAccount("two")
+
+	if a.activeFolder != "inbox" {
+		t.Fatalf("active folder = %q after the switch, want inbox", a.activeFolder)
+	}
+	if a.folders != nil {
+		t.Fatalf("folders = %+v after the switch, want them cleared", a.folders)
+	}
+	if len(a.labels) != 0 {
+		t.Fatalf("label index = %d entries after the switch, want none", len(a.labels))
+	}
+	assertListCleared(t, a)
+
+	waitFor(t, a, "the first page of the second account", func() bool {
+		return recorders["two"].lastFolder() != ""
+	})
+	if got := recorders["two"].lastFolder(); got != "inbox" {
+		t.Fatalf("list requested folder %q, want inbox", got)
+	}
 }

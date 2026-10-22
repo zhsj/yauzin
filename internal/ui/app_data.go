@@ -224,10 +224,15 @@ func (a *App) switchAccount(id string) {
 		return
 	}
 	a.activeAcc = id
-	// Cursors are per account and per folder: the new account starts over.
+	// Cursors, folders and labels are per account: the new account starts over
+	// in its inbox. A label id from the previous account would otherwise be
+	// sent to a backend that does not know it.
+	a.activeFolder = "inbox"
 	a.page, a.tokens = 1, []string{""}
 	a.query = ""
 	a.top.clearSearch()
+	a.folders = nil
+	a.side.reload()
 	a.resetSelection()
 	a.clearList()
 	a.hideOverlay()

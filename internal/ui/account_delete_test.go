@@ -99,6 +99,7 @@ func TestRemoveActiveAccountLeavesEmptyMailbox(t *testing.T) {
 	a.activeAcc = target.ID
 	a.folders = []mail.Folder{{ID: "inbox", Kind: mail.FolderInbox}}
 	a.side.reload()
+	a.activeFolder = "work"
 	a.selectedThread = "t1"
 	a.thread = mail.ThreadSummary{ID: "t1"}
 	a.msgs = []*mail.Message{{MessageSummary: mail.MessageSummary{ID: "m1"}}}
@@ -116,6 +117,9 @@ func TestRemoveActiveAccountLeavesEmptyMailbox(t *testing.T) {
 	}
 	if a.folders != nil {
 		t.Fatalf("folders = %+v after the removal, want them cleared", a.folders)
+	}
+	if a.activeFolder != "inbox" {
+		t.Fatalf("active folder = %q after the removal, want inbox", a.activeFolder)
 	}
 	if a.selectedThread != "" || a.thread.ID != "" || a.msgs != nil {
 		t.Fatalf("thread = %q / %q / %d, want the reader cleared", a.selectedThread, a.thread.ID, len(a.msgs))
