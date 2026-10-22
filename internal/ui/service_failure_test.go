@@ -187,6 +187,29 @@ func TestSupersededListRequestIsCancelled(t *testing.T) {
 	}
 }
 
+// TestSupersededSearchRequestIsCancelled mirrors the list case on the search
+// path: submitting a new query must stop the search still in flight.
+func TestSupersededSearchRequestIsCancelled(t *testing.T) {
+	a := testApp(t)
+	defer a.cancelRequests()
+
+	svc := &blockingService{started: make(chan struct{}), canceled: make(chan error, 2)}
+	useService(a, svc)
+
+	a.setQuery("one")
+	<-svc.started
+	a.setQuery("two")
+
+	select {
+	case err := <-svc.canceled:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("superseded search returned %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the superseded search kept running instead of being cancelled")
+	}
+}
+
 func TestMarkThreadReadRevertsOnFailure(t *testing.T) {
 	a := testApp(t)
 	svc := &fakeService{setFlagErr: errors.New("backend down")}
