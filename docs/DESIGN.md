@@ -89,6 +89,7 @@
 - `windowActions` 收集标题栏请求，**帧绘制结束后**统一 `w.Perform`，避免布局中途销毁窗口；Ctrl+W 与标题栏关闭按钮共用这条路径，Ctrl+Q 直接走 `requestQuit()`。
 - `startInitialLoad()` 由 `startOnce` 门禁，首帧加载只跑一次，后续窗口重建不重复。
 - Gio 的 `app.Main()` 在 Linux 不返回，退出必须显式 `cleanupTemp()` + `os.Exit(0)`；不要调用 systray 返回的 `end()`。
+- 生命周期循环之外的结束方式也要收拾现场：`watchInterrupt()` 在 `newApp()` 之后就开始监听 `SIGINT`（`Ctrl+C`，`signal.Notify` 就地注册），收到后先 `cleanupTemp()` 再 `os.Exit(0)`，否则托盘驻留期间被 `Ctrl+C` 停止的运行都会留下临时目录。`SIGTERM`/`SIGHUP` 故意不接管，保留默认行为：桌面会话结束、`kill`、终端挂断都按系统语义立即结束进程，不等待清理。信号路径与 UI goroutine 会并发访问临时目录，`tmpMu` 保护 `tmpDir`，`tmpClosed` 保证清理后不会再建一个新目录。
 
 ## 5. 布局与视觉规格
 
@@ -154,7 +155,7 @@
 - 阅读器只渲染 `text/plain`（可选中复制），HTML 仅提供「在浏览器打开」。选区按 `msg.ID` 变化时重建/清空，避免跨邮件残留。
 - HTML 落盘：文件名 = 净化后的消息 ID（`[A-Za-z0-9._-]`，截断 64）+ 内容 sha256 前 8 字节（防目录穿越、绕开 `file://` 缓存）。
 - CSP 用 `x/net/html` 解析后插到**真实 `<head>` 的第一个子节点**（防注释/脚本里的假 `<head>`），`html.Render` 重新序列化是有意取舍；解析失败走 `wrapperDocument` 安全包裹。策略为 `default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; form-action 'none'; base-uri 'none'`，远程图片/追踪像素故意禁用。
-- 临时目录惰性创建，退出时整体删除。
+- 临时目录惰性创建于 `$XDG_RUNTIME_DIR/yauzin`（0700；该变量缺失、非绝对路径或不可用时回退 `os.MkdirTemp` 到系统临时目录）：会话运行目录在登录会话结束时由系统回收，被 `SIGKILL` 的运行最多留下一个会自动过期的目录，不会在 `/tmp` 里逐次累积。会话内路径固定，首次创建前先删掉上次异常退出留下的同名目录；正常退出与 `Ctrl+C`（`SIGINT`）都会整体删除，删除后 `tempDir()` 返回错误而不再重建。
 - `internal/htmltext` 只服务写信时引用原文；输入上限 1MiB。
 
 ## 9. 国际化
@@ -325,7 +326,7 @@ internal/mail/gmail/           Gmail 只读后端：OAuth（PKCE 回环）、RES
 internal/cmd/gmailgen/         Gmail Discovery 文档 → Go 类型生成器（go generate 入口）
 internal/accounts/             accounts.json：OAuth 凭据（provider）与每账号 kind/令牌/useProxy
 internal/ui/app.go             状态与构造：App 字段、构造器、异步原语
-internal/ui/app_lifecycle.go   窗口生命周期、post 队列、临时目录
+internal/ui/app_lifecycle.go   窗口生命周期、post 队列、临时目录与 Ctrl+C 清理
 internal/ui/app_data.go        账号、文件夹、分页与加载
 internal/ui/app_thread.go      会话打开与批量动作
 internal/ui/app_overlay.go     帧骨架、指针区域与浮层编排

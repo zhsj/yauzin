@@ -2,8 +2,11 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
+	"os/signal"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -56,6 +59,9 @@ func Run() {
 	// created: doing it here as well would only resolve it twice.
 	a := newApp()
 	current.Store(a)
+	// Before the tray and the window loop: an interrupt while the process
+	// sits in the notification area must clean up just like a quit does.
+	a.watchInterrupt()
 
 	t, err := tray.Start(i18n.T("app.brand"), tray.Handlers{
 		OnOpen: a.requestOpen,
@@ -249,6 +255,25 @@ func (a *App) requestQuit() {
 	}
 }
 
+// watchInterrupt removes the scratch directory when the process is stopped
+// with Ctrl+C. Run only cleans up on its own exit path, so without this every
+// interrupted run left its directory behind. Termination and hang-up keep
+// their default action: the interrupt is the one signal a desktop session
+// sends on its way to a restart, so it is the one worth cleaning up for.
+func (a *App) watchInterrupt() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, os.Interrupt)
+	go func() {
+		sig := <-ch
+		slog.Info("terminating on signal", "signal", sig.String())
+		// A second signal ends the process at once, without waiting for a
+		// cleanup that may be slow on a large staging directory.
+		signal.Reset(sig)
+		a.cleanupTemp()
+		os.Exit(0)
+	}()
+}
+
 // refreshTrayIcon mirrors the unread state of the inbox into the notification
 // area: the red seal while mail is waiting, the grey one otherwise.
 func (a *App) refreshTrayIcon() {
@@ -330,11 +355,26 @@ func (a *App) drain() {
 	}
 }
 
+// errTempClosed reports that the scratch directory is gone. The process is
+// exiting by then, and creating another one would leave behind exactly the
+// leftover that the signal handler is about to remove.
+var errTempClosed = errors.New("temporary directory removed")
+
+// runtimeDirName is the directory below $XDG_RUNTIME_DIR that holds the staged
+// attachments and HTML previews of this run.
+const runtimeDirName = "yauzin"
+
+// tempDir returns the scratch directory of this run, creating it on first use.
 func (a *App) tempDir() (string, error) {
+	a.tmpMu.Lock()
+	defer a.tmpMu.Unlock()
+	if a.tmpClosed {
+		return "", errTempClosed
+	}
 	if a.tmpDir != "" {
 		return a.tmpDir, nil
 	}
-	dir, err := os.MkdirTemp("", "yauzin-mail-")
+	dir, err := createTempDir()
 	if err != nil {
 		return "", err
 	}
@@ -342,7 +382,13 @@ func (a *App) tempDir() (string, error) {
 	return dir, nil
 }
 
+// cleanupTemp removes the scratch directory and keeps tempDir from creating a
+// new one. It runs both on the lifecycle loop's exit path and on the signal
+// handler, so it is idempotent and safe to call concurrently.
 func (a *App) cleanupTemp() {
+	a.tmpMu.Lock()
+	defer a.tmpMu.Unlock()
+	a.tmpClosed = true
 	if a.tmpDir == "" {
 		return
 	}
@@ -350,4 +396,37 @@ func (a *App) cleanupTemp() {
 		logErr("cleanup temp dir", err)
 	}
 	a.tmpDir = ""
+}
+
+// createTempDir prefers the private runtime directory of the login session:
+// the system removes it when the session ends, so a run that is killed without
+// ever reaching a cleanup path leaves nothing behind for good.
+func createTempDir() (string, error) {
+	if dir, ok := createRuntimeDir(); ok {
+		return dir, nil
+	}
+	return os.MkdirTemp("", "yauzin-mail-")
+}
+
+// createRuntimeDir creates $XDG_RUNTIME_DIR/yauzin and reports whether it is
+// usable. Nothing in the runtime directory may be trusted: the path is fixed
+// per session, so a directory left by a run that was killed outright is
+// removed first. The single-instance guard runs before the first window exists
+// and makes sure no other process owns it.
+func createRuntimeDir() (string, bool) {
+	base := os.Getenv("XDG_RUNTIME_DIR")
+	if !filepath.IsAbs(base) {
+		return "", false
+	}
+	if info, err := os.Stat(base); err != nil || !info.IsDir() {
+		return "", false
+	}
+	dir := filepath.Join(base, runtimeDirName)
+	if err := os.RemoveAll(dir); err != nil {
+		return "", false
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return "", false
+	}
+	return dir, true
 }

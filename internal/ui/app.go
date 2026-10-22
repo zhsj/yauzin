@@ -183,7 +183,13 @@ type App struct {
 	// the platform has no notification area.
 	tray *tray.Tray
 
-	tmpDir string
+	// tmpMu guards tmpDir: the signal handler reaches it from its own
+	// goroutine while the UI goroutine may still ask for the directory.
+	// tmpClosed records that the directory was removed, so a late call cannot
+	// create a new one while the process is on its way out.
+	tmpMu     sync.Mutex
+	tmpDir    string
+	tmpClosed bool
 
 	// pointer is the pointer position in window coordinates, captured by the
 	// root pointer area. The tip replay anchors the hover labels next to it.
