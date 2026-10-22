@@ -34,6 +34,7 @@
 - **授权**：用户自带 Google Cloud「桌面应用」OAuth 客户端，在「设置 → 账号 → 添加账号」中填写 Client ID / Secret。流程是授权码 + PKCE（`oauth2.GenerateVerifier` / `S256ChallengeOption`），回调走 `http://127.0.0.1:<随机端口>/oauth2/callback` 的一次性本地服务；scope 为 `gmail.readonly` + `userinfo.profile`（不加 `openid`：不需要 ID Token），并带 `access_type=offline` 与 `prompt=consent` 以取得 refresh token。没有 refresh token 视为授权失败。授权链接不再自动交给浏览器，而是显示在对话框里（只读可选中，另有「复制链接」「在浏览器中打开」按钮），回环回调仍要求浏览器在本机。姓名取自 `https://www.googleapis.com/oauth2/v3/userinfo`，属于尽力而为：旧授权没有 profile scope 时该请求失败只记告警，账号仍以邮箱显示，重新登录一次即补齐。授权码、令牌、client secret、含密码的代理地址一律不写日志。
 - **存储**：`accounts.json`（与 `settings.json` 同目录，0600，临时文件 + rename 原子写）保存共享的 `oauth{clientId, clientSecret}` 与每账号 `{id,email,name,useProxy,token{accessToken,refreshToken,tokenType,expiresAt}}`；`id` 为 `gmail:` + 小写邮箱，重复登录同一邮箱即覆盖（重新授权）。`name` 来自 userinfo，为空时 UI 回退显示邮箱；重新登录取不到姓名时保留已存的值。账号行尾的刷新按钮复用已存客户端凭据重新授权，若授权得到的邮箱与目标账号不一致则报错且不写盘。一个 `*accounts.Store` 同时被 UI 与所有后端持有，后端刷新令牌后立即回写。文件损坏只告警并退化为「仅 demo 账号」，不阻止启动。
 - **代理**：代理地址是通用设置（`settings.json` 的 `proxy`，在「设置 → 通用 → 网络 → 代理」维护），账号条目只记 `useProxy`。保存代理后，使用代理的 Gmail 后端被关闭并重建（先取消在途请求），新 Transport 立即生效。`net/url` 只接受 `http` / `https` / `socks5` 且必须有 host 与端口；`socks5` 由 `http.Transport` 原生支持（`socks5h` 不接受：net/http 没有对应 dialer）。回环回调不经代理。
+- **请求日志**：每个账号的每次 HTTP 请求在 DEBUG 级别各记一行 `gmail request`，字段为 `account`（账号 ID，新增账号授权时为 `-`）、`method`、`endpoint`（host + path，不含 query）与 `status`；传输层失败时改记 `err`、不记状态。日志装在 `transport.go` 的 `http.RoundTripper` 上，覆盖单次 REST、labels batch、令牌刷新与授权交换；包装只克隆 `*http.Client`，不改 `http.DefaultClient` 或测试注入的 client。级别来自「设置 → 通用 → 日志」（`settings.json` 的 `logLevel`），默认 `info`，改后对运行中的后端立即生效。
 - **读取映射**：Gmail 系统标签 `INBOX/STARRED/SENT/TRASH` 映射为 `inbox/starred/sent/trash` 与对应 `FolderKind`（名称留给 UI 按 kind 翻译），`DRAFT/SPAM/IMPORTANT/UNREAD/CATEGORY_*` 不展示；用户标签保留 Gmail label ID 与名称；`labels.list` 返回的是部分资源（只有 id/name/type），因此未读数与颜色来自一次 **batch** 请求：`POST /batch/gmail/v1`（multipart/mixed）里每个子请求是 `labels.get?fields=messagesUnread,color/backgroundColor`，单批最多 100 个子请求、超出则分片，子请求用 `Content-ID` 索引回填，响应乱序也能对应。一次文件夹加载因此是 2 个 HTTP 请求；单个子请求失败（标签刚被删除）只告警并按 0 显示，全部失败才报错。列表用 `threads.list`，随后每会话一次 `threads.get?format=metadata`（并发 6）补全参与者、未读数、星标、附件标记与最新时间；`Total` 取 `resultSizeEstimate`，缺省或用空时为 -1。正文用 `format=full` 递归解析 MIME：首个 `text/plain` 与首个 `text/html` 作正文，带 `filename` 的部件只留元数据（附件下载不在本期范围）。
 - **类型来源**：`discovery_types.go` 由 `internal/cmd/gmailgen` 从 Google 的 Discovery 文档生成（`//go:generate`，文件头记录文档 `revision`），字段名按 initialism 表保持 `ID` / `IDs` / `MIMEType` / `AttachmentID` 等写法；`api.go` 只留 `headers` / `hasFlag` / `date` / `hasAttachment` 这些把文档折算成领域模型的辅助方法。文档本身不入库，每次生成都取官方当前版本，schema 变化靠 `git diff` 审阅。
 - **已知取舍**：一页 50 个会话 = 1 次 list + 50 次 metadata get，首屏延迟明显高于 mock；metadata get 尚未走 batch（Gmail 支持 batch，本次只用于 `labels.get`），后续可批量化或减少 `metadataHeaders`；`resultSizeEstimate` 是估算值；列表中附件标记依赖 metadata 返回的 part 树，若某条消息未返回 parts 则该行可能漏标记；token 与代理凭据都是明文 0600 存储，没有系统密钥环集成。
@@ -172,6 +173,7 @@
 | `clientDecorations` | Wayland 下强制自绘标题栏 |
 | `showPerfMonitor` | 顶栏显示性能读数 |
 | `proxy` | 出站邮件请求使用的代理（`http`/`https`/`socks5`，空表示直连） |
+| `logLevel` | 控制台日志级别（`error`/`warn`/`info`/`debug`，空或未知表示 `info`） |
 
 约定：`LoadOrZero` 把「文件不存在」当首次运行，其余错误只告警、不覆盖；修改设置一律「先落盘成功再改内存」，失败提示并回滚。
 
@@ -318,7 +320,7 @@ python3 scripts/gen_app_icons.py            # 需要 rsvg-convert（librsvg2-bin
 cmd/yauzin/main.go             入口：app.Main + 窗口事件循环
 internal/mail/mail.go          领域模型（会话摘要 / 分页）与 Service 接口
 internal/mail/mock/            内存 mock 后端（140ms 模拟延迟，按会话聚合）
-internal/mail/gmail/           Gmail 只读后端：OAuth（PKCE 回环）、REST 客户端、MIME 解析、Discovery 生成的 API 类型
+internal/mail/gmail/           Gmail 只读后端：OAuth（PKCE 回环）、REST 客户端、请求日志 transport、MIME 解析、Discovery 生成的 API 类型
 internal/cmd/gmailgen/         Gmail Discovery 文档 → Go 类型生成器（go generate 入口）
 internal/accounts/             accounts.json：OAuth 凭据、令牌与每账号 useProxy
 internal/ui/app.go             状态与构造：App 字段、构造器、异步原语
@@ -326,7 +328,7 @@ internal/ui/app_lifecycle.go   窗口生命周期、post 队列、临时目录
 internal/ui/app_data.go        账号、文件夹、分页与加载
 internal/ui/app_thread.go      会话打开与批量动作
 internal/ui/app_overlay.go     帧骨架、指针区域与浮层编排
-internal/ui/app_settings.go    设置读写与语言/装饰/性能开关
+internal/ui/app_settings.go    设置读写与语言/装饰/性能/日志级别/代理
 internal/ui/errors.go          错误分类 → i18n 键映射
 internal/ui/keys.go            键盘路由、列表光标与快捷键
 internal/ui/shell.go           顶栏 + 侧栏/内容区两栏布局
@@ -345,7 +347,7 @@ internal/ui/reader.go          阅读器容器与工具栏
 internal/ui/messagecard.go     可折叠消息卡片
 internal/ui/compose_view.go    写信浮层布局
 internal/ui/compose_actions.go 发送、附件暂存与丢弃
-internal/ui/settings.go        设置浮层（通用/账号/快捷键，含网络代理）
+internal/ui/settings.go        设置浮层（通用/账号/快捷键，含网络代理与日志级别）
 internal/ui/account_add.go     添加账号 / 重新登录浮层（类型选择、授权链接复制与打开）
 internal/ui/menu.go            下拉菜单
 internal/ui/status.go          轻量状态条
@@ -364,6 +366,7 @@ internal/ui/filepicker.go      xdg-desktop-portal 文件选择/保存
 internal/ui/openurl.go         跨平台打开链接/文件
 internal/ui/htmlfile.go        HTML 临时文件与 CSP 注入
 internal/prefs/                设置持久化
+internal/logging/              进程级 slog level var 与控制台 text handler（stderr）
 internal/cursor/               系统光标主题解析（门户 / kreadconfig6 / gsettings）
 internal/htmltext/             HTML → 纯文本
 internal/i18n/                 中英文翻译与系统 locale
