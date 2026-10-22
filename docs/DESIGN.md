@@ -23,9 +23,10 @@
 
 - **会话聚合在服务层**，UI 不做分组：`ThreadSummary` 恒描述整段会话，`ListRequest.Query` 只决定会话是否命中，不会裁剪会话内的邮件。
 - **会话粒度的读取**：正文只通过 `GetThread(ctx, threadID)` 按会话读取，`Service` 不提供单封 `Get`。真实后端因此不必为 UI 不使用的懒加载路径写实现；若将来确实需要单封读取，先在设计里说明用途再重新加回。
+- **原文查看是独立的读取路径**：`RawMessage(ctx, messageID) ([]byte, error)` 只在用户点「查看原始邮件」时调用，返回后端存储的原始 RFC 822 源码（Gmail 为 `messages.get?format=raw`）。它不是正文懒加载：解析后的正文仍只来自 `GetThread`，因此不受上一条约束。
 - **游标分页**：`ListThreads(ctx, ListRequest{FolderID, Query, PageToken, Limit}) (ThreadPage, error)`；`ThreadPage{Threads, Total, NextPageToken}`，`NextPageToken` 为空表示最后一页，`Total` 为负表示后端无法估算。UI 只在 `tokens []string` 里压栈游标，不向下传页码。
 - **错误是分类不是句子**：`ErrNotFound` / `ErrUnsupported` / `ErrInvalidArgument` / `ErrUnauthorized` 由 `internal/ui/errors.go` 用 `errors.Is` 映射到 i18n 键，未知错误才回退 `err.Error()`。`ErrUnauthorized` 只表示「账号需要重新授权」，不让传输层文案冒充原因。
-- **能力边界按方法表达**：只读后端（当前 Gmail）对 `SetFlag` / `Archive` / `Delete` / `Send` / `SaveAttachment` 统一返回 `ErrUnsupported`，UI 保留原入口并由既有错误映射提示「当前账号不支持该操作」；打开未读会话触发的自动已读在只读后端上静默回滚徽标，不打断阅读。
+- **能力边界按方法表达**：只读后端（当前 Gmail）对 `SetFlag` / `Archive` / `Delete` / `Send` / `SaveAttachment` 统一返回 `ErrUnsupported`，UI 保留原入口并由既有错误映射提示「当前账号不支持该操作」；`RawMessage` 属于读操作，只读账号照常实现。打开未读会话触发的自动已读在只读后端上静默回滚徽标，不打断阅读。
 - 实现必须并发安全并尊重 `ctx`（UI 从多个 goroutine 并发调用、不串行化）。mock 的延迟存在的意义就是暴露加载态与竞态。
 - 跨层数据必须复制：mock 的 `cloneMessage` / 附件切片深拷贝，避免 UI 通过返回指针改到存储。
 
@@ -152,9 +153,11 @@
 
 ## 8. 正文与 HTML 安全
 
-- 阅读器只渲染 `text/plain`（可选中复制），HTML 仅提供「在浏览器打开」。选区按 `msg.ID` 变化时重建/清空，避免跨邮件残留。
-- HTML 落盘：文件名 = 净化后的消息 ID（`[A-Za-z0-9._-]`，截断 64）+ 内容 sha256 前 8 字节（防目录穿越、绕开 `file://` 缓存）。
-- CSP 用 `x/net/html` 解析后插到**真实 `<head>` 的第一个子节点**（防注释/脚本里的假 `<head>`），`html.Render` 重新序列化是有意取舍；解析失败走 `wrapperDocument` 安全包裹。策略为 `default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; form-action 'none'; base-uri 'none'`，远程图片/追踪像素故意禁用。
+- 阅读器只渲染 `text/plain`（可选中复制），HTML 与原文都从每封邮件卡片头部的「更多」菜单打开，回复/转发旁不再有浏览器按钮。选区按 `msg.ID` 变化时重建/清空，避免跨邮件残留。
+- 菜单三项：`安全预览`（注入严格 CSP）、`完整预览（不安全）`（只声明 charset，不加策略，脚本与远程资源可用，风险写在文案里且不再二次确认）、`查看原始邮件`（`RawMessage` → 原文页）。前两项仅在有 HTML 正文时出现，第三项恒有。菜单项文案不复用旧键 `reader.openInBrowser`。
+- 原文页（`htmlsource.go`）是独立文档：顶部元信息表（邮件 ID、账号、发件人、收件人、抄送、主题、日期），下方 `<pre>` 展示完整源码。源码经 `html.EscapeString` + `strings.ToValidUTF8` 处理，绝不当 HTML 渲染；页面自身固定 `default-src 'none'; style-src 'unsafe-inline'`。
+- HTML 落盘：文件名 = 净化后的消息 ID（`[A-Za-z0-9._-]`，截断 64）+ 内容 sha256 前 8 字节（防目录穿越、绕开 `file://` 缓存），模式后缀 `-unsafe` / `-source` 保证三种产物互不覆盖（安全预览沿用原命名）。
+- CSP 用 `x/net/html` 解析后插到**真实 `<head>` 的第一个子节点**（防注释/脚本里的假 `<head>`），`html.Render` 重新序列化是有意取舍；解析失败走 `wrapperDocument` 安全包裹。策略为 `default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; form-action 'none'; base-uri 'none'`，远程图片/追踪像素故意禁用。默认路径不被弱化：不点「完整预览」时策略照旧注入。
 - 临时目录惰性创建于 `$XDG_RUNTIME_DIR/yauzin`（0700；该变量缺失、非绝对路径或不可用时回退 `os.MkdirTemp` 到系统临时目录）：会话运行目录在登录会话结束时由系统回收，被 `SIGKILL` 的运行最多留下一个会自动过期的目录，不会在 `/tmp` 里逐次累积。会话内路径固定，首次创建前先删掉上次异常退出留下的同名目录；正常退出与 `Ctrl+C`（`SIGINT`）都会整体删除，删除后 `tempDir()` 返回错误而不再重建。
 - `internal/htmltext` 只服务写信时引用原文；输入上限 1MiB。
 
@@ -369,6 +372,7 @@ internal/ui/format.go          时间、地址与主题格式化
 internal/ui/filepicker.go      xdg-desktop-portal 文件选择/保存
 internal/ui/openurl.go         跨平台打开链接/文件
 internal/ui/htmlfile.go        HTML 临时文件与 CSP 注入
+internal/ui/htmlsource.go      原始邮件页（元信息 + 转义源码）
 internal/prefs/                设置持久化
 internal/logging/              进程级 slog level var 与控制台 text handler（stderr）
 internal/cursor/               系统光标主题解析（门户 / kreadconfig6 / gsettings）
