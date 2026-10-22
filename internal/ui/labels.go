@@ -153,6 +153,9 @@ func (t *labelTree) flatten(collapsed map[string]bool, activeID string, onToggle
 		item := n.item
 		item.expandable = len(n.kids) > 0
 		item.expanded = expanded
+		// An ancestor of the active label is held open: folding it would hide
+		// the selection, so its marker is only an indicator, not a target.
+		item.foldLocked = open[n.id]
 		item.onToggle = nil
 		if onToggle != nil {
 			item.onToggle = func() { onToggle(n.id) }
@@ -172,10 +175,16 @@ func (t *labelTree) flatten(collapsed map[string]bool, activeID string, onToggle
 	return out
 }
 
-// activeAncestors collects the ids of the active label and its parents.
+// activeAncestors collects the ids of the strict ancestors of the active
+// label. The label itself is left out: selecting a parent must still allow
+// folding the labels below it.
 func (t *labelTree) activeAncestors(id string) map[string]bool {
-	open := make(map[string]bool, maxLabelDepth+1)
-	for node := t.byID[id]; node != nil; node = node.parent {
+	open := make(map[string]bool, maxLabelDepth)
+	node := t.byID[id]
+	if node == nil {
+		return open
+	}
+	for node = node.parent; node != nil; node = node.parent {
 		open[node.id] = true
 	}
 	return open

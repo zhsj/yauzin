@@ -83,8 +83,35 @@ func TestLabelTreeKeepsActiveAncestorsOpen(t *testing.T) {
 	if !items[0].expanded {
 		t.Fatal("the opened ancestor does not report itself expanded")
 	}
+	if !items[0].foldLocked {
+		t.Fatal("the forced-open ancestor still offers a fold target")
+	}
 	if !items[1].active {
 		t.Fatal("the active label is not marked active")
+	}
+	if items[1].foldLocked {
+		t.Fatal("the active label itself must stay selectable, not locked")
+	}
+}
+
+func TestLabelTreeFoldsSelectedParent(t *testing.T) {
+	folders := []mail.Folder{
+		labelFolder("a", "LabelA"),
+		labelFolder("a1", "LabelA/LabelA.1"),
+		labelFolder("b", "LableB"),
+	}
+	// Selecting the parent must not trap its own children open: only strict
+	// ancestors are held open.
+	items := flattenRows(folders, map[string]bool{"a": true}, "a")
+
+	if want := []string{"LabelA", "LableB"}; !reflect.DeepEqual(rowNames(items), want) {
+		t.Fatalf("rows = %v, want %v", rowNames(items), want)
+	}
+	if items[0].expanded {
+		t.Fatal("the selected parent did not fold")
+	}
+	if items[0].foldLocked {
+		t.Fatal("the selected parent must stay foldable")
 	}
 }
 
@@ -188,14 +215,17 @@ func TestLabelMarkerKeepsOneCell(t *testing.T) {
 		name       string
 		expandable bool
 		expanded   bool
+		locked     bool
 	}{
 		{name: "leaf"},
 		{name: "folded parent", expandable: true},
 		{name: "open parent", expandable: true, expanded: true},
+		{name: "locked parent", expandable: true, expanded: true, locked: true},
 	} {
 		item := newNavItemBar("label:work", "Work", colPrimary, nil)
 		item.expandable = tc.expandable
 		item.expanded = tc.expanded
+		item.foldLocked = tc.locked
 
 		dims := item.labelMarker(th)(testCell(new(op.Ops), cell))
 		if dims.Size != cell {

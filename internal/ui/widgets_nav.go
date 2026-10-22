@@ -43,6 +43,10 @@ type navItem struct {
 	depth      int
 	expandable bool
 	expanded   bool
+	// foldLocked marks a row that is held open because the active label sits
+	// below it. Its chevron stays visible but cannot be folded, so it must not
+	// pretend to be clickable.
+	foldLocked bool
 	onTap      func(string)
 	onToggle   func()
 }
@@ -63,7 +67,7 @@ func (n *navItem) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 	// clickables. The row action is deferred until the chevron has reported
 	// whether it consumed the click, like the hover controls of a mail row.
 	rowClicked := n.click.Clicked(gtx)
-	toggled := n.expandable && n.toggle.Clicked(gtx)
+	toggled := n.expandable && !n.foldLocked && n.toggle.Clicked(gtx)
 	dims := n.click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		h := gtx.Dp(36)
 		w := gtx.Constraints.Max.X
@@ -140,6 +144,12 @@ func (n *navItem) labelMarker(th *theme) layout.Widget {
 		ic := icon{glyph: glyphChevronRight, col: n.dot}
 		if n.expanded {
 			ic.glyph = glyphExpandMore
+		}
+		if n.foldLocked {
+			// The active label sits below this row, so folding it is refused
+			// anyway. Draw the chevron alone: a hit area, a hand cursor or a
+			// hover disc would promise a click that cannot happen.
+			return th.glyphIn(gtx, ic, 16, navMarkerCell)
 		}
 		hovered := n.toggle.Hovered()
 		return n.toggle.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
