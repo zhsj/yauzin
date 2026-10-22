@@ -15,6 +15,7 @@ import (
 
 	"github.com/zhsj/yauzin/internal/cursor"
 	"github.com/zhsj/yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/logging"
 	"github.com/zhsj/yauzin/internal/mail"
 	"github.com/zhsj/yauzin/internal/singleinstance"
 	"github.com/zhsj/yauzin/internal/tray"
@@ -24,6 +25,10 @@ import (
 // window is closed, so the App instance survives across windows and keeps the
 // loaded mail, the current folder and the draft state intact.
 func Run() {
+	// The console logger belongs to the process, not to an App: install it
+	// before anything below can log. newApp then applies the stored level.
+	logging.Init()
+
 	// Single instance: the first process owns the bus name and serves the
 	// Open method on it; later launches call Open to bring the window back
 	// and exit. An unreachable bus only costs the guard, not the app.

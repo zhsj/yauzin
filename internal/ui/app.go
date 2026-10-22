@@ -25,6 +25,7 @@ import (
 
 	"github.com/zhsj/yauzin/internal/accounts"
 	"github.com/zhsj/yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/logging"
 	"github.com/zhsj/yauzin/internal/mail"
 	"github.com/zhsj/yauzin/internal/mail/gmail"
 	"github.com/zhsj/yauzin/internal/mail/mock"
@@ -74,6 +75,9 @@ type App struct {
 	// factory reflects the proxy setting into the backends it builds; nil when
 	// the app was assembled without real accounts.
 	factory *serviceFactory
+	// logLevel is the normalized console log level. The logger itself is
+	// process wide; the field only mirrors the choice for the settings panel.
+	logLevel string
 	// accountAdd is the sign-in dialog while it is open. It owns the pending
 	// authorization context so closing the panel can cancel the wait.
 	accountAdd *accountDialog
@@ -244,6 +248,9 @@ func newApp() *App {
 		// opening: the defaults are used and the next save rewrites the file.
 		slog.Warn("read settings", "err", err)
 	}
+	// The stored level takes effect before anything below can log, so a
+	// quiet level also silences the startup warnings.
+	logging.SetLevel(pref.LogLevel)
 	i18n.SetLanguage(resolveLanguage(pref.Language))
 
 	store, err := accounts.Open(prefs.Dir())
@@ -317,6 +324,7 @@ func newAppWith(pref prefs.Settings, opts appOptions) *App {
 		newService:   opts.newService,
 		proxy:        opts.proxy,
 		factory:      opts.factory,
+		logLevel:     logging.Normalize(pref.LogLevel),
 		page:         1,
 		tokens:       []string{""},
 		expanded:     map[string]bool{},

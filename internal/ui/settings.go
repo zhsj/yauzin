@@ -14,15 +14,16 @@ import (
 	"gioui.org/widget"
 
 	"github.com/zhsj/yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/logging"
 	"github.com/zhsj/yauzin/internal/mail"
 )
 
 // settingsView is the modal panel opened from the gear button. It has three
 // pages picked with the underlined tabs under the title: General holds the
-// appearance card (language, client-side title bar, performance monitor) and
-// the network card (proxy address), Accounts the configured accounts and an
-// "add account" placeholder, Shortcuts the read-only table of the keys in
-// shortcutTable.
+// appearance card (language, client-side title bar, performance monitor), the
+// network card (proxy address) and the logging card (console level), Accounts
+// the configured accounts and an "add account" placeholder, Shortcuts the
+// read-only table of the keys in shortcutTable.
 type settingsView struct {
 	app     *App
 	blocker *tapBlocker
@@ -35,6 +36,11 @@ type settingsView struct {
 	langRow  *settingsRow
 	langRows []*settingsRow
 	langOpen bool
+	// logRow is the console level selector. It expands in place like the
+	// language row, for the same reason: a menu would close the panel.
+	logRow   *settingsRow
+	logRows  []*settingsRow
+	logOpen  bool
 	perfRows []*settingsRow
 	accRows  []*settingsRow
 	decoRow  *settingsRow
@@ -92,6 +98,28 @@ type settingsRow struct {
 	onTap  func()
 }
 
+// logLevels lists the selectable console levels from quietest to noisiest,
+// paired with the i18n key of their label.
+var logLevels = []struct {
+	name  string
+	label string
+}{
+	{logging.LevelError, "settings.logLevelError"},
+	{logging.LevelWarn, "settings.logLevelWarn"},
+	{logging.LevelInfo, "settings.logLevelInfo"},
+	{logging.LevelDebug, "settings.logLevelDebug"},
+}
+
+// logLevelLabel translates the label of a normalized level name.
+func logLevelLabel(name string) string {
+	for _, l := range logLevels {
+		if l.name == name {
+			return i18n.T(l.label)
+		}
+	}
+	return i18n.T("settings.logLevelInfo")
+}
+
 func newSettingsView(a *App) *settingsView {
 	s := &settingsView{
 		app:     a,
@@ -132,6 +160,33 @@ func newSettingsView(a *App) *settingsView {
 		valueIcon: glyphExpandMore,
 		onTap: func() {
 			s.langOpen = !s.langOpen
+		},
+	}
+
+	// The log level behaves like the language choice, except that it takes
+	// effect in place: the panel is not rebuilt, so the expanded list only has
+	// to collapse and mirror the level that actually stuck.
+	for i := range logLevels {
+		level := logLevels[i]
+		s.logRows = append(s.logRows, &settingsRow{
+			title:  i18n.T(level.label),
+			active: level.name == a.logLevel,
+			indent: true,
+			onTap: func() {
+				a.setLogLevel(level.name)
+				s.logOpen = false
+				s.logRow.value = logLevelLabel(a.logLevel)
+				for j, row := range s.logRows {
+					row.active = logLevels[j].name == a.logLevel
+				}
+			},
+		})
+	}
+	s.logRow = &settingsRow{
+		title: i18n.T("settings.logLevel"),
+		value: logLevelLabel(a.logLevel),
+		onTap: func() {
+			s.logOpen = !s.logOpen
 		},
 	}
 
@@ -315,6 +370,8 @@ func (s *settingsView) pageContent(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(s.appearanceCard(th)),
 			layout.Rigid(sectionHeading(th, i18n.T("settings.network"))),
 			layout.Rigid(settingsCard([]layout.Widget{s.proxySection(th)})),
+			layout.Rigid(sectionHeading(th, i18n.T("settings.logging"))),
+			layout.Rigid(s.loggingCard(th)),
 			layout.Rigid(pageBottom),
 		)
 	case settingsTabShortcuts:
@@ -360,6 +417,23 @@ func (s *settingsView) appearanceCard(th *theme) layout.Widget {
 		return s.decoRow.Layout(gtx, th)
 	})
 	items = append(items, rowWidgets(s.perfRows, th)...)
+	return settingsCard(items)
+}
+
+// loggingCard groups the console level selector and, while expanded, its
+// candidates. The selector carries the current level on the right, so the
+// collapsed card still answers which level is active.
+func (s *settingsView) loggingCard(th *theme) layout.Widget {
+	s.logRow.valueIcon = glyphExpandMore
+	if s.logOpen {
+		s.logRow.valueIcon = glyphExpandLess
+	}
+	items := []layout.Widget{func(gtx layout.Context) layout.Dimensions {
+		return s.logRow.Layout(gtx, th)
+	}}
+	if s.logOpen {
+		items = append(items, rowWidgets(s.logRows, th)...)
+	}
 	return settingsCard(items)
 }
 

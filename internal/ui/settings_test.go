@@ -8,7 +8,9 @@ import (
 	"gioui.org/op"
 
 	"github.com/zhsj/yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/logging"
 	"github.com/zhsj/yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/prefs"
 )
 
 // TestSettingsPagesFrame lays out every page of the settings panel: none may
@@ -230,6 +232,66 @@ func TestSettingsLanguageDropdown(t *testing.T) {
 	}
 	if got := i18n.Language(); got != wantTag {
 		t.Fatalf("language after picking %q = %q", wantTag, got)
+	}
+}
+
+// TestSettingsLogLevelDropdown pins the in-panel log level choice: the
+// candidates stay hidden until the selector row is clicked, and a pick applies
+// the level in place, collapses the list and stores it. The panel is not
+// rebuilt, so its other state survives the choice.
+func TestSettingsLogLevelDropdown(t *testing.T) {
+	t.Setenv("YAUZIN_CONFIG_DIR", t.TempDir())
+	t.Cleanup(func() { logging.SetLevel(logging.LevelInfo) })
+
+	a := testApp(t)
+	a.settings = newSettingsView(a)
+	a.overlay = a.settings
+	s := a.settings
+
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+	s.Layout(gtx, a)
+	if s.logOpen {
+		t.Fatal("log level candidates are open before the selector row is clicked")
+	}
+	ops.Reset()
+
+	s.logRow.click.Click()
+	s.Layout(gtx, a)
+	if !s.logOpen {
+		t.Fatal("log level candidates did not expand on the selector row click")
+	}
+	ops.Reset()
+
+	debug := s.logRows[len(s.logRows)-1]
+	debug.click.Click()
+	s.Layout(gtx, a)
+
+	if s.logOpen {
+		t.Fatal("log level candidates stayed open after a pick")
+	}
+	if a.logLevel != logging.LevelDebug {
+		t.Fatalf("log level = %q, want %q", a.logLevel, logging.LevelDebug)
+	}
+	if got, want := s.logRow.value, i18n.T("settings.logLevelDebug"); got != want {
+		t.Fatalf("selector shows %q, want %q", got, want)
+	}
+	if !s.logRows[len(s.logRows)-1].active {
+		t.Fatal("the picked level is not checked")
+	}
+	if s.logRows[0].active {
+		t.Fatal("the old level is still checked")
+	}
+	if a.overlay != s {
+		t.Fatalf("overlay = %T after a pick, want the same settings panel", a.overlay)
+	}
+
+	stored, err := prefs.LoadOrZero()
+	if err != nil {
+		t.Fatalf("LoadOrZero: %v", err)
+	}
+	if stored.LogLevel != logging.LevelDebug {
+		t.Fatalf("stored log level = %q, want %q", stored.LogLevel, logging.LevelDebug)
 	}
 }
 

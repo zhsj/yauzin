@@ -6,6 +6,7 @@ import (
 	"gioui.org/app"
 
 	"github.com/zhsj/yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/logging"
 	"github.com/zhsj/yauzin/internal/mail"
 	"github.com/zhsj/yauzin/internal/mail/gmail"
 	"github.com/zhsj/yauzin/internal/prefs"
@@ -98,6 +99,20 @@ func (a *App) setPerfMonitor(on bool) {
 		return
 	}
 	a.perf.setVisible(on)
+}
+
+// setLogLevel changes the console log level and persists the choice. The
+// logger is process wide, so the new level also covers the backends that are
+// already running; nothing has to be rebuilt.
+func (a *App) setLogLevel(name string) {
+	name = logging.Normalize(name)
+	if a.logLevel == name {
+		return
+	}
+	if !a.updateSettings(func(s *prefs.Settings) { s.LogLevel = name }) {
+		return
+	}
+	a.logLevel = logging.SetLevel(name)
 }
 
 // setProxy validates and stores the shared proxy address, then replaces the
