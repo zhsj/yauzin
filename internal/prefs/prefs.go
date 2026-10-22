@@ -31,6 +31,10 @@ type Settings struct {
 	// Empty means a direct connection. It is one shared setting: each account
 	// only records whether it opts in.
 	Proxy string `json:"proxy,omitempty"`
+	// LogLevel is the console log level: error, warn, info or debug. Empty
+	// means info, which is also what an unknown value falls back to; debug
+	// adds one line per Gmail request.
+	LogLevel string `json:"logLevel,omitempty"`
 }
 
 const (

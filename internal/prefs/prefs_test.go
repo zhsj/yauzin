@@ -9,7 +9,7 @@ import (
 
 func TestSaveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	want := Settings{Language: "zh-Hans"}
+	want := Settings{Language: "zh-Hans", LogLevel: "debug"}
 	if err := saveTo(dir, want); err != nil {
 		t.Fatalf("saveTo: %v", err)
 	}
