@@ -1,8 +1,11 @@
 package ui
 
 import (
+	"image"
 	"reflect"
 	"testing"
+
+	"gioui.org/op"
 
 	"github.com/zhsj/yauzin/internal/mail"
 )
@@ -171,6 +174,33 @@ func TestLabelTreeCapsIndent(t *testing.T) {
 	}
 	if got := items[4].label; got != "E" {
 		t.Fatalf("deepest row shows %q, want its own name", got)
+	}
+}
+
+// TestLabelMarkerKeepsOneCell pins the compact layout: the dot and the
+// disclosure chevron share the same square, so a parent row never spends an
+// extra column on its arrow.
+func TestLabelMarkerKeepsOneCell(t *testing.T) {
+	th := newTheme(loadFonts())
+	cell := image.Pt(20, 20)
+
+	for _, tc := range []struct {
+		name       string
+		expandable bool
+		expanded   bool
+	}{
+		{name: "leaf"},
+		{name: "folded parent", expandable: true},
+		{name: "open parent", expandable: true, expanded: true},
+	} {
+		item := newNavItemBar("label:work", "Work", colPrimary, nil)
+		item.expandable = tc.expandable
+		item.expanded = tc.expanded
+
+		dims := item.labelMarker(th)(testCell(new(op.Ops), cell))
+		if dims.Size != cell {
+			t.Fatalf("%s marker = %v, want the %v cell", tc.name, dims.Size, cell)
+		}
 	}
 }
 

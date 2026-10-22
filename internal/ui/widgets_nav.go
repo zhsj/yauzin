@@ -18,21 +18,19 @@ import (
 const (
 	// navRowInset keeps a folder row where it has always been.
 	navRowInset unit.Dp = 14
-	// navLabelInset pulls the first label row left to leave room for the
-	// disclosure arrow that nested labels need.
-	navLabelInset unit.Dp = 6
 	// navLabelIndent shifts one nested level to the right.
 	navLabelIndent unit.Dp = 18
-	// navArrowCell is the square the disclosure arrow is drawn and clicked in.
-	// Rows without children keep it empty so icons line up within a level.
-	navArrowCell unit.Dp = 20
+	// navMarkerCell is the square holding a label's dot or its disclosure
+	// chevron. Parent and leaf rows share it, so the marks line up and the
+	// chevron target is as large as the dot it replaces.
+	navMarkerCell unit.Dp = 20
 )
 
 // navItem is one row of the sidebar: folder icon or label dot, name and unread
 // count.
 type navItem struct {
 	click  widget.Clickable
-	toggle widget.Clickable // disclosure arrow of an expandable label row
+	toggle widget.Clickable // disclosure chevron of an expandable label row
 	id     string
 	label  string
 	ic     icon
@@ -40,8 +38,8 @@ type navItem struct {
 	dot    color.NRGBA
 	count  int
 	active bool
-	// depth indents a nested label; expandable rows draw the arrow and report
-	// whether their subtree is currently open.
+	// depth indents a nested label; expandable rows draw the chevron in the
+	// dot's cell and report whether their subtree is currently open.
 	depth      int
 	expandable bool
 	expanded   bool
@@ -61,8 +59,8 @@ func (n *navItem) setCount(v int)   { n.count = v }
 func (n *navItem) setActive(v bool) { n.active = v }
 
 func (n *navItem) Layout(gtx layout.Context, th *theme) layout.Dimensions {
-	// The arrow sits inside the row, so the pointer press reaches both
-	// clickables. The row action is deferred until the arrow has reported
+	// The chevron sits inside the row, so the pointer press reaches both
+	// clickables. The row action is deferred until the chevron has reported
 	// whether it consumed the click, like the hover controls of a mail row.
 	rowClicked := n.click.Clicked(gtx)
 	toggled := n.expandable && n.toggle.Clicked(gtx)
@@ -87,29 +85,11 @@ func (n *navItem) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 		}
 		stack.Pop()
 		gtx.Constraints = layout.Exact(size)
-		left := navRowInset
-		if n.hasDot {
-			left = navLabelInset + unit.Dp(n.depth)*navLabelIndent
-		}
+		left := navRowInset + unit.Dp(n.depth)*navLabelIndent
 		layout.Inset{Left: left, Right: 14}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			children := []layout.FlexChild{}
 			if n.hasDot {
-				dot := n.dot
-				children = append(children,
-					layout.Rigid(n.labelArrow(th)),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 2) }),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						gtx.Constraints = layout.Exact(image.Pt(gtx.Dp(20), gtx.Dp(20)))
-						return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							d := gtx.Dp(10)
-							gtx.Constraints = layout.Exact(image.Pt(d, d))
-							c := clip.Ellipse{Max: image.Pt(d, d)}.Push(gtx.Ops)
-							paint.Fill(gtx.Ops, dot)
-							c.Pop()
-							return layout.Dimensions{Size: image.Pt(d, d)}
-						})
-					}),
-				)
+				children = append(children, layout.Rigid(n.labelMarker(th)))
 			} else {
 				ic := n.ic
 				if n.active {
@@ -145,25 +125,51 @@ func (n *navItem) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 	return dims
 }
 
-// labelArrow draws the disclosure triangle of a nested label. The arrow owns a
-// clickable of its own so tapping it folds the subtree instead of selecting
-// the label; a row without children keeps the cell empty for alignment.
-func (n *navItem) labelArrow(th *theme) layout.Widget {
+// labelMarker draws what stands before a label name: the color dot of a leaf,
+// or the disclosure chevron of a label with children, in the label's own color
+// and with a tinted disc while hovered so the small target reads as clickable.
+// The chevron owns a clickable of its own, so tapping it folds the subtree
+// instead of selecting the label.
+func (n *navItem) labelMarker(th *theme) layout.Widget {
 	return func(gtx layout.Context) layout.Dimensions {
-		cell := image.Pt(gtx.Dp(navArrowCell), gtx.Dp(navArrowCell))
+		cell := image.Pt(gtx.Dp(navMarkerCell), gtx.Dp(navMarkerCell))
 		gtx.Constraints = layout.Exact(cell)
 		if !n.expandable {
-			return layout.Dimensions{Size: cell}
+			return labelDot(gtx, n.dot)
 		}
-		ic := iconExpandMore
-		if !n.expanded {
-			ic = iconChevronRight
+		ic := icon{glyph: glyphChevronRight, col: n.dot}
+		if n.expanded {
+			ic.glyph = glyphExpandMore
 		}
-		th.cursor(gtx, pointer.CursorPointer, cell)
+		hovered := n.toggle.Hovered()
 		return n.toggle.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return th.glyphIn(gtx, ic, 16, navArrowCell)
+			gtx.Constraints = layout.Exact(cell)
+			// The cursor and the hover disc must be declared inside the
+			// clickable's own area: a cursor op pushed outside it is shadowed
+			// by that area and the pointer keeps the default shape.
+			th.cursor(gtx, pointer.CursorPointer, cell)
+			if hovered {
+				disc := n.dot
+				disc.A = 0x33
+				c := clip.Ellipse{Max: cell}.Push(gtx.Ops)
+				paint.Fill(gtx.Ops, disc)
+				c.Pop()
+			}
+			return th.glyphIn(gtx, ic, 16, navMarkerCell)
 		})
 	}
+}
+
+// labelDot centres the 10dp color dot of a label in its cell.
+func labelDot(gtx layout.Context, dot color.NRGBA) layout.Dimensions {
+	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		d := gtx.Dp(10)
+		gtx.Constraints = layout.Exact(image.Pt(d, d))
+		c := clip.Ellipse{Max: image.Pt(d, d)}.Push(gtx.Ops)
+		paint.Fill(gtx.Ops, dot)
+		c.Pop()
+		return layout.Dimensions{Size: image.Pt(d, d)}
+	})
 }
 
 // menuRow is one entry of a dropdown menu: an optional leading avatar or
