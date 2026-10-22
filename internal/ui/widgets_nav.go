@@ -11,13 +11,28 @@ import (
 	"gioui.org/layout"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
+	"gioui.org/unit"
 	"gioui.org/widget"
+)
+
+const (
+	// navRowInset keeps a folder row where it has always been.
+	navRowInset unit.Dp = 14
+	// navLabelInset pulls the first label row left to leave room for the
+	// disclosure arrow that nested labels need.
+	navLabelInset unit.Dp = 6
+	// navLabelIndent shifts one nested level to the right.
+	navLabelIndent unit.Dp = 18
+	// navArrowCell is the square the disclosure arrow is drawn and clicked in.
+	// Rows without children keep it empty so icons line up within a level.
+	navArrowCell unit.Dp = 20
 )
 
 // navItem is one row of the sidebar: folder icon or label dot, name and unread
 // count.
 type navItem struct {
 	click  widget.Clickable
+	toggle widget.Clickable // disclosure arrow of an expandable label row
 	id     string
 	label  string
 	ic     icon
@@ -25,7 +40,13 @@ type navItem struct {
 	dot    color.NRGBA
 	count  int
 	active bool
-	onTap  func(string)
+	// depth indents a nested label; expandable rows draw the arrow and report
+	// whether their subtree is currently open.
+	depth      int
+	expandable bool
+	expanded   bool
+	onTap      func(string)
+	onToggle   func()
 }
 
 func newNavItem(id, label string, ic icon, onTap func(string)) *navItem {
@@ -40,11 +61,12 @@ func (n *navItem) setCount(v int)   { n.count = v }
 func (n *navItem) setActive(v bool) { n.active = v }
 
 func (n *navItem) Layout(gtx layout.Context, th *theme) layout.Dimensions {
-	if n.click.Clicked(gtx) && n.onTap != nil {
-		n.onTap(n.id)
-		invalidateAfterTap(gtx)
-	}
-	return n.click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	// The arrow sits inside the row, so the pointer press reaches both
+	// clickables. The row action is deferred until the arrow has reported
+	// whether it consumed the click, like the hover controls of a mail row.
+	rowClicked := n.click.Clicked(gtx)
+	toggled := n.expandable && n.toggle.Clicked(gtx)
+	dims := n.click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		h := gtx.Dp(36)
 		w := gtx.Constraints.Max.X
 		if w <= 0 {
@@ -65,21 +87,29 @@ func (n *navItem) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 		}
 		stack.Pop()
 		gtx.Constraints = layout.Exact(size)
-		layout.Inset{Left: 14, Right: 14}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		left := navRowInset
+		if n.hasDot {
+			left = navLabelInset + unit.Dp(n.depth)*navLabelIndent
+		}
+		layout.Inset{Left: left, Right: 14}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			children := []layout.FlexChild{}
 			if n.hasDot {
 				dot := n.dot
-				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					gtx.Constraints = layout.Exact(image.Pt(gtx.Dp(20), gtx.Dp(20)))
-					return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-						d := gtx.Dp(10)
-						gtx.Constraints = layout.Exact(image.Pt(d, d))
-						c := clip.Ellipse{Max: image.Pt(d, d)}.Push(gtx.Ops)
-						paint.Fill(gtx.Ops, dot)
-						c.Pop()
-						return layout.Dimensions{Size: image.Pt(d, d)}
-					})
-				}))
+				children = append(children,
+					layout.Rigid(n.labelArrow(th)),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 2) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						gtx.Constraints = layout.Exact(image.Pt(gtx.Dp(20), gtx.Dp(20)))
+						return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							d := gtx.Dp(10)
+							gtx.Constraints = layout.Exact(image.Pt(d, d))
+							c := clip.Ellipse{Max: image.Pt(d, d)}.Push(gtx.Ops)
+							paint.Fill(gtx.Ops, dot)
+							c.Pop()
+							return layout.Dimensions{Size: image.Pt(d, d)}
+						})
+					}),
+				)
 			} else {
 				ic := n.ic
 				if n.active {
@@ -104,6 +134,36 @@ func (n *navItem) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 		})
 		return layout.Dimensions{Size: size}
 	})
+	switch {
+	case toggled && n.onToggle != nil:
+		n.onToggle()
+		invalidateAfterTap(gtx)
+	case rowClicked && n.onTap != nil:
+		n.onTap(n.id)
+		invalidateAfterTap(gtx)
+	}
+	return dims
+}
+
+// labelArrow draws the disclosure triangle of a nested label. The arrow owns a
+// clickable of its own so tapping it folds the subtree instead of selecting
+// the label; a row without children keeps the cell empty for alignment.
+func (n *navItem) labelArrow(th *theme) layout.Widget {
+	return func(gtx layout.Context) layout.Dimensions {
+		cell := image.Pt(gtx.Dp(navArrowCell), gtx.Dp(navArrowCell))
+		gtx.Constraints = layout.Exact(cell)
+		if !n.expandable {
+			return layout.Dimensions{Size: cell}
+		}
+		ic := iconExpandMore
+		if !n.expanded {
+			ic = iconChevronRight
+		}
+		th.cursor(gtx, pointer.CursorPointer, cell)
+		return n.toggle.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return th.glyphIn(gtx, ic, 16, navArrowCell)
+		})
+	}
 }
 
 // menuRow is one entry of a dropdown menu: an optional leading avatar or

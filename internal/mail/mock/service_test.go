@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -416,6 +417,38 @@ func TestKnownFoldersAndLabels(t *testing.T) {
 	for _, id := range []string{"inbx", "label:nope"} {
 		if _, err := s.ListThreads(ctx, mail.ListRequest{FolderID: id, Limit: 10}); !errors.Is(err, mail.ErrNotFound) {
 			t.Fatalf("folder %q returned %v, want ErrNotFound", id, err)
+		}
+	}
+}
+
+// TestFoldersExposeNestedLabels keeps the demo data showing what a real
+// account shows: the hierarchy lives in the label name, and every child is a
+// folder of its own that can be opened.
+func TestFoldersExposeNestedLabels(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+
+	folders, err := s.Folders(ctx)
+	if err != nil {
+		t.Fatalf("folders: %v", err)
+	}
+	names := make(map[string]string, len(folders))
+	for _, f := range folders {
+		names[f.ID] = f.Name
+	}
+	if got := names["label:work"]; got != "工作" {
+		t.Fatalf("parent label = %q, want 工作", got)
+	}
+	for _, id := range []string{"label:work:projA", "label:work:projB"} {
+		name, ok := names[id]
+		if !ok {
+			t.Fatalf("nested label %q is missing from the folder list", id)
+		}
+		if !strings.HasPrefix(name, "工作/") {
+			t.Fatalf("nested label %q is named %q, want a child of 工作", id, name)
+		}
+		if _, err := s.ListThreads(ctx, mail.ListRequest{FolderID: id, Limit: 10}); err != nil {
+			t.Fatalf("folder %q: %v", id, err)
 		}
 	}
 }

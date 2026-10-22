@@ -97,6 +97,7 @@
 - 色板令牌集中在 `palette.go`（页面底 `#F6F8FC`、选中 `#EAF1FB`、主色 `#D3E3FD`、行 hover `#F2F6FC` 等），视图里不写裸色值。
 - 列表行：勾选 | 星标 | 发件人 | 主题–摘要 | 附件 | 日期。发件人固定 168dp，尾部附件/hover 操作叠在固定 108dp 底层上（宽度恒定，正文列不漂移）；会话数量紧跟发件人；悬停换操作不改变行布局。
 - 分页与全选在列表工具栏：页码由 `tokens` 推出，工具栏显示范围与总数；全选只作用于当前页，切页 / 切文件夹 / 搜索即清空。
+- 标签区按 Gmail 的层级展示：标签名里的 `/` 是层级分隔（`工作/项目A` 是 `工作` 下的标签），子标签每层缩进 18dp（最多 3 层）且只显示末段名称；有子标签的父标签左侧画展开箭头（▾/▸），箭头占独立点击区，只折叠子树、不选中标签；折叠状态只存内存（默认全展开），选中标签的祖先始终展开；缺少父标签的数据按根级显示完整名称。
 - 滚动位置：切页 / 切文件夹 / 搜索走 `setThreads`（回到顶部），归档、删除、加星后的同页刷新走 `refreshThreads`（保留偏移）。
 - 后端没有的能力不做假入口、不放禁用占位。
 - **省略号截断不能交给 `MinSize`**：`TruncateEllipsis` 的最小宽度会退化成「…」，再被 Center/Border 压缩。必须给固定宽度槽位。
@@ -338,6 +339,7 @@ internal/ui/topbar.go          顶栏品牌与两侧控件
 internal/ui/searchfield.go     搜索框（含 CSD 紧凑变体）
 internal/ui/windowcontrols.go  标题栏的最小化/最大化/关闭按钮
 internal/ui/sidebar.go         侧栏文件夹/标签
+internal/ui/labels.go          标签层级：按名称建树、排序与折叠扁平化
 internal/ui/listtoolbar.go     列表工具栏与分页
 internal/ui/messagelist.go     会话列表容器（layout.List 虚拟化）
 internal/ui/messagelist_model.go  列表数据与批量选择

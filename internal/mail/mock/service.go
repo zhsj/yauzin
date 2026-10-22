@@ -66,6 +66,10 @@ func (s *Service) seed() {
 	now := time.Now()
 	s.labels = []mail.Folder{
 		{ID: "label:work", Name: "工作", Kind: mail.FolderLabel, Color: "#0B57D0"},
+		// Nested labels read their hierarchy from the name, like Gmail does:
+		// the sidebar draws them indented under 工作 with a disclosure arrow.
+		{ID: "label:work:projA", Name: "工作/项目A", Kind: mail.FolderLabel, Color: "#C2185B"},
+		{ID: "label:work:projB", Name: "工作/项目B", Kind: mail.FolderLabel, Color: "#1A73E8"},
 		{ID: "label:bills", Name: "账单", Kind: mail.FolderLabel, Color: "#1E8E3E"},
 		{ID: "label:travel", Name: "旅行", Kind: mail.FolderLabel, Color: "#F4B400"},
 		{ID: "label:github", Name: "GitHub", Kind: mail.FolderLabel, Color: "#9AA0A6"},
@@ -817,7 +821,7 @@ var templates = []template{
 			"星标移到最左侧，点击区域扩大到 32px",
 			"悬停背景使用 #EDF2FA",
 		},
-		labels: []string{"label:work"},
+		labels: []string{"label:work", "label:work:projA"},
 	},
 	{
 		from: "旅行雷达", email: "alert@travelradar.example",
@@ -852,7 +856,7 @@ var templates = []template{
 			"Duration: 2m 14s",
 			"Runner: ubuntu-latest",
 		},
-		labels: []string{"label:github"},
+		labels: []string{"label:github", "label:work", "label:work:projB"},
 	},
 	{
 		from: "陈曦", email: "chen.xi@lumen.studio",

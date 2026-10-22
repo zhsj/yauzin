@@ -14,14 +14,22 @@ type sidebarView struct {
 	compose  *pillButton
 	addLabel *iconButton
 	folders  []*navItem
-	labels   []*navItem
+	// labels holds the rows currently visible, which is the flattened tree
+	// minus the subtrees the user folded.
+	labels []*navItem
+	// tree is the label hierarchy read from the names. It is rebuilt on every
+	// refresh while the rows themselves are cached in its nodes.
+	tree *labelTree
+	// collapsed folds one label subtree. It lives in memory only: Gmail keeps
+	// this across sessions, the sidebar opens fully expanded on every start.
+	collapsed map[string]bool
 	// list scrolls the whole column. The number of labels comes from the
 	// backend, so the sidebar cannot assume it fits the window.
 	list layout.List
 }
 
 func newSidebar(a *App) *sidebarView {
-	s := &sidebarView{app: a}
+	s := &sidebarView{app: a, collapsed: map[string]bool{}}
 	s.compose = newComposePill(i18n.T("sidebar.compose"), iconComposeBlue, func() {
 		a.openCompose(composeNew, nil)
 	})
@@ -34,22 +42,45 @@ func newSidebar(a *App) *sidebarView {
 func (s *sidebarView) reload() {
 	a := s.app
 	s.folders = s.folders[:0]
-	s.labels = s.labels[:0]
+	labelFolders := make([]mail.Folder, 0, len(a.folders))
 	for _, f := range a.folders {
-		active := f.ID == a.activeFolder && a.query == ""
 		if f.Kind == mail.FolderLabel {
-			item := newNavItemBar(f.ID, f.Name, hexColor(f.Color), a.selectFolder)
-			item.setCount(f.Unread)
-			item.setActive(active)
-			s.labels = append(s.labels, item)
+			labelFolders = append(labelFolders, f)
 			continue
 		}
+		active := f.ID == a.activeFolder && a.query == ""
 		item := newNavItem(f.ID, folderDisplayName(f), folderIcon(f.Kind), a.selectFolder)
 		item.setCount(f.Unread)
 		item.setActive(active)
 		s.folders = append(s.folders, item)
 	}
+	// The tree keeps the fold state: a refresh (a new page, marking a message
+	// read) must not pop the labels the user just folded shut.
+	s.tree = buildLabelTree(labelFolders, a.selectFolder)
+	s.flattenLabels()
 	a.refreshTrayIcon()
+}
+
+// flattenLabels rebuilds the visible rows after a fold or a refresh.
+func (s *sidebarView) flattenLabels() {
+	if s.tree == nil {
+		s.labels = s.labels[:0]
+		return
+	}
+	active := ""
+	if s.app.query == "" {
+		active = s.app.activeFolder
+	}
+	s.labels = s.tree.flatten(s.collapsed, active, s.toggleLabel)
+}
+
+// toggleLabel folds or unfolds one label subtree.
+func (s *sidebarView) toggleLabel(id string) {
+	if s.collapsed == nil {
+		s.collapsed = map[string]bool{}
+	}
+	s.collapsed[id] = !s.collapsed[id]
+	s.flattenLabels()
 }
 
 func (s *sidebarView) Layout(gtx layout.Context) layout.Dimensions {
@@ -57,12 +88,15 @@ func (s *sidebarView) Layout(gtx layout.Context) layout.Dimensions {
 	return layout.Inset{Top: 8, Right: 8, Bottom: 8, Left: 8}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		// One scroll region for the whole column rather than nested lists: the
 		// compose pill scrolls out of the way with the folders it sits above.
+		// Folding a label changes the row count in the middle of the layout, so
+		// both the slice and the count are snapshotted before the first row.
+		labels := s.labels
 		folderStart := 2 // 0 is the compose pill, 1 is the gap under it
 		labelsStart := folderStart + len(s.folders)
 		rows := labelsStart
-		if len(s.labels) > 0 {
+		if len(labels) > 0 {
 			// A gap and the section header sit between the folders and the labels.
-			rows = labelsStart + 2 + len(s.labels)
+			rows = labelsStart + 2 + len(labels)
 		}
 		s.list.Axis = layout.Vertical
 		return s.list.Layout(gtx, rows, func(gtx layout.Context, i int) layout.Dimensions {
@@ -92,7 +126,7 @@ func (s *sidebarView) Layout(gtx layout.Context) layout.Dimensions {
 					)
 				})
 			default:
-				item := s.labels[i-labelsStart-2]
+				item := labels[i-labelsStart-2]
 				return layout.Inset{Left: 6, Right: 6}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return item.Layout(gtx, th)
 				})
