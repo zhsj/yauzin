@@ -85,6 +85,16 @@ func (a *App) rememberCursor(page int, next string) {
 	a.tokens = append(a.tokens[:page], next)
 }
 
+// clearList empties the page before the folder, the query or the account
+// changes: the rows on screen describe the view being left, so they would keep
+// drawing their label chips until the new page arrives.
+func (a *App) clearList() {
+	// setThreads already drops the bulk selection and puts the scroll back at
+	// the top; setPage then blanks the range label and disables the arrows.
+	a.list.setThreads(nil)
+	a.toolbar.setPage(1, 0, 0, false)
+}
+
 // loadThreads loads the current page and resets the list scroll: it serves
 // page, folder and search changes, where the previous position is meaningless.
 func (a *App) loadThreads() {
@@ -164,6 +174,7 @@ func (a *App) setQuery(q string) {
 	}
 	a.query = q
 	a.resetSelection()
+	a.clearList()
 	a.goToPage(1)
 	a.side.reload()
 }
@@ -178,6 +189,7 @@ func (a *App) selectFolder(id string) {
 	a.top.clearSearch()
 	a.blurRequested = true
 	a.resetSelection()
+	a.clearList()
 	a.hideOverlay()
 	a.goToPage(1)
 	a.side.reload()
@@ -217,8 +229,7 @@ func (a *App) switchAccount(id string) {
 	a.query = ""
 	a.top.clearSearch()
 	a.resetSelection()
-	a.list.clearSelection()
-	a.list.setThreads(nil)
+	a.clearList()
 	a.hideOverlay()
 	a.reloadFolders()
 	a.loadThreads()

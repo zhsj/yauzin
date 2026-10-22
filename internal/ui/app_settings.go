@@ -235,10 +235,8 @@ func (a *App) clearAccountView() {
 	a.top.clearSearch()
 	a.page, a.tokens = 1, []string{""}
 	a.resetSelection()
-	a.list.clearSelection()
-	a.list.setThreads(nil)
+	a.clearList()
 	a.toolbar.setLoading(false)
-	a.toolbar.setPage(1, 0, 0, false)
 }
 
 // rebuildProxiedServices swaps the backend of every Gmail account that opts

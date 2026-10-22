@@ -61,7 +61,7 @@
 - 所有 `mail.Service` 调用在 goroutine + `context.WithTimeout` 中执行；结果只通过 `App.post(fn)` 进入**单一队列**，由 UI goroutine 在每帧开头 `drain()`。goroutine 内禁止改 UI 状态。
 - 所有 Service 调用走 `App.async`：它持有超时、`post` 回投与错误提示。需要被替代的请求（列表/文件夹/会话）把 `cancel` 存在 `App` 字段里，下一次同类请求先 cancel 旧请求，窗口销毁时 `cancelRequests` 全部停止。
 - 过期响应靠**代际号**丢弃：`listGen`（列表/分页）、`folderGen`（文件夹未读数）、`msgGen`（阅读器）；回调里同时校验 `activeAcc`、页码或会话 ID。`context.Canceled` 是预期结果，不弹错误提示。
-- 切账号 / 切文件夹 / 搜索时先清空视图（`setThreads(nil)`、`closeThread()`）再发起加载，避免旧数据闪现。
+- 切账号 / 切文件夹 / 搜索时先清空视图（`App.clearList` 清 `setThreads(nil)` 并抹掉工具栏范围文案，`resetSelection` 关阅读器）再发起加载，避免旧行、旧标签色块与旧页码闪现。
 - 列表只渲染可见行（`layout.List`），行内控件状态按会话 ID 缓存在视图结构里。
 
 ### 4.3 浮层
