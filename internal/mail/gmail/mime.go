@@ -20,7 +20,7 @@ type mimeBodies struct {
 }
 
 // message converts one Gmail message into the domain model.
-func (s *Service) message(m message) *mail.Message {
+func (s *Service) message(m *Message) *mail.Message {
 	h := m.headers()
 	out := &mail.Message{
 		MessageSummary: mail.MessageSummary{
@@ -49,7 +49,7 @@ func (s *Service) message(m message) *mail.Message {
 // collectParts walks the MIME tree, keeping the first text and HTML bodies and
 // listing every file part. A part with a filename is a file even when it also
 // carries a text media type (an attached .txt is not the body).
-func collectParts(p *payload, out *mimeBodies) {
+func collectParts(p *MessagePart, out *mimeBodies) {
 	if p == nil {
 		return
 	}
@@ -76,11 +76,11 @@ func collectParts(p *payload, out *mimeBodies) {
 
 // attachment converts one file part into its metadata. The content itself is
 // out of scope: the backend is read-only and does not download attachments.
-func attachment(p *payload) mail.Attachment {
+func attachment(p *MessagePart) mail.Attachment {
 	a := mail.Attachment{Filename: p.Filename, MIMEType: p.MIMEType}
 	if p.Body != nil {
 		a.ID = p.Body.AttachmentID
-		a.Size = p.Body.Size
+		a.Size = int64(p.Body.Size)
 	}
 	return a
 }
@@ -88,7 +88,7 @@ func attachment(p *payload) mail.Attachment {
 // decodeBody decodes a body part: Gmail already undid the transfer encoding,
 // so the data is base64url of the raw bytes, and only the charset is left to
 // convert.
-func decodeBody(b *body, contentType string) string {
+func decodeBody(b *MessagePartBody, contentType string) string {
 	if b == nil || b.Data == "" {
 		return ""
 	}
@@ -130,7 +130,7 @@ func charsetOf(contentType string) string {
 }
 
 // partHeader returns one header of a MIME part by case-insensitive name.
-func partHeader(p *payload, name string) string {
+func partHeader(p *MessagePart, name string) string {
 	for _, h := range p.Headers {
 		if strings.EqualFold(h.Name, name) {
 			return h.Value

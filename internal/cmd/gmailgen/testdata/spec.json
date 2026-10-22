@@ -1,0 +1,31 @@
+{
+  "revision": "test-1",
+  "schemas": {
+    "Alpha": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "ids": {"type": "array", "items": {"type": "string"}},
+        "mimeType": {"type": "string"},
+        "child": {"$ref": "Beta"},
+        "children": {"type": "array", "items": {"$ref": "Beta"}},
+        "count": {"type": "integer", "format": "int32"},
+        "total": {"type": "integer", "format": "uint32"},
+        "big": {"type": "integer", "format": "int64"},
+        "internalDate": {"type": "string", "format": "int64"},
+        "raw": {"type": "string", "format": "byte"},
+        "unread": {"type": "boolean"},
+        "kind": {"type": "string", "enum": ["a", "b"]},
+        "inline": {"type": "object", "properties": {"name": {"type": "string"}}},
+        "labels": {"type": "object", "additionalProperties": {"type": "string"}},
+        "odd": {"type": "any"}
+      }
+    },
+    "Beta": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"}
+      }
+    }
+  }
+}

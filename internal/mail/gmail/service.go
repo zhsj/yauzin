@@ -72,14 +72,14 @@ func (s *Service) Account() mail.Account { return s.acc }
 
 // Folders lists the four system folders plus the user labels.
 func (s *Service) Folders(ctx context.Context) ([]mail.Folder, error) {
-	var resp labelList
+	var resp ListLabelsResponse
 	q := url.Values{}
 	q.Set("fields", "labels(id,name,type,messagesUnread,color/backgroundColor)")
 	if err := s.c.do(ctx, "labels.list", "GET", "/users/me/labels", q, &resp); err != nil {
 		return nil, err
 	}
 
-	byID := make(map[string]label, len(resp.Labels))
+	byID := make(map[string]*Label, len(resp.Labels))
 	for _, l := range resp.Labels {
 		byID[l.ID] = l
 	}
@@ -141,7 +141,7 @@ func (s *Service) ListThreads(ctx context.Context, req mail.ListRequest) (mail.T
 		q.Set("pageToken", req.PageToken)
 	}
 
-	var list threadList
+	var list ListThreadsResponse
 	if err := s.c.do(ctx, "threads.list", "GET", "/users/me/threads", q, &list); err != nil {
 		return mail.ThreadPage{}, err
 	}
@@ -171,8 +171,8 @@ func (s *Service) ListThreads(ctx context.Context, req mail.ListRequest) (mail.T
 // fetchThreadMetadata loads the messages of every listed conversation with
 // bounded concurrency, keeping the list order. A conversation deleted between
 // the two calls is dropped instead of failing the whole page.
-func (s *Service) fetchThreadMetadata(ctx context.Context, refs []threadRef) ([]thread, error) {
-	out := make([]thread, len(refs))
+func (s *Service) fetchThreadMetadata(ctx context.Context, refs []*Thread) ([]*Thread, error) {
+	out := make([]*Thread, len(refs))
 	found := make([]bool, len(refs))
 
 	var (
@@ -197,7 +197,7 @@ func (s *Service) fetchThreadMetadata(ctx context.Context, refs []threadRef) ([]
 			for _, h := range []string{"From", "To", "Cc", "Subject", "Date"} {
 				q.Add("metadataHeaders", h)
 			}
-			var th thread
+			var th Thread
 			err := s.c.do(ctx, "threads.get", "GET", "/users/me/threads/"+url.PathEscape(id), q, &th)
 			if err != nil {
 				if isNotFound(err) {
@@ -210,7 +210,7 @@ func (s *Service) fetchThreadMetadata(ctx context.Context, refs []threadRef) ([]
 				mu.Unlock()
 				return
 			}
-			out[i] = th
+			out[i] = &th
 			found[i] = true
 		}(i, ref.ID)
 	}
@@ -238,7 +238,7 @@ func (s *Service) GetThread(ctx context.Context, threadID string) ([]*mail.Messa
 	}
 	q := url.Values{}
 	q.Set("format", "full")
-	var th thread
+	var th Thread
 	err := s.c.do(ctx, "threads.get", "GET", "/users/me/threads/"+url.PathEscape(threadID), q, &th)
 	if err != nil {
 		return nil, err
@@ -296,7 +296,7 @@ func labelIDFor(folderID string) (string, error) {
 }
 
 // summarize folds the messages of a conversation into one list row.
-func summarize(accountID string, th thread) mail.ThreadSummary {
+func summarize(accountID string, th *Thread) mail.ThreadSummary {
 	sum := mail.ThreadSummary{ID: th.ID, AccountID: accountID}
 	labels := make([]string, 0, 8)
 	seenLabels := make(map[string]struct{}, 8)
@@ -324,10 +324,9 @@ func summarize(accountID string, th thread) mail.ThreadSummary {
 	// The newest message supplies the row's headline fields. Gmail returns
 	// thread messages oldest first, but compare dates so a malformed order does
 	// not pick the wrong one.
-	var newest *message
+	var newest *Message
 	var newestDate time.Time
-	for i := range th.Messages {
-		m := &th.Messages[i]
+	for _, m := range th.Messages {
 		d := m.date()
 		if newest == nil || d.After(newestDate) {
 			newest, newestDate = m, d
@@ -340,8 +339,7 @@ func summarize(accountID string, th thread) mail.ThreadSummary {
 		sum.MessageCount = len(th.Messages)
 	}
 	for i := len(th.Messages) - 1; i >= 0; i-- {
-		m := &th.Messages[i]
-		from := parseAddressList(m.headers()["from"])
+		from := parseAddressList(th.Messages[i].headers()["from"])
 		if len(from) > 0 {
 			sum.Participants = mail.AppendUniqueAddresses(sum.Participants, from[0])
 		}

@@ -12,28 +12,28 @@ func b64(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s
 
 func b64Padded(s string) string { return base64.URLEncoding.EncodeToString([]byte(s)) }
 
-func textPart(mimeType, text string) *payload {
-	return &payload{MIMEType: mimeType, Body: &body{Data: b64(text)}}
+func textPart(mimeType, text string) *MessagePart {
+	return &MessagePart{MIMEType: mimeType, Body: &MessagePartBody{Data: b64(text)}}
 }
 
 func TestMessagePrefersFirstTextAndHTMLBodies(t *testing.T) {
 	svc := &Service{acc: mail.Account{ID: "acc"}}
-	msg := message{
+	msg := &Message{
 		ID:           "m1",
 		LabelIDs:     []string{"UNREAD", "STARRED"},
 		InternalDate: "1700000000000",
-		Payload: &payload{
+		Payload: &MessagePart{
 			MIMEType: "multipart/mixed",
-			Headers: []header{
+			Headers: []*MessagePartHeader{
 				{Name: "From", Value: "Alice <alice@example.com>"},
 				{Name: "To", Value: "user@example.com"},
 				{Name: "Cc", Value: "cc@example.com"},
 				{Name: "Subject", Value: "Hello"},
 			},
-			Parts: []*payload{
+			Parts: []*MessagePart{
 				{
 					MIMEType: "multipart/alternative",
-					Parts: []*payload{
+					Parts: []*MessagePart{
 						textPart("text/plain", "plain text"),
 						textPart("text/html", "<b>html</b>"),
 					},
@@ -41,7 +41,7 @@ func TestMessagePrefersFirstTextAndHTMLBodies(t *testing.T) {
 				{
 					Filename: "report.pdf",
 					MIMEType: "application/pdf",
-					Body:     &body{AttachmentID: "att1", Size: 1234},
+					Body:     &MessagePartBody{AttachmentID: "att1", Size: 1234},
 				},
 			},
 		},
@@ -77,7 +77,7 @@ func TestMessagePrefersFirstTextAndHTMLBodies(t *testing.T) {
 
 func TestMessageHTMLOnly(t *testing.T) {
 	svc := &Service{}
-	got := svc.message(message{ID: "m1", Payload: textPart("text/html", "<p>only html</p>")})
+	got := svc.message(&Message{ID: "m1", Payload: textPart("text/html", "<p>only html</p>")})
 	if got.TextBody != "" || got.HTMLBody != "<p>only html</p>" {
 		t.Fatalf("bodies = %q / %q", got.TextBody, got.HTMLBody)
 	}
@@ -85,9 +85,9 @@ func TestMessageHTMLOnly(t *testing.T) {
 
 func TestBodyBase64ToleratesPadding(t *testing.T) {
 	svc := &Service{}
-	got := svc.message(message{ID: "m1", Payload: &payload{
+	got := svc.message(&Message{ID: "m1", Payload: &MessagePart{
 		MIMEType: "text/plain",
-		Body:     &body{Data: b64Padded("padded text")},
+		Body:     &MessagePartBody{Data: b64Padded("padded text")},
 	}})
 	if got.TextBody != "padded text" {
 		t.Fatalf("text body = %q", got.TextBody)
@@ -97,12 +97,12 @@ func TestBodyBase64ToleratesPadding(t *testing.T) {
 func TestBodyConvertsLatinOne(t *testing.T) {
 	svc := &Service{}
 	latin1 := []byte{0x63, 0x61, 0x66, 0xe9}
-	part := &payload{
+	part := &MessagePart{
 		MIMEType: "text/plain",
-		Headers:  []header{{Name: "Content-Type", Value: `text/plain; charset="iso-8859-1"`}},
-		Body:     &body{Data: base64.RawURLEncoding.EncodeToString(latin1)},
+		Headers:  []*MessagePartHeader{{Name: "Content-Type", Value: `text/plain; charset="iso-8859-1"`}},
+		Body:     &MessagePartBody{Data: base64.RawURLEncoding.EncodeToString(latin1)},
 	}
-	got := svc.message(message{ID: "m1", Payload: part})
+	got := svc.message(&Message{ID: "m1", Payload: part})
 	if got.TextBody != "café" {
 		t.Fatalf("text body = %q, want café", got.TextBody)
 	}
@@ -110,10 +110,10 @@ func TestBodyConvertsLatinOne(t *testing.T) {
 
 func TestFilenamedPartIsAnAttachmentNotBody(t *testing.T) {
 	svc := &Service{}
-	got := svc.message(message{ID: "m1", Payload: &payload{
+	got := svc.message(&Message{ID: "m1", Payload: &MessagePart{
 		MIMEType: "multipart/mixed",
-		Parts: []*payload{
-			{Filename: "notes.txt", MIMEType: "text/plain", Body: &body{AttachmentID: "a1", Data: b64("attached")}},
+		Parts: []*MessagePart{
+			{Filename: "notes.txt", MIMEType: "text/plain", Body: &MessagePartBody{AttachmentID: "a1", Data: b64("attached")}},
 			textPart("text/plain", "the body"),
 		},
 	}})
@@ -127,10 +127,10 @@ func TestFilenamedPartIsAnAttachmentNotBody(t *testing.T) {
 
 func TestDateFallsBackToTheHeader(t *testing.T) {
 	svc := &Service{}
-	got := svc.message(message{
+	got := svc.message(&Message{
 		ID:           "m1",
 		InternalDate: "not-a-number",
-		Payload: &payload{Headers: []header{
+		Payload: &MessagePart{Headers: []*MessagePartHeader{
 			{Name: "Date", Value: "Tue, 14 Nov 2023 22:13:20 +0000"},
 		}},
 	})
@@ -151,7 +151,7 @@ func TestMalformedAddressesFallBackToText(t *testing.T) {
 }
 
 func TestAttachmentMetadataWithoutBody(t *testing.T) {
-	p := &payload{Filename: "a.bin", MIMEType: "application/octet-stream"}
+	p := &MessagePart{Filename: "a.bin", MIMEType: "application/octet-stream"}
 	a := attachment(p)
 	if a.Filename != "a.bin" || a.ID != "" || a.Size != 0 {
 		t.Fatalf("attachment = %+v", a)
@@ -159,10 +159,10 @@ func TestAttachmentMetadataWithoutBody(t *testing.T) {
 }
 
 func TestPayloadHasAttachment(t *testing.T) {
-	if payloadHasAttachment(&payload{MIMEType: "text/plain", Body: &body{Data: b64("x")}}) {
+	if payloadHasAttachment(&MessagePart{MIMEType: "text/plain", Body: &MessagePartBody{Data: b64("x")}}) {
 		t.Fatal("a body-only part reported an attachment")
 	}
-	nested := &payload{Parts: []*payload{{Parts: []*payload{{Filename: "x.png"}}}}}
+	nested := &MessagePart{Parts: []*MessagePart{{Parts: []*MessagePart{{Filename: "x.png"}}}}}
 	if !payloadHasAttachment(nested) {
 		t.Fatal("nested file part was not detected")
 	}

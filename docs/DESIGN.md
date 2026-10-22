@@ -35,6 +35,7 @@
 - **存储**：`accounts.json`（与 `settings.json` 同目录，0600，临时文件 + rename 原子写）保存共享的 `oauth{clientId, clientSecret}` 与每账号 `{id,email,name,useProxy,token{accessToken,refreshToken,tokenType,expiresAt}}`；`id` 为 `gmail:` + 小写邮箱，重复登录同一邮箱即覆盖（重新授权）。一个 `*accounts.Store` 同时被 UI 与所有后端持有，后端刷新令牌后立即回写。文件损坏只告警并退化为「仅 demo 账号」，不阻止启动。
 - **代理**：代理地址是通用设置（`settings.json` 的 `proxy`，在「设置 → 通用 → 网络 → 代理」维护），账号条目只记 `useProxy`。保存代理后，使用代理的 Gmail 后端被关闭并重建（先取消在途请求），新 Transport 立即生效。`net/url` 只接受 `http` / `https` / `socks5` 且必须有 host 与端口；`socks5` 由 `http.Transport` 原生支持（`socks5h` 不接受：net/http 没有对应 dialer）。回环回调不经代理。
 - **读取映射**：Gmail 系统标签 `INBOX/STARRED/SENT/TRASH` 映射为 `inbox/starred/sent/trash` 与对应 `FolderKind`（名称留给 UI 按 kind 翻译），`DRAFT/SPAM/IMPORTANT/UNREAD/CATEGORY_*` 不展示；用户标签保留 Gmail label ID、名称、`color.backgroundColor` 与 `messagesUnread`。列表用 `threads.list`，随后每会话一次 `threads.get?format=metadata`（并发 6）补全参与者、未读数、星标、附件标记与最新时间；`Total` 取 `resultSizeEstimate`，缺省或用空时为 -1。正文用 `format=full` 递归解析 MIME：首个 `text/plain` 与首个 `text/html` 作正文，带 `filename` 的部件只留元数据（附件下载不在本期范围）。
+- **类型来源**：`discovery_types.go` 由 `internal/cmd/gmailgen` 从 Google 的 Discovery 文档生成（`//go:generate`，文件头记录文档 `revision`），字段名按 initialism 表保持 `ID` / `IDs` / `MIMEType` / `AttachmentID` 等写法；`api.go` 只留 `headers` / `hasFlag` / `date` / `hasAttachment` 这些把文档折算成领域模型的辅助方法。文档本身不入库，每次生成都取官方当前版本，schema 变化靠 `git diff` 审阅。
 - **已知取舍**：一页 50 个会话 = 1 次 list + 50 次 metadata get（Gmail 无批量端点），首屏延迟明显高于 mock，后续可考虑批量或减少 `metadataHeaders`；`resultSizeEstimate` 是估算值；列表中附件标记依赖 metadata 返回的 part 树，若某条消息未返回 parts 则该行可能漏标记；token 与代理凭据都是明文 0600 存储，没有系统密钥环集成。
 
 ## 4. UI 架构（`internal/ui`）
@@ -198,6 +199,7 @@
 - 文件选择与附件保存通过 `xdg-desktop-portal` 提供的系统对话框；portal 不可用时附件保存回退到 `~/Downloads`。
 - macOS 需要 Xcode Command Line Tools，Windows 需要 MinGW-w64。
 - 开发沙箱 `CGO_ENABLED=0` 且缺少上述开发库：任何（直接或间接）import `gioui.org/app` 的目标（`internal/ui`、`cmd/yauzin`）只能在 Docker 内编译，典型报错 `build constraints exclude all Go files in .../gioui.org/internal/vk`。
+- 沙箱内访问外网走本地代理，命令前置 `https_proxy=http://127.0.0.1:1081`；`internal/cmd/gmailgen` 只在下载 Discovery 文档时需要它，代码本身不读代理配置。
 - 格式化使用 `gofmt`（沙箱 `PATH` 内，go1.27.2）；import 增删与分组使用 Go 扩展安装的 `goimports`（`~/go/bin/goimports`，**不在沙箱 `PATH`**），命令见 §13.5。
 
 ### 13.2 依赖与 vendor
@@ -213,7 +215,15 @@ GOFLAGS=-mod=mod CGO_ENABLED=1 \
   go mod vendor
 ```
 
-Gmail 只引入 `golang.org/x/oauth2`，不引入 `google.golang.org/api`：官方生成客户端的 `option` 包会连带 grpc / protobuf / OpenTelemetry 依赖，而本项目只用到 4 个 REST 端点，手写 JSON 结构更轻。
+Gmail 只引入 `golang.org/x/oauth2`，不引入 `google.golang.org/api`：官方生成客户端的 `option` 包直接依赖 `google.golang.org/grpc` 与 `cloud.google.com/go/auth`（`protobuf` / `OpenTelemetry` 由 `grpc` 间接带入），而本项目只用到 4 个 REST 端点。
+
+API 类型不手写也不引官方客户端：`internal/cmd/gmailgen` 读取 Google 的 Discovery 文档生成 `internal/mail/gmail/discovery_types.go`。Gmail 没有 OpenAPI 规范，Discovery 文档是唯一的机器可读来源；它不入库，生成器每次自行下载当前版本，并把 `revision` 写进生成文件头部。重新生成：
+
+```bash
+https_proxy=http://127.0.0.1:1081 go generate ./internal/mail/gmail
+```
+
+生成后按 `git diff` 审阅：新增/改名字段可能让调用点编译失败，这正是需要人工确认 schema 变化的地方。
 
 ### 13.3 本地构建与运行
 
@@ -308,7 +318,8 @@ python3 scripts/gen_app_icons.py            # 需要 rsvg-convert（librsvg2-bin
 cmd/yauzin/main.go             入口：app.Main + 窗口事件循环
 internal/mail/mail.go          领域模型（会话摘要 / 分页）与 Service 接口
 internal/mail/mock/            内存 mock 后端（140ms 模拟延迟，按会话聚合）
-internal/mail/gmail/           Gmail 只读后端：OAuth（PKCE 回环）、REST 客户端、MIME 解析
+internal/mail/gmail/           Gmail 只读后端：OAuth（PKCE 回环）、REST 客户端、MIME 解析、Discovery 生成的 API 类型
+internal/cmd/gmailgen/         Gmail Discovery 文档 → Go 类型生成器（go generate 入口）
 internal/accounts/             accounts.json：OAuth 凭据、令牌与每账号 useProxy
 internal/ui/app.go             状态与构造：App 字段、构造器、异步原语
 internal/ui/app_lifecycle.go   窗口生命周期、post 队列、临时目录
