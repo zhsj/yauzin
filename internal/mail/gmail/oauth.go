@@ -342,7 +342,8 @@ func oauthToken(t accounts.Token) *oauth2.Token {
 
 // ParseProxy validates a proxy address from the settings and returns it in the
 // form http.Transport expects. Empty input means a direct connection and is
-// not an error.
+// not an error. socks5h is not accepted: net/http has no dialer for it, and its
+// socks5 dialer already lets the proxy resolve the destination host.
 func ParseProxy(raw string) (*url.URL, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -353,7 +354,7 @@ func ParseProxy(raw string) (*url.URL, error) {
 		return nil, fmt.Errorf("invalid proxy address: %w", err)
 	}
 	switch strings.ToLower(u.Scheme) {
-	case "http", "https", "socks5", "socks5h":
+	case "http", "https", "socks5":
 	default:
 		return nil, fmt.Errorf("invalid proxy scheme %q: use http, https or socks5", u.Scheme)
 	}

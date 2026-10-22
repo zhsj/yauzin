@@ -565,6 +565,7 @@ func TestParseProxy(t *testing.T) {
 		{"http://127.0.0.1:8080", "http://127.0.0.1:8080", false},
 		{"socks5://127.0.0.1:1080", "socks5://127.0.0.1:1080", false},
 		{"socks5://user:pass@proxy.example.com:1080", "socks5://user:pass@proxy.example.com:1080", false},
+		{"socks5h://proxy.example.com:1080", "", true},
 		{"http://proxy.example.com:8080/", "http://proxy.example.com:8080", false},
 		{"127.0.0.1:8080", "", true},
 		{"ftp://127.0.0.1:8080", "", true},
