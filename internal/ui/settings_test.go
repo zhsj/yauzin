@@ -93,9 +93,19 @@ func findAccRow(t *testing.T, s *settingsView, title string) *settingsRow {
 	return row
 }
 
+// accountDetailsOf returns the details block of an open account row.
+func accountDetailsOf(t *testing.T, s *settingsView, title string) *accountDetails {
+	t.Helper()
+	row := findAccRow(t, s, title)
+	if row.details == nil {
+		t.Fatalf("the account %q is collapsed", title)
+	}
+	return row.details
+}
+
 // TestSettingsAccountRowExpands covers the accordion: a stored Gmail account
-// only shows its details — proxy, re-login and delete — while it is open, and
-// the demo mailbox has nothing to open.
+// only shows its details while it is open, and those details live inside the
+// row's own card item instead of becoming sibling rows.
 func TestSettingsAccountRowExpands(t *testing.T) {
 	target := mail.Account{ID: "gmail:user@example.com", Kind: mail.KindGmail, Email: "user@example.com"}
 	a, _ := newDeleteTestApp(t, []mail.Account{demoAccounts()[0], target})
@@ -111,6 +121,9 @@ func TestSettingsAccountRowExpands(t *testing.T) {
 	if s.accRows[1].valueIcon != glyphExpandMore {
 		t.Fatalf("collapsed account arrow = %v, want the expand-more glyph", s.accRows[1].valueIcon)
 	}
+	if s.accRows[1].details != nil {
+		t.Fatal("the collapsed account already has a details block")
+	}
 
 	var ops op.Ops
 	gtx := testGtx(&ops, testWindow)
@@ -123,21 +136,18 @@ func TestSettingsAccountRowExpands(t *testing.T) {
 	if s.expanded != target.ID {
 		t.Fatalf("expanded = %q, want %q", s.expanded, target.ID)
 	}
-	if got := len(s.accRows); got != 6 {
-		t.Fatalf("rows = %d, want the account, proxy, re-login, delete and add rows", got)
+	if got := len(s.accRows); got != 3 {
+		t.Fatalf("rows = %d, want the details to stay inside the account row", got)
 	}
 	if s.accRows[1].valueIcon != glyphExpandLess {
 		t.Fatalf("open account arrow = %v, want the expand-less glyph", s.accRows[1].valueIcon)
 	}
-	want := []string{
-		i18n.T("settings.accountUseProxy"),
-		i18n.T("settings.accountRelogin"),
-		i18n.T("settings.accountDelete"),
+	d := accountDetailsOf(t, s, target.DisplayName())
+	if d.proxy == nil || d.relogin == nil || d.remove == nil || d.cancel == nil || d.confirm == nil {
+		t.Fatalf("details block = %+v, want every control", d)
 	}
-	for i, title := range want {
-		if got := s.accRows[2+i].title; got != title {
-			t.Fatalf("row %d title = %q, want %q", 2+i, got, title)
-		}
+	if d.armed {
+		t.Fatal("a freshly opened account is already confirming a delete")
 	}
 
 	// A second click collapses the account again.
@@ -147,8 +157,8 @@ func TestSettingsAccountRowExpands(t *testing.T) {
 	if s.expanded != "" {
 		t.Fatalf("expanded = %q after the second click, want it closed", s.expanded)
 	}
-	if got := len(s.accRows); got != 3 {
-		t.Fatalf("rows = %d after collapsing, want the collapsed card", got)
+	if s.accRows[1].details != nil {
+		t.Fatal("the collapsed account kept its details block")
 	}
 }
 
@@ -176,12 +186,15 @@ func TestSettingsAccountsAccordion(t *testing.T) {
 	if s.expanded != second.ID {
 		t.Fatalf("expanded = %q, want %q", s.expanded, second.ID)
 	}
-	if got := findAccRow(t, s, first.DisplayName()).valueIcon; got != glyphExpandMore {
-		t.Fatalf("first account arrow = %v after the second opened, want it collapsed", got)
+	closed := findAccRow(t, s, first.DisplayName())
+	if closed.valueIcon != glyphExpandMore || closed.details != nil {
+		t.Fatalf("first account = arrow %v, details %v; want it collapsed", closed.valueIcon, closed.details)
 	}
-	// The demo row, both account rows, the three open details and the add row.
-	if got := len(s.accRows); got != 7 {
-		t.Fatalf("rows = %d, want only one account open", got)
+	if findAccRow(t, s, second.DisplayName()).details == nil {
+		t.Fatal("the second account has no details block")
+	}
+	if got := len(s.accRows); got != 4 {
+		t.Fatalf("rows = %d, want the two accounts, the demo row and the add row", got)
 	}
 }
 
@@ -445,8 +458,8 @@ func TestSettingsAccountRowsDoNotMarkTheActiveOne(t *testing.T) {
 }
 
 // TestSettingsAccountDeleteNeedsConfirmation pins the two-step delete behind
-// the expander: the first click only arms the row and adds a cancel row, the
-// cancel row backs out, and the confirmation removes the account.
+// the expander: the first click only arms the block, the cancel link backs out,
+// and the confirmation removes the account. Neither step adds a row.
 func TestSettingsAccountDeleteNeedsConfirmation(t *testing.T) {
 	target := mail.Account{ID: "gmail:user@example.com", Kind: mail.KindGmail, Email: "user@example.com"}
 	a, store := newDeleteTestApp(t, []mail.Account{demoAccounts()[0], target})
@@ -463,7 +476,7 @@ func TestSettingsAccountDeleteNeedsConfirmation(t *testing.T) {
 	s.Layout(gtx, a)
 	ops.Reset()
 
-	findAccRow(t, s, i18n.T("settings.accountDelete")).click.Click()
+	accountDetailsOf(t, s, target.DisplayName()).remove.click.Click()
 	s.Layout(gtx, a)
 
 	if _, ok := store.Entry(target.ID); !ok {
@@ -472,16 +485,16 @@ func TestSettingsAccountDeleteNeedsConfirmation(t *testing.T) {
 	if s.confirmDelete != target.ID {
 		t.Fatalf("confirmDelete = %q, want %q", s.confirmDelete, target.ID)
 	}
-	if probeAccRow(s, i18n.T("settings.accountDelete")) != nil {
-		t.Fatal("the armed row still offers the first delete step")
+	if got := len(s.accRows); got != 3 {
+		t.Fatalf("rows = %d, want the confirmation to replace the action line", got)
 	}
-	if got := len(s.accRows); got != 7 {
-		t.Fatalf("rows = %d, want the confirm row and the cancel row added", got)
+	if d := accountDetailsOf(t, s, target.DisplayName()); !d.armed {
+		t.Fatal("the block does not show the delete confirmation")
 	}
 
-	// The cancel row backs out and leaves the account open.
+	// Cancel backs out and leaves the account open.
 	ops.Reset()
-	findAccRow(t, s, i18n.T("settings.cancel")).click.Click()
+	accountDetailsOf(t, s, target.DisplayName()).cancel.click.Click()
 	s.Layout(gtx, a)
 
 	if s.confirmDelete != "" {
@@ -493,13 +506,15 @@ func TestSettingsAccountDeleteNeedsConfirmation(t *testing.T) {
 	if _, ok := store.Entry(target.ID); !ok {
 		t.Fatal("cancelling deleted the account")
 	}
-	findAccRow(t, s, i18n.T("settings.accountDelete"))
+	if d := accountDetailsOf(t, s, target.DisplayName()); d.armed {
+		t.Fatal("the block stayed armed after cancelling")
+	}
 
 	ops.Reset()
-	findAccRow(t, s, i18n.T("settings.accountDelete")).click.Click()
+	accountDetailsOf(t, s, target.DisplayName()).remove.click.Click()
 	s.Layout(gtx, a)
 	ops.Reset()
-	findAccRow(t, s, i18n.T("settings.accountDeleteConfirm")).click.Click()
+	accountDetailsOf(t, s, target.DisplayName()).confirm.click.Click()
 	s.Layout(gtx, a)
 
 	if _, ok := store.Entry(target.ID); ok {
@@ -536,7 +551,7 @@ func TestSettingsDisarmsDeleteOnTabSwitch(t *testing.T) {
 	s.Layout(gtx, a)
 	ops.Reset()
 
-	findAccRow(t, s, i18n.T("settings.accountDelete")).click.Click()
+	accountDetailsOf(t, s, target.DisplayName()).remove.click.Click()
 	s.Layout(gtx, a)
 	if s.confirmDelete != target.ID {
 		t.Fatalf("confirmDelete = %q, want the armed account", s.confirmDelete)
@@ -549,7 +564,9 @@ func TestSettingsDisarmsDeleteOnTabSwitch(t *testing.T) {
 	if s.confirmDelete != "" {
 		t.Fatalf("confirmDelete = %q after leaving the accounts page", s.confirmDelete)
 	}
-	findAccRow(t, s, i18n.T("settings.accountDelete"))
+	if d := accountDetailsOf(t, s, target.DisplayName()); d.armed {
+		t.Fatal("the block stayed armed after leaving the accounts page")
+	}
 	if _, ok := store.Entry(target.ID); !ok {
 		t.Fatal("switching pages deleted the account")
 	}
@@ -703,7 +720,7 @@ func TestSetAccountProxyStoresTheChoice(t *testing.T) {
 	}
 }
 
-// TestSettingsAccountProxyRow covers the row the accounts page adds inside the
+// TestSettingsAccountProxyRow covers the switch inside the details block of an
 // expanded account: it is hidden while collapsed, mirrors the store, stays
 // inert without an address and flips the account when clicked.
 func TestSettingsAccountProxyRow(t *testing.T) {
@@ -712,8 +729,8 @@ func TestSettingsAccountProxyRow(t *testing.T) {
 	s := newSettingsView(a)
 	s.page = settingsTabAccounts
 
-	if got := probeAccRow(s, i18n.T("settings.accountUseProxy")); got != nil {
-		t.Fatal("the proxy row is visible while the account is collapsed")
+	if s.accRows[1].details != nil {
+		t.Fatal("the proxy switch is visible while the account is collapsed")
 	}
 
 	var ops op.Ops
@@ -723,17 +740,17 @@ func TestSettingsAccountProxyRow(t *testing.T) {
 
 	s.accRows[1].click.Click()
 	s.Layout(gtx, a)
-	// The rows of the open account are built during that frame, so the new
-	// proxy row mirrors the app on the following one.
+	// The details block is built during that frame, so its switch mirrors the
+	// app on the following one.
 	ops.Reset()
 	s.Layout(gtx, a)
 
-	row := findAccRow(t, s, i18n.T("settings.accountUseProxy"))
+	row := accountDetailsOf(t, s, target.DisplayName()).proxy
 	if row.switchCtl == nil {
 		t.Fatal("the proxy row has no switch")
 	}
-	if s.accRows[0].switchCtl != nil {
-		t.Fatal("the demo account got a proxy switch")
+	if s.accRows[0].details != nil {
+		t.Fatal("the demo account got a details block")
 	}
 	if !row.disabled {
 		t.Fatal("the proxy row is switchable without a configured address")

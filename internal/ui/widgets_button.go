@@ -163,12 +163,16 @@ func (b *iconButton) readPointer(gtx layout.Context) {
 
 // linkButton is an inline text action with an optional leading glyph, used for
 // navigation inside a card such as the account wizard's back step. It has no
-// background of its own: the label turns to the darker primary on hover.
+// background of its own: the label turns to the darker primary on hover. A
+// danger link uses the error colour (and a darker shade on hover), which keeps
+// destructive actions recognisable without giving them the weight of a filled
+// button.
 type linkButton struct {
 	click    widget.Clickable
 	label    string
 	ic       icon
 	disabled bool
+	danger   bool
 	onTap    func()
 }
 
@@ -187,6 +191,10 @@ func (b *linkButton) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 		switch {
 		case b.disabled:
 			col = colFaint
+		case b.danger && hovered:
+			col = colDangerDark
+		case b.danger:
+			col = colDanger
 		case hovered:
 			col = colPrimaryDark
 		}

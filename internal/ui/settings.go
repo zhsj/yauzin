@@ -91,9 +91,6 @@ type settingsRow struct {
 	// disabled dims the row and drops every interaction, for entries that are
 	// listed but have no implementation yet.
 	disabled bool
-	// danger paints the title and the glyph in the error colour, for
-	// destructive actions such as deleting an account.
-	danger bool
 	// indent nests a row one level deeper, used by the language candidates
 	// under their selector row.
 	indent bool
@@ -101,6 +98,10 @@ type settingsRow struct {
 	// and the row itself stays the hit target so a click anywhere toggles
 	// the setting exactly once.
 	switchCtl *toggleSwitch
+	// details is the expandable block drawn under the row inside the same
+	// card item, so the account and its options read as one entry instead of
+	// a stack of sibling rows.
+	details *accountDetails
 	// syncState runs at the start of every layout and mirrors the state the
 	// row displays from the place that owns it (the store, the app), so a
 	// failed write or an outside change shows up on the next frame instead of
@@ -131,12 +132,110 @@ func logLevelLabel(name string) string {
 	return i18n.T("settings.logLevelInfo")
 }
 
-// newAccountProxyRow is the per-account proxy choice of the accounts page. It
-// is an ordinary switch row: the row itself is the hit target, while the switch
-// only displays the stored value, like the other boolean rows of the panel.
+// accountDetails is the expandable block of one account. It is painted on a
+// tinted sub-card so the proxy switch and the secondary actions read as one
+// group instead of sibling rows, and the delete confirmation replaces the
+// action line in place instead of adding another row.
+type accountDetails struct {
+	proxy   *settingsRow
+	relogin *linkButton
+	remove  *linkButton
+	cancel  *linkButton
+	confirm *linkButton
+	armed   bool
+}
+
+// newAccountDetails builds the block of an expandable account. Only a stored
+// Gmail account reaches this point (see settingsView.expandable), so the proxy
+// switch and the delete links always have an entry behind them.
+func newAccountDetails(a *App, s *settingsView, acc mail.Account) *accountDetails {
+	d := &accountDetails{
+		proxy:   newAccountProxyRow(a, acc),
+		relogin: newLinkButton(i18n.T("settings.accountRelogin"), icon{}, func() { a.showRelauth(acc) }),
+		remove:  newLinkButton(i18n.T("settings.accountDelete"), icon{}, nil),
+		cancel:  newLinkButton(i18n.T("settings.cancel"), icon{}, nil),
+		confirm: newLinkButton(i18n.T("settings.accountDeleteConfirm"), icon{}, func() { a.removeAccount(acc) }),
+		armed:   s.confirmDelete == acc.ID,
+	}
+	d.remove.danger = true
+	d.confirm.danger = true
+	// The armed state belongs to the panel, not to the block: the links rebuild
+	// the rows so the visible block and the stored state never disagree.
+	d.remove.onTap = func() {
+		s.confirmDelete = acc.ID
+		s.buildAccountRows(a)
+	}
+	d.cancel.onTap = func() {
+		s.confirmDelete = ""
+		s.buildAccountRows(a)
+	}
+	return d
+}
+
+func (d *accountDetails) Layout(gtx layout.Context, th *theme) layout.Dimensions {
+	return layout.Inset{Left: 12, Right: 12, Bottom: 12}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		w := gtx.Constraints.Max.X
+		if w <= 0 {
+			w = gtx.Constraints.Min.X
+		}
+		// Measure first: the proxy hint may wrap, and the tint has to cover
+		// exactly what the content took.
+		measure := gtx
+		measure.Constraints = layout.Constraints{Max: image.Pt(w, 1<<16)}
+		macro := op.Record(gtx.Ops)
+		content := d.content(measure, th)
+		call := macro.Stop()
+
+		size := image.Pt(w, content.Size.Y)
+		gtx.Constraints = layout.Exact(size)
+		rr := clip.RRect{Rect: image.Rectangle{Max: size}, NW: 8, NE: 8, SE: 8, SW: 8}
+		area := rr.Push(gtx.Ops)
+		paint.Fill(gtx.Ops, colPageBG)
+		area.Pop()
+		call.Add(gtx.Ops)
+		return layout.Dimensions{Size: size}
+	})
+}
+
+func (d *accountDetails) content(gtx layout.Context, th *theme) layout.Dimensions {
+	return column(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return d.proxy.Layout(gtx, th)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return d.actions(gtx, th)
+		}),
+	)
+}
+
+// actions is the second line of the sub-card: the secondary links on the right,
+// or the delete confirmation that replaces them in place.
+func (d *accountDetails) actions(gtx layout.Context, th *theme) layout.Dimensions {
+	return layout.Inset{Left: 16, Right: 12, Bottom: 10}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if d.armed {
+			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					return th.text(gtx, i18n.T("settings.accountDeletePrompt"), 12, colDanger, font.Normal, 1)
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.cancel.Layout(gtx, th) }),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 12) }),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.confirm.Layout(gtx, th) }),
+			)
+		}
+		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle, Spacing: layout.SpaceEnd}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.relogin.Layout(gtx, th) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 12) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.remove.Layout(gtx, th) }),
+		)
+	})
+}
+
+// newAccountProxyRow is the per-account proxy choice inside the expandable
+// block of the accounts page. It is an ordinary switch row: the row itself is
+// the hit target, while the switch only displays the stored value, like the
+// other boolean rows of the panel.
 func newAccountProxyRow(a *App, acc mail.Account) *settingsRow {
 	row := &settingsRow{
-		indent:    true,
 		title:     i18n.T("settings.accountUseProxy"),
 		switchCtl: newToggleSwitch(false, nil),
 	}
@@ -316,52 +415,10 @@ func (s *settingsView) buildAccountRows(a *App) {
 				s.buildAccountRows(a)
 			}
 		}
+		if open {
+			row.details = newAccountDetails(a, s, account)
+		}
 		s.accRows = append(s.accRows, row)
-		if !open {
-			continue
-		}
-		s.accRows = append(s.accRows, newAccountProxyRow(a, account))
-		s.accRows = append(s.accRows, &settingsRow{
-			indent: true,
-			icon:   glyphRefresh,
-			title:  i18n.T("settings.accountRelogin"),
-			onTap:  func() { a.showRelauth(account) },
-		})
-		// Only a stored account can be deleted: the demo mailbox lives in
-		// memory and would come back on the next start.
-		if a.accountStore == nil || account.ID == demoAccountID {
-			continue
-		}
-		if s.confirmDelete == account.ID {
-			s.accRows = append(s.accRows,
-				&settingsRow{
-					indent: true,
-					icon:   glyphDelete,
-					title:  i18n.T("settings.accountDeleteConfirm"),
-					danger: true,
-					onTap:  func() { a.removeAccount(account) },
-				},
-				&settingsRow{
-					indent: true,
-					title:  i18n.T("settings.cancel"),
-					onTap: func() {
-						s.confirmDelete = ""
-						s.buildAccountRows(a)
-					},
-				},
-			)
-			continue
-		}
-		s.accRows = append(s.accRows, &settingsRow{
-			indent: true,
-			icon:   glyphDelete,
-			title:  i18n.T("settings.accountDelete"),
-			danger: true,
-			onTap: func() {
-				s.confirmDelete = account.ID
-				s.buildAccountRows(a)
-			},
-		})
 	}
 	s.accRows = append(s.accRows, &settingsRow{
 		icon:  glyphPlus,
@@ -832,51 +889,60 @@ func (r *settingsRow) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 		r.onTap()
 		invalidateAfterTap(gtx)
 	}
-	return r.click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		w := gtx.Constraints.Max.X
-		if w <= 0 {
-			w = gtx.Constraints.Min.X
-		}
-		// Measure the content first: a subtitle may wrap to a second line and
-		// the row has to grow with it instead of clipping it. The height is
-		// then clamped to the incoming maximum, so a caller that hands the row
-		// an exact cell (the tests do) still gets that cell back.
-		measure := gtx
-		measure.Constraints = layout.Constraints{Max: image.Pt(w, 1<<16)}
-		macro := op.Record(gtx.Ops)
-		content := r.content(measure, th)
-		call := macro.Stop()
+	cell := func(gtx layout.Context) layout.Dimensions {
+		return r.click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			w := gtx.Constraints.Max.X
+			if w <= 0 {
+				w = gtx.Constraints.Min.X
+			}
+			// Measure the content first: a subtitle may wrap to a second line
+			// and the row has to grow with it instead of clipping it. The
+			// height is then clamped to the incoming maximum, so a caller that
+			// hands the row an exact cell (the tests do) still gets it back.
+			measure := gtx
+			measure.Constraints = layout.Constraints{Max: image.Pt(w, 1<<16)}
+			macro := op.Record(gtx.Ops)
+			content := r.content(measure, th)
+			call := macro.Stop()
 
-		h := content.Size.Y + 2*gtx.Dp(10)
-		if min := gtx.Dp(46); h < min {
-			h = min
-		}
-		if maxY := gtx.Constraints.Max.Y; maxY > 0 && h > maxY {
-			h = maxY
-		}
-		size := image.Pt(w, h)
-		if r.interactive() {
-			th.cursor(gtx, pointer.CursorPointer, size)
-			if r.click.Hovered() {
-				rect := image.Rect(gtx.Dp(4), gtx.Dp(2), size.X-gtx.Dp(4), size.Y-gtx.Dp(2))
-				if rect.Dx() > 0 && rect.Dy() > 0 {
-					fill := colHover
-					if r.danger {
-						fill = colDangerSoft
+			h := content.Size.Y + 2*gtx.Dp(10)
+			if min := gtx.Dp(46); h < min {
+				h = min
+			}
+			if maxY := gtx.Constraints.Max.Y; maxY > 0 && h > maxY {
+				h = maxY
+			}
+			size := image.Pt(w, h)
+			if r.interactive() {
+				th.cursor(gtx, pointer.CursorPointer, size)
+				if r.click.Hovered() {
+					rect := image.Rect(gtx.Dp(4), gtx.Dp(2), size.X-gtx.Dp(4), size.Y-gtx.Dp(2))
+					if rect.Dx() > 0 && rect.Dy() > 0 {
+						rr := clip.RRect{Rect: rect, NW: 8, NE: 8, SE: 8, SW: 8}
+						hs := rr.Push(gtx.Ops)
+						paint.Fill(gtx.Ops, colHover)
+						hs.Pop()
 					}
-					rr := clip.RRect{Rect: rect, NW: 8, NE: 8, SE: 8, SW: 8}
-					hs := rr.Push(gtx.Ops)
-					paint.Fill(gtx.Ops, fill)
-					hs.Pop()
 				}
 			}
-		}
-		gtx.Constraints = layout.Exact(size)
-		off := op.Offset(image.Pt(0, (h-content.Size.Y)/2)).Push(gtx.Ops)
-		call.Add(gtx.Ops)
-		off.Pop()
-		return layout.Dimensions{Size: size}
-	})
+			gtx.Constraints = layout.Exact(size)
+			off := op.Offset(image.Pt(0, (h-content.Size.Y)/2)).Push(gtx.Ops)
+			call.Add(gtx.Ops)
+			off.Pop()
+			return layout.Dimensions{Size: size}
+		})
+	}
+	if r.details == nil {
+		return cell(gtx)
+	}
+	// The details belong to this row: keeping both in one card item stops the
+	// card from drawing a separator between the account and its options.
+	return column(gtx,
+		layout.Rigid(cell),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return r.details.Layout(gtx, th)
+		}),
+	)
 }
 
 // content is the row's inner layout: the optional leading avatar or glyph, the
@@ -884,9 +950,6 @@ func (r *settingsRow) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 // value with its indicator, or the check mark of an active entry).
 func (r *settingsRow) content(gtx layout.Context, th *theme) layout.Dimensions {
 	titleCol, subtitleCol, iconCol := colText, colMuted, colMuted
-	if r.danger {
-		titleCol, iconCol = colDanger, colDanger
-	}
 	if r.disabled {
 		titleCol, subtitleCol, iconCol = colMuted, colFaint, colFaint
 	}
