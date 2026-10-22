@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"image"
+	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"gioui.org/font"
+	"gioui.org/io/clipboard"
 	"gioui.org/layout"
 	"gioui.org/widget"
 
@@ -29,6 +31,9 @@ type accountStep int
 const (
 	accountStepType accountStep = iota
 	accountStepGmail
+	// accountStepAuth shows the consent URL: the app no longer opens the
+	// browser itself, so the user can copy the link or open it with a button.
+	accountStepAuth
 )
 
 // accountDialog adds one account. The first step picks the protocol, the
@@ -43,6 +48,7 @@ type accountDialog struct {
 
 	step     accountStep
 	back     *linkButton
+	authBack *linkButton
 	typeRows []*settingsRow
 
 	clientID        widget.Editor
@@ -60,6 +66,17 @@ type accountDialog struct {
 	signIn      *pillButton
 	cancel      *pillButton
 	proxySwitch *toggleSwitch
+
+	// The authorization step: the consent URL is displayed instead of being
+	// handed to the browser. copyPending carries the copy click from the button
+	// callback (which has no layout context) to the frame that writes it.
+	authURL     string
+	authField   widget.Editor
+	copyLink    *pillButton
+	openLink    *pillButton
+	copyPending bool
+	// relogin is the account being re-authorized; nil while adding one.
+	relogin *mail.Account
 
 	// pending is true while the authorization goroutine owns the flow. Closing
 	// the dialog clears it, so a late callback cannot resurrect the panel.
@@ -99,6 +116,14 @@ func newAccountDialog(a *App) *accountDialog {
 		d.err = ""
 		d.list.ScrollTo(0)
 	})
+	// While the consent URL is on screen the back link returns to the client
+	// form, which means giving up the pending wait.
+	d.authBack = newLinkButton(i18n.T("settings.accountBack"), icon{glyph: glyphBack}, func() {
+		d.abort()
+		d.step = accountStepGmail
+		d.err = ""
+		d.list.ScrollTo(0)
+	})
 	// IMAP/SMTP is on the roadmap but has no backend yet, so the row is listed
 	// disabled rather than hiding the option altogether.
 	d.typeRows = []*settingsRow{
@@ -119,6 +144,15 @@ func newAccountDialog(a *App) *accountDialog {
 			disabled: true,
 		},
 	}
+	// The consent URL is read-only but selectable, so a fragment can be copied
+	// without pressing the button.
+	d.authField.ReadOnly = true
+	d.authField.SingleLine = true
+	d.copyLink = newPillButton(i18n.T("settings.accountCopyLink"), icon{}, false, func() { d.copyPending = true })
+	d.copyLink.disabled = true
+	d.openLink = newPillButton(i18n.T("settings.accountOpenLink"), icon{}, false, d.openAuthURL)
+	d.openLink.disabled = true
+
 	d.signIn = newPillButton(i18n.T("settings.accountSignIn"), icon{}, true, d.start)
 	d.signIn.disabled = true
 	d.cancel = newPillButton(i18n.T("settings.cancel"), icon{}, false, a.backToAccounts)
@@ -136,7 +170,8 @@ func (d *accountDialog) abort() {
 	}
 }
 
-// start launches the browser authorization off the UI goroutine.
+// start launches the authorization off the UI goroutine and switches to the
+// step that shows the consent URL.
 func (d *accountDialog) start() {
 	if d.busy || d.pending {
 		return
@@ -163,14 +198,28 @@ func (d *accountDialog) start() {
 	d.busy = true
 	d.err = ""
 	d.pending = true
+	d.step = accountStepAuth
+	d.authURL = ""
+	d.authField.SetText("")
+	d.list.ScrollTo(0)
 
 	go func() {
 		res, err := gmail.SignIn(ctx, gmail.SignInOptions{
 			ClientID:     clientID,
 			ClientSecret: clientSecret,
 			HTTPClient:   client,
-			OpenBrowser:  openPath,
-			Timeout:      signInTimeout,
+			// The browser is opened on demand from the authorization step, so
+			// the dialog only receives the URL here.
+			OnAuthURL: func(raw string) {
+				d.app.post(func() {
+					if !d.pending || d.app.accountAdd != d {
+						return
+					}
+					d.authURL = raw
+					d.authField.SetText(raw)
+				})
+			},
+			Timeout: signInTimeout,
 		})
 		d.app.post(func() {
 			if !d.pending || d.app.accountAdd != d {
@@ -181,12 +230,31 @@ func (d *accountDialog) start() {
 			cancel()
 			d.cancelFn = nil
 			if err != nil {
+				d.clearAuthURL()
 				d.err = signInErrorText(err)
 				return
 			}
 			d.finish(res, clientID, clientSecret)
 		})
 	}()
+}
+
+// clearAuthURL drops the consent URL of a finished attempt: the loopback
+// listener has been closed, so the link cannot complete any more and showing it
+// would only invite a failing retry.
+func (d *accountDialog) clearAuthURL() {
+	d.authURL = ""
+	d.authField.SetText("")
+}
+
+// openAuthURL hands the shown consent URL to the system browser.
+func (d *accountDialog) openAuthURL() {
+	if d.authURL == "" {
+		return
+	}
+	if err := openPath(d.authURL); err != nil {
+		d.err = err.Error()
+	}
 }
 
 // finish stores the new account and switches to it. Anything that fails here
@@ -198,20 +266,38 @@ func (d *accountDialog) finish(res gmail.SignInResult, clientID, clientSecret st
 		d.err = i18n.T("settings.accountSignInFailed")
 		return
 	}
+	// A re-login refreshes one mailbox: signing in with a different Google
+	// account must not add or replace an entry behind the user's back.
+	if d.relogin != nil && !strings.EqualFold(strings.TrimSpace(res.Email), strings.TrimSpace(d.relogin.Email)) {
+		d.clearAuthURL()
+		d.err = i18n.T("settings.accountEmailMismatch", map[string]string{
+			"Email":   res.Email,
+			"Account": d.relogin.DisplayName(),
+		})
+		return
+	}
 	if err := a.accountStore.SetCredentials(clientID, clientSecret); err != nil {
 		logErr("save OAuth client", err)
 		d.err = err.Error()
 		return
 	}
 	id := "gmail:" + strings.ToLower(strings.TrimSpace(res.Email))
-	entry := accounts.Entry{ID: id, Email: res.Email, UseProxy: d.useProxy, Token: res.Token}
+	name := strings.TrimSpace(res.Name)
+	if name == "" {
+		// A grant without profileScope reports no name; keep the one an earlier
+		// authorization stored instead of dropping it.
+		if old, ok := a.accountStore.Entry(id); ok {
+			name = old.Name
+		}
+	}
+	entry := accounts.Entry{ID: id, Email: res.Email, Name: name, UseProxy: d.useProxy, Token: res.Token}
 	if err := a.accountStore.Upsert(entry); err != nil {
 		logErr("save account", err)
 		d.err = err.Error()
 		return
 	}
 
-	acc := mail.Account{ID: id, Kind: mail.KindGmail, Email: res.Email}
+	acc := mail.Account{ID: id, Kind: mail.KindGmail, Name: name, Email: res.Email}
 	svc := a.newService(acc)
 	if svc == nil {
 		d.err = i18n.T("settings.accountSignInFailed")
@@ -223,6 +309,16 @@ func (d *accountDialog) finish(res gmail.SignInResult, clientID, clientSecret st
 	}
 	a.services[id] = svc
 	a.addAccount(acc)
+	if d.relogin != nil {
+		// The refreshed account keeps its place in the list, so the dialog
+		// returns to the accounts page instead of switching mailboxes.
+		a.notify(i18n.T("toast.accountUpdated", map[string]string{"Name": acc.DisplayName()}), false)
+		a.showSettingsPage(settingsTabAccounts)
+		if a.activeAcc == id {
+			a.reloadAll()
+		}
+		return
+	}
 	a.rebuildSettingsPanel()
 	a.notify(i18n.T("toast.accountAdded", map[string]string{"Name": acc.DisplayName()}), false)
 	if a.activeAcc == id {
@@ -281,7 +377,7 @@ func (d *accountDialog) Layout(gtx layout.Context, a *App) layout.Dimensions {
 				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 						return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							return th.text(gtx, i18n.T("settings.accountTitle"), 18, colText, font.Bold, 1)
+							return th.text(gtx, d.titleText(), 18, colText, font.Bold, 1)
 						})
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.close.Layout(gtx, th) }),
@@ -300,9 +396,20 @@ func (d *accountDialog) Layout(gtx layout.Context, a *App) layout.Dimensions {
 	return layout.Dimensions{Size: size}
 }
 
+// titleText is the dialog heading: adding an account or re-authorizing one.
+func (d *accountDialog) titleText() string {
+	if d.relogin != nil {
+		return i18n.T("settings.accountRelauthTitle")
+	}
+	return i18n.T("settings.accountTitle")
+}
+
 func (d *accountDialog) content(gtx layout.Context, th *theme) layout.Dimensions {
-	if d.step == accountStepGmail {
+	switch d.step {
+	case accountStepGmail:
 		return d.gmailContent(gtx, th)
+	case accountStepAuth:
+		return d.authContent(gtx, th)
 	}
 	return d.typeContent(gtx, th)
 }
@@ -360,6 +467,86 @@ func (d *accountDialog) gmailContent(gtx layout.Context, th *theme) layout.Dimen
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 10) }),
 			layout.Rigid(d.buttons(th)),
 		)
+	})
+}
+
+// authContent shows the consent URL. The browser is never opened implicitly:
+// the user copies the link or presses the button once the URL is there.
+func (d *accountDialog) authContent(gtx layout.Context, th *theme) layout.Dimensions {
+	d.copyLink.disabled = d.authURL == ""
+	d.openLink.disabled = d.authURL == ""
+	d.authBack.disabled = false
+	return layout.Inset{Top: 8, Bottom: 14, Left: 20, Right: 20}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		children := []layout.FlexChild{
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				// Naming the target account keeps the user from authorizing a
+				// different mailbox while re-logging in.
+				if d.relogin == nil {
+					return layout.Dimensions{}
+				}
+				return layout.Inset{Bottom: 8}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return th.text(gtx, d.relogin.DisplayName(), 14, colText, font.Medium, 1)
+				})
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Bottom: 12}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return th.wrappedText(gtx, i18n.T("settings.accountAuthHint"), 12, colMuted, font.Normal)
+				})
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Bottom: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return th.text(gtx, i18n.T("settings.accountAuthURL"), 12, colMuted, font.Medium, 1)
+				})
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if d.authURL == "" {
+					return layout.Inset{Top: 4, Bottom: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						return th.wrappedText(gtx, i18n.T("settings.accountWaiting"), 12, colMuted, font.Normal)
+					})
+				}
+				return th.boxedField(gtx, &d.authField, nil, "", 12, gtx.Dp(38))
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 10) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return d.copyLink.Layout(gtx, th)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return d.openLink.Layout(gtx, th)
+					}),
+				)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 10) }),
+			layout.Rigid(d.errorRow(th)),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 10) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle, Spacing: layout.SpaceEnd}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if d.relogin != nil {
+							return layout.Dimensions{}
+						}
+						return d.authBack.Layout(gtx, th)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return d.cancel.Layout(gtx, th)
+					}),
+				)
+			}),
+		}
+		dims := layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+		if d.copyPending {
+			d.copyPending = false
+			if d.authURL != "" {
+				gtx.Execute(clipboard.WriteCmd{
+					Type: "application/text",
+					Data: io.NopCloser(strings.NewReader(d.authURL)),
+				})
+				d.app.notify(i18n.T("toast.linkCopied"), false)
+			}
+		}
+		return dims
 	})
 }
 

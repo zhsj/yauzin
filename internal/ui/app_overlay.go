@@ -258,6 +258,31 @@ func (a *App) backToAccounts() {
 	a.showSettingsPage(settingsTabAccounts)
 }
 
+// showRelauth re-authorizes an existing Gmail account. The stored OAuth client
+// is reused, so the only thing the user has to do is approve the consent
+// screen again; the dialog opens straight on the step that shows the URL.
+func (a *App) showRelauth(acc mail.Account) {
+	if a.accountStore == nil {
+		a.notify(i18n.T("settings.accountSignInFailed"), true)
+		return
+	}
+	clientID, clientSecret := a.accountStore.Credentials()
+	if clientID == "" || clientSecret == "" {
+		a.notify(i18n.T("settings.accountSignInFailed"), true)
+		return
+	}
+	d := newAccountDialog(a)
+	d.relogin = &acc
+	if entry, ok := a.accountStore.Entry(acc.ID); ok {
+		d.useProxy = entry.UseProxy
+	}
+	d.clientID.SetText(clientID)
+	d.clientSecret.SetText(clientSecret)
+	d.step = accountStepAuth
+	a.showOverlay(d)
+	d.start()
+}
+
 func (a *App) showAccountMenu() {
 	items := make([]menuItem, 0, len(a.accounts)+1)
 	for _, acc := range a.accounts {

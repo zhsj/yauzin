@@ -8,6 +8,7 @@ import (
 	"gioui.org/op"
 
 	"github.com/zhsj/yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/mail"
 )
 
 // TestSettingsPagesFrame lays out every page of the settings panel: none may
@@ -64,6 +65,32 @@ func TestSettingsAccountRowDoesNotSwitch(t *testing.T) {
 	}
 	if _, ok := a.overlay.(*settingsView); !ok {
 		t.Fatalf("overlay = %T after clicking an account row, want the settings panel", a.overlay)
+	}
+}
+
+// TestSettingsAccountRowsOfferRelauth adds the refresh button to real Gmail
+// accounts only: the demo mailbox has no OAuth grant behind it, and the add row
+// is a separate action.
+func TestSettingsAccountRowsOfferRelauth(t *testing.T) {
+	a := testApp(t)
+	a.accounts = append(a.accounts, mail.Account{
+		ID:    "gmail:user@example.com",
+		Kind:  mail.KindGmail,
+		Email: "user@example.com",
+	})
+	s := newSettingsView(a)
+
+	if len(s.accRows) != 3 {
+		t.Fatalf("account rows = %d, want two accounts and the add row", len(s.accRows))
+	}
+	if s.accRows[0].action != nil {
+		t.Fatal("the demo account got a refresh button")
+	}
+	if s.accRows[1].action == nil {
+		t.Fatal("the Gmail account has no refresh button")
+	}
+	if s.accRows[2].action != nil {
+		t.Fatal("the add-account row got a refresh button")
 	}
 }
 

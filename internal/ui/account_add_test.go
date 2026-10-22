@@ -181,6 +181,7 @@ func TestAccountDialogStoresTheAccount(t *testing.T) {
 	d.useProxy = true
 	d.finish(gmail.SignInResult{
 		Email: "User@Example.com",
+		Name:  "Ada Chen",
 		Token: accounts.Token{AccessToken: "access", RefreshToken: "refresh", TokenType: "Bearer"},
 	}, "client-id", "client-secret")
 
@@ -195,7 +196,7 @@ func TestAccountDialogStoresTheAccount(t *testing.T) {
 	for _, acc := range a.accounts {
 		if acc.ID == id {
 			found = true
-			if acc.Email != "User@Example.com" {
+			if acc.Email != "User@Example.com" || acc.Name != "Ada Chen" {
 				t.Fatalf("account = %+v", acc)
 			}
 		}
@@ -208,7 +209,7 @@ func TestAccountDialogStoresTheAccount(t *testing.T) {
 	if !ok {
 		t.Fatal("the account is missing from accounts.json")
 	}
-	if !entry.UseProxy || entry.Token.RefreshToken != "refresh" {
+	if !entry.UseProxy || entry.Token.RefreshToken != "refresh" || entry.Name != "Ada Chen" {
 		t.Fatalf("stored entry = %+v", entry)
 	}
 	if clientID, secret := store.Credentials(); clientID != "client-id" || secret != "client-secret" {
@@ -249,6 +250,155 @@ func TestAccountDialogReusesExistingAccount(t *testing.T) {
 	if got := len(store.List()); got != 1 {
 		t.Fatalf("stored accounts = %d, want 1", got)
 	}
+}
+
+// TestRelauthRejectsAnotherMailbox keeps a "sign in again" click from writing a
+// different Google account: the tokens of a row belong to that row's address,
+// so nothing may be stored when the user picks another mailbox.
+func TestRelauthRejectsAnotherMailbox(t *testing.T) {
+	t.Setenv("YAUZIN_CONFIG_DIR", t.TempDir())
+	a := testApp(t)
+	store, err := accounts.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	a.accountStore = store
+
+	target := mail.Account{ID: "gmail:user@example.com", Kind: mail.KindGmail, Email: "user@example.com"}
+	d := newAccountDialog(a)
+	d.relogin = &target
+	d.finish(gmail.SignInResult{
+		Email: "other@example.com",
+		Token: accounts.Token{RefreshToken: "other"},
+	}, "client-id", "client-secret")
+
+	if d.err == "" {
+		t.Fatal("signing in another address was accepted")
+	}
+	if _, ok := store.Entry(target.ID); ok {
+		t.Fatal("the target account was written")
+	}
+	if _, ok := store.Entry("gmail:other@example.com"); ok {
+		t.Fatal("another account was added")
+	}
+	if clientID, _ := store.Credentials(); clientID != "" {
+		t.Fatalf("credentials = %q, want untouched", clientID)
+	}
+	if a.accountAdd != nil {
+		t.Fatal("the dialog closed although the re-login was rejected")
+	}
+}
+
+// TestRelauthUpdatesTheAccountInPlace checks the successful re-login: the
+// target row gains the name and the new token, the mailbox on screen does not
+// switch, and the dialog returns to the accounts page.
+func TestRelauthUpdatesTheAccountInPlace(t *testing.T) {
+	t.Setenv("YAUZIN_CONFIG_DIR", t.TempDir())
+	target := mail.Account{ID: "gmail:user@example.com", Kind: mail.KindGmail, Email: "user@example.com"}
+	a := newAppWith(prefs.Settings{}, appOptions{
+		accounts:   []mail.Account{demoAccounts()[0], target},
+		newService: func(mail.Account) mail.Service { return &fakeService{} },
+	})
+	store, err := accounts.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	entry := accounts.Entry{
+		ID:    target.ID,
+		Email: target.Email,
+		Name:  "Old Name",
+		Token: accounts.Token{RefreshToken: "old"},
+	}
+	if err := store.Upsert(entry); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+	a.accountStore = store
+	a.showSettingsPage(settingsTabAccounts)
+	active := a.activeAcc
+
+	d := newAccountDialog(a)
+	d.relogin = &target
+	d.finish(gmail.SignInResult{
+		Email: "User@Example.com",
+		Name:  "Grace Hopper",
+		Token: accounts.Token{AccessToken: "new", RefreshToken: "new-refresh"},
+	}, "client-id", "client-secret")
+
+	if d.err != "" {
+		t.Fatalf("finish: %s", d.err)
+	}
+	if a.activeAcc != active {
+		t.Fatalf("active account switched to %q", a.activeAcc)
+	}
+	stored, ok := store.Entry(target.ID)
+	if !ok {
+		t.Fatal("the refreshed account vanished from accounts.json")
+	}
+	if stored.Name != "Grace Hopper" || stored.Token.RefreshToken != "new-refresh" {
+		t.Fatalf("stored entry = %+v", stored)
+	}
+	if got := len(store.List()); got != 1 {
+		t.Fatalf("stored accounts = %d, want 1", got)
+	}
+	for _, acc := range a.accounts {
+		if acc.ID == target.ID && acc.Name != "Grace Hopper" {
+			t.Fatalf("account = %+v, want the profile name", acc)
+		}
+	}
+	panel, ok := a.overlay.(*settingsView)
+	if !ok {
+		t.Fatalf("overlay = %T after a re-login, want the settings panel", a.overlay)
+	}
+	if panel.page != settingsTabAccounts {
+		t.Fatalf("page = %d, want the accounts page", panel.page)
+	}
+}
+
+// TestRelauthRowOpensTheAuthorizationStep wires the refresh button to the
+// dialog: it opens on the URL step with the target account remembered, so the
+// link and the account name are shown without asking for the client again.
+func TestRelauthRowOpensTheAuthorizationStep(t *testing.T) {
+	t.Setenv("YAUZIN_CONFIG_DIR", t.TempDir())
+	target := mail.Account{ID: "gmail:user@example.com", Kind: mail.KindGmail, Email: "user@example.com"}
+	a := newAppWith(prefs.Settings{}, appOptions{
+		accounts:   []mail.Account{demoAccounts()[0], target},
+		newService: func(mail.Account) mail.Service { return &fakeService{} },
+	})
+	store, err := accounts.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := store.SetCredentials("client-id", "client-secret"); err != nil {
+		t.Fatalf("store credentials: %v", err)
+	}
+	if err := store.Upsert(accounts.Entry{ID: target.ID, Email: target.Email}); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+	a.accountStore = store
+
+	s := newSettingsView(a)
+	a.showOverlay(s)
+	s.page = settingsTabAccounts
+
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+	s.Layout(gtx, a)
+	ops.Reset()
+
+	s.accRows[1].action.click.Click()
+	s.Layout(gtx, a)
+
+	d, ok := a.overlay.(*accountDialog)
+	if !ok {
+		t.Fatalf("overlay = %T after the refresh button, want *accountDialog", a.overlay)
+	}
+	if d.relogin == nil || d.relogin.ID != target.ID {
+		t.Fatalf("re-login target = %+v, want %q", d.relogin, target.ID)
+	}
+	if d.step != accountStepAuth {
+		t.Fatalf("step = %v, want the authorization step", d.step)
+	}
+	a.hideOverlay()
 }
 
 // TestSettingsProxyValidationAndSave covers the network section: a malformed

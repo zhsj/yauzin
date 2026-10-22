@@ -86,7 +86,10 @@ type settingsRow struct {
 	// and the row itself stays the hit target so a click anywhere toggles
 	// the setting exactly once.
 	switchCtl *toggleSwitch
-	onTap     func()
+	// action is a trailing icon button for rows that are informational but own
+	// one operation, such as re-authorizing an account.
+	action *iconButton
+	onTap  func()
 }
 
 func newSettingsView(a *App) *settingsView {
@@ -182,12 +185,20 @@ func newSettingsView(a *App) *settingsView {
 		// Account rows are informational: the check mark shows the active
 		// mailbox, switching lives in the top bar's account menu. Without an
 		// action the row gets no hover and no hand cursor either.
-		s.accRows = append(s.accRows, &settingsRow{
+		row := &settingsRow{
 			lead:     &account,
 			title:    account.DisplayName(),
 			subtitle: subtitle,
 			active:   account.ID == a.activeAcc,
-		})
+		}
+		// Only a real Gmail account has an OAuth grant to refresh; the demo
+		// mailbox of the mock backend has nothing to sign in to.
+		if strings.HasPrefix(account.ID, "gmail:") {
+			target := account
+			row.action = newIconButton(iconRefresh, 28, func() { a.showRelauth(target) })
+			row.action.setTip(i18n.T("settings.accountRelogin"))
+		}
+		s.accRows = append(s.accRows, row)
 	}
 
 	s.accRows = append(s.accRows, &settingsRow{
@@ -751,6 +762,13 @@ func (r *settingsRow) content(gtx layout.Context, th *theme) layout.Dimensions {
 			children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return th.glyphIn(gtx, iconCheckPrimary, 18, 20)
 			}))
+		}
+		if r.action != nil {
+			action := r.action
+			children = append(children,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return action.Layout(gtx, th) }),
+			)
 		}
 		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx, children...)
 	})
