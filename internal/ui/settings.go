@@ -368,9 +368,10 @@ func sectionHint(th *theme, text string) layout.Widget {
 	}
 }
 
-// settingsCard draws a group of rows on a tinted rounded card. Items are
-// separated by a hairline that stops short of the card edges; the first and
-// last item get no line above or below them.
+// settingsCard draws a group of rows on a white card outlined by a hairline.
+// The fill matches the panel, so the border and the separator between items
+// are what mark the group; items are separated by a line that stops short of
+// the card edges, and the first and last item get no line above or below them.
 func settingsCard(items []layout.Widget) layout.Widget {
 	return func(gtx layout.Context) layout.Dimensions {
 		return layout.Inset{Left: 16, Right: 16}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -391,7 +392,7 @@ func settingsCard(items []layout.Widget) layout.Widget {
 				return layout.Dimensions{Size: size}
 			}
 			gtx.Constraints = layout.Exact(size)
-			strokeRect(gtx, colSurface2, colBorder, 10, 1)
+			strokeRect(gtx, colSurface, colBorder, 10, 1)
 			// Clip the rows to the card so a hovered first or last row cannot
 			// paint its square corners over the rounded outline.
 			rr := clip.RRect{Rect: image.Rectangle{Max: size}, NW: 10, NE: 10, SE: 10, SW: 10}
