@@ -190,7 +190,10 @@ func (c *client) accessToken(ctx context.Context, force bool) (string, error) {
 		return "", fmt.Errorf("%w: account %s has no token", mail.ErrUnauthorized, c.accountID)
 	}
 	tok := oauthToken(stored)
-	if !force && tok.Valid() && c.now().Before(tok.Expiry.Add(-refreshSkew)) {
+	// A token without an expiry is used as is: oauth2 treats a zero expiry as
+	// "never expires", and Google always sends expires_in, so this only
+	// affects hand-edited files.
+	if !force && tok.Valid() && (tok.Expiry.IsZero() || c.now().Before(tok.Expiry.Add(-refreshSkew))) {
 		return tok.AccessToken, nil
 	}
 	if tok.RefreshToken == "" {

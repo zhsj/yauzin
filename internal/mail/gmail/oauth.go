@@ -168,10 +168,13 @@ func signIn(ctx context.Context, f flow, opts SignInOptions) (SignInResult, erro
 		}
 	}()
 
-	if opts.OpenBrowser == nil {
+	if opts.OpenBrowser != nil {
+		f.openBrowser = opts.OpenBrowser
+	}
+	if f.openBrowser == nil {
 		return SignInResult{}, fmt.Errorf("%w: no browser opener", mail.ErrInvalidArgument)
 	}
-	if err := opts.OpenBrowser(authURL); err != nil {
+	if err := f.openBrowser(authURL); err != nil {
 		return SignInResult{}, fmt.Errorf("gmail: open browser: %w", err)
 	}
 
@@ -365,6 +368,20 @@ func ParseProxy(raw string) (*url.URL, error) {
 	}
 	u.Path = ""
 	return u, nil
+}
+
+// HTTPClient returns a client that sends its requests through the proxy in
+// raw, or http.DefaultClient when raw is empty. The sign-in flow needs it
+// before a Service exists.
+func HTTPClient(raw string) (*http.Client, error) {
+	tr, err := proxyTransport(raw)
+	if err != nil {
+		return nil, err
+	}
+	if tr == nil {
+		return http.DefaultClient, nil
+	}
+	return &http.Client{Transport: tr}, nil
 }
 
 // proxyTransport returns a transport that sends its requests through raw, or

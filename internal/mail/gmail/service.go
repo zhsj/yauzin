@@ -27,7 +27,9 @@ const (
 	// limit.
 	metadataWorkers = 6
 	// metadataFields trims the thread response to what the list row renders.
-	metadataFields = "id,messages(id,labelIds,snippet,internalDate,payload(filename,mimeType))"
+	// payload is requested whole: the metadata format carries no bodies, but
+	// the part tree is what tells the row whether a file is attached.
+	metadataFields = "id,messages(id,labelIds,snippet,internalDate,payload)"
 )
 
 // folderSpec is one of the fixed folders the sidebar shows. Gmail identifies
