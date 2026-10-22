@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image"
+	"strings"
 
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -133,8 +134,12 @@ func (t *topBar) searchField(gtx layout.Context, csd bool) layout.Dimensions {
 				es.Color, es.HintColor = colText, colFaint
 				es.SelectionColor = colSelection
 				dims := es.Layout(gtx)
+				// An empty box is not a search: submitting it would leave the
+				// list showing results no query asks for.
 				if submitted {
-					a.setQuery(t.search.Text())
+					if q := strings.TrimSpace(t.search.Text()); q != "" {
+						a.setQuery(q)
+					}
 				}
 				return dims
 			}),

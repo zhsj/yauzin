@@ -314,7 +314,7 @@ func TestSearchSummaryCoversWholeConversation(t *testing.T) {
 	wantIDs := len(target.msgs)
 	s.mu.Unlock()
 
-	page, err := s.ListThreads(ctx, mail.ListRequest{Query: "needle", Limit: 50})
+	page, err := s.SearchThreads(ctx, mail.SearchRequest{Query: "needle", Limit: 50})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -350,6 +350,69 @@ func TestSearchSummaryCoversWholeConversation(t *testing.T) {
 		if th.ID == sum.ID {
 			t.Fatalf("archived conversation %s is still listed", sum.ID)
 		}
+	}
+}
+
+// TestSearchSpansEveryFolderExceptTrash covers the scope of a search: a
+// conversation outside the inbox is found, and trashing it takes it out again.
+func TestSearchSpansEveryFolderExceptTrash(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+
+	const subject = "needle sent"
+	if err := s.Send(ctx, mail.Draft{
+		To:      []mail.Address{{Name: "Bob", Email: "bob@example.com"}},
+		Subject: subject,
+		Body:    "needle body",
+	}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	// The sent conversation is not in the inbox, so finding it proves the
+	// search is not folder scoped.
+	inbox, err := s.ListThreads(ctx, mail.ListRequest{FolderID: "inbox", Limit: 200})
+	if err != nil {
+		t.Fatalf("list inbox: %v", err)
+	}
+	page, err := s.SearchThreads(ctx, mail.SearchRequest{Query: subject})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if page.Total != 1 {
+		t.Fatalf("search matched %d conversations, want 1", page.Total)
+	}
+	hit := page.Threads[0]
+	for _, th := range inbox.Threads {
+		if th.ID == hit.ID {
+			t.Fatal("the sent conversation is also in the inbox, so the scope is untested")
+		}
+	}
+
+	if err := s.Delete(ctx, hit.MessageIDs); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	after, err := s.SearchThreads(ctx, mail.SearchRequest{Query: subject})
+	if err != nil {
+		t.Fatalf("search after delete: %v", err)
+	}
+	if after.Total != 0 {
+		t.Fatalf("search after delete matched %d conversations, want none: trash is out of scope", after.Total)
+	}
+}
+
+func TestSearchThreadsRequiresAQuery(t *testing.T) {
+	s := newTestService(t)
+	for _, query := range []string{"", "   "} {
+		if _, err := s.SearchThreads(context.Background(), mail.SearchRequest{Query: query}); !errors.Is(err, mail.ErrInvalidArgument) {
+			t.Fatalf("query %q returned %v, want ErrInvalidArgument", query, err)
+		}
+	}
+}
+
+func TestListThreadsRequiresAFolder(t *testing.T) {
+	s := newTestService(t)
+	if _, err := s.ListThreads(context.Background(), mail.ListRequest{}); !errors.Is(err, mail.ErrInvalidArgument) {
+		t.Fatalf("err = %v, want ErrInvalidArgument", err)
 	}
 }
 

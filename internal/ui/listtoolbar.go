@@ -111,8 +111,9 @@ func (t *listToolbar) rangeText() string {
 	// sidebar's folder details, which arrive after the page (reloadAll loads
 	// names, then rows, then counters). Gmail's resultSizeEstimate is only an
 	// estimate that often stays the same across labels, so prefer the folder
-	// total once it is known.
-	if t.app != nil && t.app.query == "" {
+	// total once it is known. A search has no active folder, so folderTotal
+	// reports zero and the list's own estimate stays.
+	if t.app != nil {
 		if n := t.app.folderTotal(t.app.activeFolder); n > 0 {
 			total = n
 		}

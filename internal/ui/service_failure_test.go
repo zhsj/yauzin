@@ -45,6 +45,10 @@ func (f *fakeService) ListThreads(context.Context, mail.ListRequest) (mail.Threa
 	return mail.ThreadPage{}, nil
 }
 
+func (f *fakeService) SearchThreads(context.Context, mail.SearchRequest) (mail.ThreadPage, error) {
+	return mail.ThreadPage{}, nil
+}
+
 func (f *fakeService) GetThread(context.Context, string) ([]*mail.Message, error) {
 	return nil, mail.ErrNotFound
 }
@@ -95,8 +99,9 @@ func waitFor(t *testing.T, a *App, what string, cond func() bool) {
 	}
 }
 
-// blockingService keeps ListThreads waiting until its context is done, so the
-// test can observe whether a superseded request is cancelled or left running.
+// blockingService keeps ListThreads and SearchThreads waiting until their
+// context is done, so the test can observe whether a superseded request is
+// cancelled or left running.
 type blockingService struct {
 	fakeService
 	started  chan struct{}
@@ -105,6 +110,14 @@ type blockingService struct {
 }
 
 func (b *blockingService) ListThreads(ctx context.Context, _ mail.ListRequest) (mail.ThreadPage, error) {
+	return b.block(ctx)
+}
+
+func (b *blockingService) SearchThreads(ctx context.Context, _ mail.SearchRequest) (mail.ThreadPage, error) {
+	return b.block(ctx)
+}
+
+func (b *blockingService) block(ctx context.Context) (mail.ThreadPage, error) {
 	b.once.Do(func() { close(b.started) })
 	<-ctx.Done()
 	select {

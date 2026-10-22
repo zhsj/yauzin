@@ -534,8 +534,8 @@ func TestListThreadsAssemblesConversations(t *testing.T) {
 		if got := q.Get("labelIds"); got != "INBOX" {
 			t.Errorf("labelIds = %q, want INBOX", got)
 		}
-		if got := q.Get("q"); got != "invoice" {
-			t.Errorf("q = %q, want invoice", got)
+		if got := q.Get("q"); got != "" {
+			t.Errorf("q = %q, want none: browsing a folder does not search", got)
 		}
 		if got := q.Get("pageToken"); got != "prev" {
 			t.Errorf("pageToken = %q, want prev", got)
@@ -548,7 +548,6 @@ func TestListThreadsAssemblesConversations(t *testing.T) {
 
 	page, err := svc.ListThreads(context.Background(), mail.ListRequest{
 		FolderID:  "inbox",
-		Query:     "invoice",
 		PageToken: "prev",
 		Limit:     50,
 	})

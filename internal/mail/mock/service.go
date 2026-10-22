@@ -306,7 +306,7 @@ func (s *Service) FolderDetails(ctx context.Context, folders []mail.Folder) ([]m
 	return out, nil
 }
 
-// ListThreads implements mail.Service.
+// ListThreads implements mail.Service: one page of one folder, newest first.
 func (s *Service) ListThreads(ctx context.Context, req mail.ListRequest) (mail.ThreadPage, error) {
 	if err := s.wait(ctx); err != nil {
 		return mail.ThreadPage{}, err
@@ -320,23 +320,42 @@ func (s *Service) ListThreads(ctx context.Context, req mail.ListRequest) (mail.T
 	if err := s.validateFolder(req.FolderID); err != nil {
 		return mail.ThreadPage{}, err
 	}
-	limit := req.Limit
+	return page(s.threadPool(req.FolderID, ""), req.PageToken, req.Limit)
+}
+
+// SearchThreads implements mail.Service: one page of the conversations that
+// match query in any folder except trash, like Gmail's all mail search.
+func (s *Service) SearchThreads(ctx context.Context, req mail.SearchRequest) (mail.ThreadPage, error) {
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		return mail.ThreadPage{}, mail.ErrInvalidArgument
+	}
+	if err := s.wait(ctx); err != nil {
+		return mail.ThreadPage{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return mail.ThreadPage{}, err
+	}
+	return page(s.threadPool("", query), req.PageToken, req.Limit)
+}
+
+// page cuts one page out of pool at the cursor. A cursor past the end is not an
+// error: the conversation list shrank while the user was reading it, so the
+// page is simply empty (which lets the UI step back one page).
+func page(pool []mail.ThreadSummary, token string, limit int) (mail.ThreadPage, error) {
 	if limit <= 0 {
 		limit = defaultPageSize
 	}
 	if limit > maxPageSize {
 		limit = maxPageSize
 	}
-	offset, err := decodeToken(req.PageToken)
+	offset, err := decodeToken(token)
 	if err != nil {
 		return mail.ThreadPage{}, err
 	}
-
-	pool := s.threadPool(req.FolderID, req.Query)
 	total := len(pool)
-	// A cursor past the end is not an error: the conversation list shrank while
-	// the user was reading it, so the page is simply empty (which lets the UI
-	// step back one page).
 	if offset > total {
 		offset = total
 	}
@@ -346,11 +365,11 @@ func (s *Service) ListThreads(ctx context.Context, req mail.ListRequest) (mail.T
 	}
 	threads := make([]mail.ThreadSummary, end-offset)
 	copy(threads, pool[offset:end])
-	page := mail.ThreadPage{Threads: threads, Total: total}
+	out := mail.ThreadPage{Threads: threads, Total: total}
 	if end < total {
-		page.NextPageToken = encodeToken(end)
+		out.NextPageToken = encodeToken(end)
 	}
-	return page, nil
+	return out, nil
 }
 
 // encodeToken turns an offset into the opaque cursor handed to the caller. A
@@ -447,11 +466,15 @@ func (s *Service) threadPool(folderID, query string) []mail.ThreadSummary {
 }
 
 // validateFolder rejects folder IDs that are not part of this backend, so a
-// stale or mistyped ID cannot silently render the inbox.
+// stale or mistyped ID cannot silently render the inbox. An empty ID is
+// rejected too: browsing always names a folder, and search is SearchThreads.
 func (s *Service) validateFolder(folderID string) error {
 	switch folderID {
-	case "", "inbox", "starred", "sent", "trash":
+	case "inbox", "starred", "sent", "trash":
 		return nil
+	}
+	if strings.TrimSpace(folderID) == "" {
+		return mail.ErrInvalidArgument
 	}
 	if strings.HasPrefix(folderID, "label:") {
 		for _, l := range s.labels {

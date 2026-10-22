@@ -85,8 +85,9 @@ func New(acc mail.Account, store Store, opts ...Option) (*Service, error) {
 // Account returns the account this service was built for.
 func (s *Service) Account() mail.Account { return s.acc }
 
-// Invalidate drops every cached response, so the next Folders, FolderDetails
-// or ListThreads call fetches fresh data. The cache never expires on its own:
+// Invalidate drops every cached response, so the next Folders, FolderDetails,
+// ListThreads or SearchThreads call fetches fresh data. The cache never expires
+// on its own:
 // this is the hook external logic (such as a future refresh or sync) calls
 // when the mailbox has changed.
 func (s *Service) Invalidate() { s.cache.clear() }
@@ -191,49 +192,78 @@ func (s *Service) folders(selected []*Label, specs map[string]folderSpec) []mail
 	return out
 }
 
-// ListThreads returns one page of conversations, newest first.
+// ListThreads returns one page of conversations of one folder, newest first.
 func (s *Service) ListThreads(ctx context.Context, req mail.ListRequest) (mail.ThreadPage, error) {
 	labelID, err := labelIDFor(req.FolderID)
 	if err != nil {
 		return mail.ThreadPage{}, err
 	}
-	limit := req.Limit
-	if limit <= 0 {
-		limit = defaultPageSize
-	}
-	if limit > maxPageSize {
-		limit = maxPageSize
-	}
-
-	key := threadsCacheKey(labelID, req.Query, req.PageToken, limit)
+	limit := pageLimit(req.Limit)
+	key := threadsCacheKey(labelID, req.PageToken, limit)
 	if cached, ok := s.cache.threads.get(key); ok {
 		return cloneThreadPage(cached), nil
 	}
+	page, err := s.listThreads(ctx, labelID, "", req.PageToken, limit)
+	if err != nil {
+		return mail.ThreadPage{}, err
+	}
+	s.cache.threads.set(key, page)
+	return cloneThreadPage(page), nil
+}
 
+// SearchThreads returns one page of conversations matching the query, newest
+// first. The query goes to threads.list as written and without a label filter,
+// so it spans every folder; Gmail's includeSpamTrash default keeps trash and
+// spam out, which is how the web search behaves.
+func (s *Service) SearchThreads(ctx context.Context, req mail.SearchRequest) (mail.ThreadPage, error) {
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		return mail.ThreadPage{}, mail.ErrInvalidArgument
+	}
+	limit := pageLimit(req.Limit)
+	key := searchCacheKey(query, req.PageToken, limit)
+	if cached, ok := s.cache.search.get(key); ok {
+		return cloneThreadPage(cached), nil
+	}
+	page, err := s.listThreads(ctx, "", query, req.PageToken, limit)
+	if err != nil {
+		return mail.ThreadPage{}, err
+	}
+	s.cache.search.set(key, page)
+	return cloneThreadPage(page), nil
+}
+
+// pageLimit clamps a requested page size to the backend's bounds.
+func pageLimit(limit int) int {
+	if limit <= 0 {
+		return defaultPageSize
+	}
+	if limit > maxPageSize {
+		return maxPageSize
+	}
+	return limit
+}
+
+// listThreads performs one threads.list call and fills the rows of the page. An
+// empty labelID does not filter by folder, which is what a search needs; an
+// empty query browses the label instead.
+func (s *Service) listThreads(ctx context.Context, labelID, query, pageToken string, limit int) (mail.ThreadPage, error) {
 	q := url.Values{}
 	q.Set("maxResults", strconv.Itoa(limit))
 	q.Set("fields", "nextPageToken,resultSizeEstimate,threads/id")
 	if labelID != "" {
 		q.Set("labelIds", labelID)
 	}
-	if req.Query != "" {
-		q.Set("q", req.Query)
+	if query != "" {
+		q.Set("q", query)
 	}
-	if req.PageToken != "" {
-		q.Set("pageToken", req.PageToken)
+	if pageToken != "" {
+		q.Set("pageToken", pageToken)
 	}
 
 	var list ListThreadsResponse
 	if err := s.c.do(ctx, "threads.list", "GET", "/users/me/threads", q, &list); err != nil {
 		return mail.ThreadPage{}, err
-	}
-
-	summaries := func(live []*Thread) []mail.ThreadSummary {
-		out := make([]mail.ThreadSummary, 0, len(live))
-		for _, th := range live {
-			out = append(out, summarize(s.acc.ID, th))
-		}
-		return out
 	}
 
 	threads, err := s.fetchThreadMetadata(ctx, list.Threads)
@@ -247,13 +277,15 @@ func (s *Service) ListThreads(ctx context.Context, req mail.ListRequest) (mail.T
 		// say the backend cannot tell.
 		total = -1
 	}
-	page := mail.ThreadPage{
-		Threads:       summaries(threads),
+	rows := make([]mail.ThreadSummary, 0, len(threads))
+	for _, th := range threads {
+		rows = append(rows, summarize(s.acc.ID, th))
+	}
+	return mail.ThreadPage{
+		Threads:       rows,
 		Total:         total,
 		NextPageToken: list.NextPageToken,
-	}
-	s.cache.threads.set(key, page)
-	return cloneThreadPage(page), nil
+	}, nil
 }
 
 // fetchThreadMetadata loads the messages of every listed conversation in one
@@ -381,11 +413,12 @@ func (s *Service) Close() error {
 }
 
 // labelIDFor maps a semantic folder ID back to the Gmail label it stands for.
-// An empty ID is the inbox, and anything else is passed through: user labels
-// are opaque Gmail IDs that only the API can judge.
+// Anything that is not a system folder is passed through: user labels are
+// opaque Gmail IDs that only the API can judge. An empty ID is a caller bug,
+// because browsing always names a folder.
 func labelIDFor(folderID string) (string, error) {
 	switch folderID {
-	case "", "inbox":
+	case "inbox":
 		return "INBOX", nil
 	case "starred":
 		return "STARRED", nil

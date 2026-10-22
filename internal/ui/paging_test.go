@@ -125,8 +125,9 @@ func TestToolbarRangeTextPrefersFolderTotal(t *testing.T) {
 		t.Fatalf("browsing range = %q, want %q", got, want)
 	}
 
-	// A search has no per-label total, so the list estimate stays.
+	// A search has no active folder, so the list estimate stays.
 	a.query = "invoice"
+	a.activeFolder = ""
 	if got, want := a.toolbar.rangeText(), "1–25 of 999"; got != want {
 		t.Fatalf("search range = %q, want %q", got, want)
 	}
@@ -134,6 +135,7 @@ func TestToolbarRangeTextPrefersFolderTotal(t *testing.T) {
 	// Browsing with the folder total not yet loaded falls back to the estimate
 	// instead of hiding the range.
 	a.query = ""
+	a.activeFolder = "inbox"
 	a.folders = nil
 	if got, want := a.toolbar.rangeText(), "1–25 of 999"; got != want {
 		t.Fatalf("unknown-total range = %q, want %q", got, want)

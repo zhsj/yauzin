@@ -17,6 +17,9 @@ const (
 	foldersCacheSize = 4
 	detailsCacheSize = 4
 	threadsCacheSize = 64
+	// searchCacheSize is separate from the browsing cache: a query list and a
+	// folder page describe different views, and neither should evict the other.
+	searchCacheSize = 32
 )
 
 // cacheKeySeparator joins the fields of a cache key. It never occurs in a
@@ -31,10 +34,17 @@ func detailsCacheKey(ids []string) string {
 	return "details:" + strings.Join(ids, cacheKeySeparator)
 }
 
-// threadsCacheKey names one page of conversations.
-func threadsCacheKey(labelID, query, pageToken string, limit int) string {
-	return "threads:" + labelID + cacheKeySeparator + query +
-		cacheKeySeparator + pageToken + cacheKeySeparator + strconv.Itoa(limit)
+// threadsCacheKey names one page of folder browsing.
+func threadsCacheKey(labelID, pageToken string, limit int) string {
+	return "threads:" + labelID + cacheKeySeparator + pageToken +
+		cacheKeySeparator + strconv.Itoa(limit)
+}
+
+// searchCacheKey names one page of search results. Search pages carry no label
+// id, which is what keeps them apart from the browsing entries.
+func searchCacheKey(query, pageToken string, limit int) string {
+	return "search:" + query + cacheKeySeparator + pageToken +
+		cacheKeySeparator + strconv.Itoa(limit)
 }
 
 // lruCache is a small concurrent LRU cache keyed by string. It is a map plus a
@@ -104,6 +114,7 @@ type serviceCache struct {
 	folders *lruCache[[]mail.Folder]
 	details *lruCache[map[string]*Label]
 	threads *lruCache[mail.ThreadPage]
+	search  *lruCache[mail.ThreadPage]
 }
 
 func newServiceCache() *serviceCache {
@@ -111,6 +122,7 @@ func newServiceCache() *serviceCache {
 		folders: newLRUCache[[]mail.Folder](foldersCacheSize),
 		details: newLRUCache[map[string]*Label](detailsCacheSize),
 		threads: newLRUCache[mail.ThreadPage](threadsCacheSize),
+		search:  newLRUCache[mail.ThreadPage](searchCacheSize),
 	}
 }
 
@@ -119,6 +131,7 @@ func (sc *serviceCache) clear() {
 	sc.folders.clear()
 	sc.details.clear()
 	sc.threads.clear()
+	sc.search.clear()
 }
 
 // cloneThreadPage deep-copies a page so a caller mutating the returned rows

@@ -134,8 +134,8 @@ func (a *App) handleKeys(gtx layout.Context) {
 
 	if a.overlay == nil && a.searchFocused {
 		// Esc is the only key the search field shares with the shortcuts: it
-		// closes the status bar, then the conversation, then the search.
-		// Everything else belongs to the editor.
+		// closes the status bar, then the conversation. It never clears the
+		// query. Everything else belongs to the editor.
 		if pressed(gtx, key.NameEscape) {
 			a.escape(gtx)
 		}
@@ -154,8 +154,8 @@ func (a *App) handleKeys(gtx layout.Context) {
 	}
 
 	bits := readShortcuts(gtx, false)
-	// Esc runs before the remaining keys: it closes the status bar, the open
-	// conversation or the search instead of acting on the list.
+	// Esc runs before the remaining keys: it closes the status bar or the open
+	// conversation instead of acting on the list.
 	if bits&keyEscape != 0 {
 		a.escape(gtx)
 	}
@@ -252,12 +252,6 @@ func (a *App) escape(gtx layout.Context) {
 	}
 	if a.selectedThread != "" {
 		a.closeThread()
-		return
-	}
-	if a.query != "" || a.searchFocused {
-		a.top.clearSearch()
-		a.setQuery("")
-		a.blurRequested = true
 	}
 }
 

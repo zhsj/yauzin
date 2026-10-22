@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"gioui.org/layout"
+	"gioui.org/op"
 
 	"github.com/zhsj/yauzin/internal/mail"
 	"github.com/zhsj/yauzin/internal/prefs"
@@ -72,13 +73,107 @@ func TestSetQueryClearsTheListImmediately(t *testing.T) {
 	assertListCleared(t, a)
 }
 
-// listRecorderService remembers the list requests the UI sent, so a test can
-// assert which folder the mailbox was asked for. The worker goroutines call it
-// while the test reads it, hence the lock.
+// TestSearchLeavesTheFolderAndSearchesEverywhere covers the switch from a
+// folder to the global search view: the query drops the folder selection, the
+// request is a search instead of a folder page, and no sidebar row stays
+// highlighted.
+func TestSearchLeavesTheFolderAndSearchesEverywhere(t *testing.T) {
+	rec := &listRecorderService{}
+	a := testApp(t)
+	useService(a, rec)
+	a.folders = []mail.Folder{
+		{ID: "inbox", Kind: mail.FolderInbox},
+		{ID: "work", Name: "Work", Kind: mail.FolderLabel},
+	}
+	a.side.reload()
+	a.activeFolder = "work"
+
+	a.setQuery("from:ada")
+
+	if a.activeFolder != "" {
+		t.Fatalf("active folder = %q during a search, want none", a.activeFolder)
+	}
+	waitFor(t, a, "the search request", func() bool { return rec.lastSearch() == "from:ada" })
+	if n := rec.listCount(); n != 0 {
+		t.Fatalf("folder pages requested during a search = %d, want none", n)
+	}
+	for _, item := range a.side.folders {
+		if item.active {
+			t.Fatalf("folder %q stays highlighted during a search", item.id)
+		}
+	}
+	for _, item := range a.side.labels {
+		if item.active {
+			t.Fatalf("label %q stays highlighted during a search", item.id)
+		}
+	}
+}
+
+// TestEmptySearchLeavesTheViewAlone pins the submission guard: an empty box is
+// not a search, so it neither reloads the list nor moves the folder selection.
+func TestEmptySearchLeavesTheViewAlone(t *testing.T) {
+	a := testApp(t)
+	a.activeFolder = "inbox"
+
+	a.setQuery("   ")
+
+	if a.query != "" || a.activeFolder != "inbox" {
+		t.Fatalf("empty search changed the view: query %q, folder %q", a.query, a.activeFolder)
+	}
+}
+
+// TestClearSearchInputKeepsTheResults covers the ✕ of the pill: it empties the
+// text being edited without leaving the search view or dropping the rows.
+func TestClearSearchInputKeepsTheResults(t *testing.T) {
+	a := testApp(t)
+	seedList(a)
+	a.query = "invoice"
+	a.activeFolder = ""
+	a.top.search.SetText("invoice")
+
+	a.clearSearchInput()
+
+	if got := a.top.search.Text(); got != "" {
+		t.Fatalf("search box = %q after the clear button, want empty", got)
+	}
+	if a.query != "invoice" || a.activeFolder != "" {
+		t.Fatalf("clearing the box left the view: query %q, folder %q", a.query, a.activeFolder)
+	}
+	if len(a.list.threads) != 3 {
+		t.Fatalf("list rows = %d after clearing the box, want the results to stay", len(a.list.threads))
+	}
+}
+
+// TestEscapeKeepsTheSearch covers the Esc order: it closes the reader but never
+// drops the query, so the list behind it stays the search results.
+func TestEscapeKeepsTheSearch(t *testing.T) {
+	a := testApp(t)
+	seedList(a)
+	a.query = "invoice"
+	a.activeFolder = ""
+	a.selectedThread = "t0"
+
+	a.escape(testGtx(new(op.Ops), testWindow))
+
+	if a.selectedThread != "" {
+		t.Fatalf("reader still shows %q after Esc", a.selectedThread)
+	}
+	if a.query != "invoice" || a.activeFolder != "" {
+		t.Fatalf("Esc left the search: query %q, folder %q", a.query, a.activeFolder)
+	}
+	if len(a.list.threads) != 3 {
+		t.Fatalf("list rows = %d after Esc, want the search results to stay", len(a.list.threads))
+	}
+}
+
+// listRecorderService remembers the list and search requests the UI sent, so a
+// test can assert which view the mailbox was asked for. The worker goroutines
+// call it while the test reads it, hence the lock.
 type listRecorderService struct {
 	fakeService
-	mu   sync.Mutex
-	reqs []mail.ListRequest
+	mu       sync.Mutex
+	reqs     []mail.ListRequest
+	searches []mail.SearchRequest
 }
 
 func (s *listRecorderService) ListThreads(_ context.Context, req mail.ListRequest) (mail.ThreadPage, error) {
@@ -88,7 +183,15 @@ func (s *listRecorderService) ListThreads(_ context.Context, req mail.ListReques
 	return mail.ThreadPage{}, nil
 }
 
-// lastFolder returns the folder of the newest request, or "" before the first.
+func (s *listRecorderService) SearchThreads(_ context.Context, req mail.SearchRequest) (mail.ThreadPage, error) {
+	s.mu.Lock()
+	s.searches = append(s.searches, req)
+	s.mu.Unlock()
+	return mail.ThreadPage{}, nil
+}
+
+// lastFolder returns the folder of the newest list request, or "" before the
+// first.
 func (s *listRecorderService) lastFolder() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -96,6 +199,23 @@ func (s *listRecorderService) lastFolder() string {
 		return ""
 	}
 	return s.reqs[len(s.reqs)-1].FolderID
+}
+
+// listCount returns how many folder pages were requested.
+func (s *listRecorderService) listCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.reqs)
+}
+
+// lastSearch returns the query of the newest search, or "" before the first.
+func (s *listRecorderService) lastSearch() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.searches) == 0 {
+		return ""
+	}
+	return s.searches[len(s.searches)-1].Query
 }
 
 // TestSwitchAccountResetsTheFolder covers the label of the account being left:

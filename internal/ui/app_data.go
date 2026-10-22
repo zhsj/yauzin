@@ -166,19 +166,28 @@ func (a *App) loadThreadsKeepingScroll(keepScroll bool, after func()) {
 	a.listGen++
 	gen, accID := a.listGen, a.activeAcc
 	page := a.page
-	req := mail.ListRequest{
-		FolderID:  a.activeFolder,
-		Query:     a.query,
-		PageToken: token,
-		Limit:     perPage,
-	}
+	// Snapshot the view before the worker starts: a folder switch or an
+	// account change must not be read from the worker goroutine.
+	folder, query := a.activeFolder, a.query
 	guard := func() bool { return gen == a.listGen && accID == a.activeAcc }
 	a.toolbar.setLoading(true)
 	var result mail.ThreadPage
 	a.listCancel = a.async("list threads", timeoutList, guard,
 		func(ctx context.Context) error {
 			var err error
-			result, err = svc.ListThreads(ctx, req)
+			if query != "" {
+				result, err = svc.SearchThreads(ctx, mail.SearchRequest{
+					Query:     query,
+					PageToken: token,
+					Limit:     perPage,
+				})
+				return err
+			}
+			result, err = svc.ListThreads(ctx, mail.ListRequest{
+				FolderID:  folder,
+				PageToken: token,
+				Limit:     perPage,
+			})
 			return err
 		},
 		func() {
@@ -214,20 +223,23 @@ func (a *App) loadThreadsKeepingScroll(keepScroll bool, after func()) {
 		})
 }
 
-// clearSearchInput empties the search box and returns the list to the folder.
-// The focus stays in the field, so a new query can be typed right away.
+// clearSearchInput empties the search box without leaving the search view: the
+// list keeps the results of the query that is still active, so only the text
+// being edited changes. The focus stays in the field, ready for the next query.
 func (a *App) clearSearchInput() {
 	a.top.clearSearch()
-	a.setQuery("")
-	a.invalidate()
 }
 
+// setQuery switches the list to the global search view. An empty query is not a
+// search, so it is ignored; a real one drops the folder selection, which is
+// what tells every view that the list no longer belongs to a folder.
 func (a *App) setQuery(q string) {
 	q = strings.TrimSpace(q)
-	if q == a.query {
+	if q == "" || q == a.query {
 		return
 	}
 	a.query = q
+	a.activeFolder = ""
 	a.resetSelection()
 	a.clearList()
 	a.goToPage(1)
@@ -235,7 +247,7 @@ func (a *App) setQuery(q string) {
 }
 
 func (a *App) selectFolder(id string) {
-	if a.activeFolder == id && a.query == "" {
+	if a.activeFolder == id {
 		a.hideOverlay()
 		return
 	}

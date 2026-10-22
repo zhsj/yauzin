@@ -160,13 +160,27 @@ type ThreadSummary struct {
 // Unread reports whether the conversation still has unread messages.
 func (t ThreadSummary) Unread() bool { return t.UnreadCount > 0 }
 
-// ListRequest selects one page of conversations.
+// ListRequest selects one page of conversations of one folder.
+//
+// FolderID is required: browsing always names a folder or label, and an empty
+// value reports ErrInvalidArgument. Search across folders is SearchRequest.
 //
 // PageToken is opaque to the caller: it is whatever the previous ThreadPage
 // reported, and an empty value asks for the first page. Limit <= 0 means the
 // backend default.
 type ListRequest struct {
 	FolderID  string
+	PageToken string
+	Limit     int
+}
+
+// SearchRequest selects one page of search results across the whole mailbox.
+//
+// Query is handed to the backend as written, so its own syntax works without
+// the UI parsing it (for Gmail: from:, subject:, has:attachment and the rest of
+// the search operators). An empty Query reports ErrInvalidArgument. PageToken
+// and Limit mean the same as in ListRequest.
+type SearchRequest struct {
 	Query     string
 	PageToken string
 	Limit     int
@@ -175,9 +189,9 @@ type ListRequest struct {
 // ThreadPage is one page of conversations.
 //
 // NextPageToken is empty on the last page. Total is the number of conversations
-// matching the query (not messages), or an estimate; a negative value means the
-// backend cannot tell. Threads always describe whole conversations, never only
-// the messages that matched Query.
+// matching the request (not messages), or an estimate; a negative value means
+// the backend cannot tell. Threads always describe whole conversations, never
+// only the messages that matched a search.
 type ThreadPage struct {
 	Threads       []ThreadSummary
 	Total         int
@@ -237,8 +251,13 @@ type Service interface {
 	// FolderDetails fills in the unread counters and label colours of the
 	// folders Folders returned.
 	FolderDetails(ctx context.Context, folders []Folder) ([]Folder, error)
-	// ListThreads returns one page of conversations, newest first.
+	// ListThreads returns one page of conversations of one folder, newest
+	// first.
 	ListThreads(ctx context.Context, req ListRequest) (ThreadPage, error)
+	// SearchThreads returns one page of conversations matching req.Query across
+	// every folder and label, newest first. Backends exclude trash and spam the
+	// way Gmail does. An empty query reports ErrInvalidArgument.
+	SearchThreads(ctx context.Context, req SearchRequest) (ThreadPage, error)
 	// GetThread returns every message of a conversation, oldest first.
 	GetThread(ctx context.Context, threadID string) ([]*Message, error)
 	SetFlag(ctx context.Context, ids []string, flag Flag, on bool) error

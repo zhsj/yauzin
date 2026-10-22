@@ -51,7 +51,9 @@ func (s *sidebarView) reload() {
 			labelFolders = append(labelFolders, f)
 			continue
 		}
-		active := f.ID == a.activeFolder && a.query == ""
+		// The folder view is exactly the active folder: a search leaves it
+		// empty, so no row is highlighted while the list shows results.
+		active := f.ID == a.activeFolder
 		item := newNavItem(f.ID, folderDisplayName(f), folderIcon(f.Kind), a.selectFolder)
 		item.setCount(f.Unread)
 		item.setActive(active)
@@ -70,11 +72,7 @@ func (s *sidebarView) flattenLabels() {
 		s.labels = s.labels[:0]
 		return
 	}
-	active := ""
-	if s.app.query == "" {
-		active = s.app.activeFolder
-	}
-	s.labels = s.tree.flatten(s.collapsed, active, s.toggleLabel)
+	s.labels = s.tree.flatten(s.collapsed, s.app.activeFolder, s.toggleLabel)
 }
 
 // toggleLabel folds or unfolds one label subtree.
