@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,6 +64,10 @@ type Service struct {
 	acc mail.Account
 	c   *client
 
+	// cache memoizes the read-only responses of this account. It has no
+	// expiry: entries are valid until Invalidate drops them.
+	cache *serviceCache
+
 	closeOnce sync.Once
 }
 
@@ -74,16 +79,25 @@ func New(acc mail.Account, store Store, opts ...Option) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Service{acc: acc, c: c}, nil
+	return &Service{acc: acc, c: c, cache: newServiceCache()}, nil
 }
 
 // Account returns the account this service was built for.
 func (s *Service) Account() mail.Account { return s.acc }
 
+// Invalidate drops every cached response, so the next Folders, FolderDetails
+// or ListThreads call fetches fresh data. The cache never expires on its own:
+// this is the hook external logic (such as a future refresh or sync) calls
+// when the mailbox has changed.
+func (s *Service) Invalidate() { s.cache.clear() }
+
 // Folders lists the four system folders plus the user labels, without the
 // unread counters and label colours: those are read by FolderDetails, which the
 // caller runs after the list is on screen.
 func (s *Service) Folders(ctx context.Context) ([]mail.Folder, error) {
+	if cached, ok := s.cache.folders.get(cacheKeyFolders); ok {
+		return slices.Clone(cached), nil
+	}
 	var resp ListLabelsResponse
 	q := url.Values{}
 	q.Set("fields", "labels(id,name,type)")
@@ -114,7 +128,9 @@ func (s *Service) Folders(ctx context.Context) ([]mail.Folder, error) {
 		}
 	}
 
-	return s.folders(selected, specs), nil
+	folders := s.folders(selected, specs)
+	s.cache.folders.set(cacheKeyFolders, folders)
+	return slices.Clone(folders), nil
 }
 
 // FolderDetails fills the unread counters and label colours of the folders
@@ -135,9 +151,15 @@ func (s *Service) FolderDetails(ctx context.Context, folders []mail.Folder) ([]m
 		ids[i] = id
 	}
 
-	details, err := s.c.labelDetails(ctx, ids)
-	if err != nil {
-		return nil, err
+	key := detailsCacheKey(ids)
+	details, ok := s.cache.details.get(key)
+	if !ok {
+		var err error
+		details, err = s.c.labelDetails(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		s.cache.details.set(key, details)
 	}
 
 	out := make([]mail.Folder, len(folders))
@@ -182,6 +204,11 @@ func (s *Service) ListThreads(ctx context.Context, req mail.ListRequest) (mail.T
 		limit = maxPageSize
 	}
 
+	key := threadsCacheKey(labelID, req.Query, req.PageToken, limit)
+	if cached, ok := s.cache.threads.get(key); ok {
+		return cloneThreadPage(cached), nil
+	}
+
 	q := url.Values{}
 	q.Set("maxResults", strconv.Itoa(limit))
 	q.Set("fields", "nextPageToken,resultSizeEstimate,threads/id")
@@ -219,11 +246,13 @@ func (s *Service) ListThreads(ctx context.Context, req mail.ListRequest) (mail.T
 		// say the backend cannot tell.
 		total = -1
 	}
-	return mail.ThreadPage{
+	page := mail.ThreadPage{
 		Threads:       summaries(threads),
 		Total:         total,
 		NextPageToken: list.NextPageToken,
-	}, nil
+	}
+	s.cache.threads.set(key, page)
+	return cloneThreadPage(page), nil
 }
 
 // fetchThreadMetadata loads the messages of every listed conversation in one
