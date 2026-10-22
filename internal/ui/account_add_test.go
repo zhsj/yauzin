@@ -209,11 +209,11 @@ func TestAccountDialogStoresTheAccount(t *testing.T) {
 	if !ok {
 		t.Fatal("the account is missing from accounts.json")
 	}
-	if !entry.UseProxy || entry.Token.RefreshToken != "refresh" || entry.Name != "Ada Chen" {
+	if entry.Kind != mail.KindGmail || !entry.UseProxy || entry.Token.RefreshToken != "refresh" || entry.Name != "Ada Chen" {
 		t.Fatalf("stored entry = %+v", entry)
 	}
-	if clientID, secret := store.Credentials(); clientID != "client-id" || secret != "client-secret" {
-		t.Fatalf("stored credentials = %q/%q", clientID, secret)
+	if o, ok := store.Credentials(mail.KindGmail); !ok || o.ClientID != "client-id" || o.ClientSecret != "client-secret" {
+		t.Fatalf("stored credentials = %+v/%v", o, ok)
 	}
 }
 
@@ -320,8 +320,8 @@ func TestRelauthRejectsAnotherMailbox(t *testing.T) {
 	if _, ok := store.Entry("gmail:other@example.com"); ok {
 		t.Fatal("another account was added")
 	}
-	if clientID, _ := store.Credentials(); clientID != "" {
-		t.Fatalf("credentials = %q, want untouched", clientID)
+	if o, ok := store.Credentials(mail.KindGmail); ok {
+		t.Fatalf("credentials = %+v, want untouched", o)
 	}
 	if a.accountAdd != nil {
 		t.Fatal("the dialog closed although the re-login was rejected")
@@ -344,6 +344,7 @@ func TestRelauthUpdatesTheAccountInPlace(t *testing.T) {
 	}
 	entry := accounts.Entry{
 		ID:    target.ID,
+		Kind:  mail.KindGmail,
 		Email: target.Email,
 		Name:  "Old Name",
 		Token: accounts.Token{RefreshToken: "old"},
@@ -407,10 +408,10 @@ func TestRelauthRowOpensTheAuthorizationStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	if err := store.SetCredentials("client-id", "client-secret"); err != nil {
+	if err := store.SetCredentials(accounts.OAuth{Provider: mail.KindGmail, ClientID: "client-id", ClientSecret: "client-secret"}); err != nil {
 		t.Fatalf("store credentials: %v", err)
 	}
-	if err := store.Upsert(accounts.Entry{ID: target.ID, Email: target.Email}); err != nil {
+	if err := store.Upsert(accounts.Entry{ID: target.ID, Kind: mail.KindGmail, Email: target.Email}); err != nil {
 		t.Fatalf("seed store: %v", err)
 	}
 	a.accountStore = store

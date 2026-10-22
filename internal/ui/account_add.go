@@ -100,9 +100,9 @@ func newAccountDialog(a *App) *accountDialog {
 	d.clientSecret.SingleLine = true
 	d.clientSecret.Mask = '•'
 	if a.accountStore != nil {
-		if id, secret := a.accountStore.Credentials(); id != "" || secret != "" {
-			d.clientID.SetText(id)
-			d.clientSecret.SetText(secret)
+		if o, ok := a.accountStore.Credentials(mail.KindGmail); ok && (o.ClientID != "" || o.ClientSecret != "") {
+			d.clientID.SetText(o.ClientID)
+			d.clientSecret.SetText(o.ClientSecret)
 		}
 	}
 	// A configured proxy is the common reason to open this dialog; default to
@@ -284,7 +284,8 @@ func (d *accountDialog) finish(res gmail.SignInResult, clientID, clientSecret st
 		})
 		return
 	}
-	if err := a.accountStore.SetCredentials(clientID, clientSecret); err != nil {
+	client := accounts.OAuth{Provider: mail.KindGmail, ClientID: clientID, ClientSecret: clientSecret}
+	if err := a.accountStore.SetCredentials(client); err != nil {
 		logErr("save OAuth client", err)
 		d.err = err.Error()
 		return
@@ -298,7 +299,14 @@ func (d *accountDialog) finish(res gmail.SignInResult, clientID, clientSecret st
 			name = old.Name
 		}
 	}
-	entry := accounts.Entry{ID: id, Email: res.Email, Name: name, UseProxy: d.useProxy, Token: res.Token}
+	entry := accounts.Entry{
+		ID:       id,
+		Kind:     mail.KindGmail,
+		Email:    res.Email,
+		Name:     name,
+		UseProxy: d.useProxy,
+		Token:    res.Token,
+	}
 	if err := a.accountStore.Upsert(entry); err != nil {
 		logErr("save account", err)
 		d.err = err.Error()

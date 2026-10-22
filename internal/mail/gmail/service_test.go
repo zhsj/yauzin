@@ -23,17 +23,19 @@ import (
 
 // fakeStore is the accounts.Store the backend sees in tests.
 type fakeStore struct {
-	mu           sync.Mutex
-	clientID     string
-	clientSecret string
-	tokens       map[string]accounts.Token
-	saved        []accounts.Token
+	mu          sync.Mutex
+	credentials accounts.OAuth
+	tokens      map[string]accounts.Token
+	saved       []accounts.Token
 }
 
 func newFakeStore(accountID, accessToken string) *fakeStore {
 	return &fakeStore{
-		clientID:     "client-id",
-		clientSecret: "client-secret",
+		credentials: accounts.OAuth{
+			Provider:     mail.KindGmail,
+			ClientID:     "client-id",
+			ClientSecret: "client-secret",
+		},
 		tokens: map[string]accounts.Token{
 			accountID: {
 				AccessToken:  accessToken,
@@ -45,7 +47,12 @@ func newFakeStore(accountID, accessToken string) *fakeStore {
 	}
 }
 
-func (f *fakeStore) Credentials() (string, string) { return f.clientID, f.clientSecret }
+func (f *fakeStore) Credentials(kind mail.Kind) (accounts.OAuth, bool) {
+	if f.credentials.Provider != kind {
+		return accounts.OAuth{}, false
+	}
+	return f.credentials, true
+}
 
 func (f *fakeStore) Token(accountID string) (accounts.Token, bool) {
 	f.mu.Lock()
@@ -861,6 +868,45 @@ func TestRefreshFailureIsUnauthorized(t *testing.T) {
 
 	if _, err := svc.Folders(context.Background()); !errors.Is(err, mail.ErrUnauthorized) {
 		t.Fatalf("error = %v, want ErrUnauthorized", err)
+	}
+}
+
+func TestRefreshWithoutGmailCredentialsIsUnauthorized(t *testing.T) {
+	var mu sync.Mutex
+	refreshed := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/me/labels", func(w http.ResponseWriter, r *http.Request) {
+		writeErrorJSON(t, w, http.StatusUnauthorized, `{"error":{"code":401,"message":"Invalid Credentials"}}`)
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		refreshed = true
+		mu.Unlock()
+		writeJSON(t, w, `{"access_token":"fresh-token","token_type":"Bearer","expires_in":3600}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// A client stored for another backend must not be used to refresh a Gmail
+	// token, even though it carries a client ID and secret.
+	store := newFakeStore(testAccountID, "stale-token")
+	store.credentials = accounts.OAuth{Provider: mail.KindIMAP, ClientID: "id", ClientSecret: "secret"}
+	svc, err := New(mail.Account{ID: testAccountID, Kind: mail.KindGmail}, store,
+		WithBaseURL(srv.URL),
+		func(o *options) { o.tokenURL = srv.URL + "/token" },
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = svc.Close() }()
+
+	if _, err := svc.Folders(context.Background()); !errors.Is(err, mail.ErrUnauthorized) {
+		t.Fatalf("error = %v, want ErrUnauthorized", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if refreshed {
+		t.Fatal("refreshed with credentials of another provider")
 	}
 }
 

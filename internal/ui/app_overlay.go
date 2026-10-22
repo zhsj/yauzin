@@ -266,8 +266,8 @@ func (a *App) showRelauth(acc mail.Account) {
 		a.notify(i18n.T("settings.accountSignInFailed"), true)
 		return
 	}
-	clientID, clientSecret := a.accountStore.Credentials()
-	if clientID == "" || clientSecret == "" {
+	client, ok := a.accountStore.Credentials(mail.KindGmail)
+	if !ok || client.ClientID == "" || client.ClientSecret == "" {
 		a.notify(i18n.T("settings.accountSignInFailed"), true)
 		return
 	}
@@ -276,8 +276,8 @@ func (a *App) showRelauth(acc mail.Account) {
 	if entry, ok := a.accountStore.Entry(acc.ID); ok {
 		d.useProxy = entry.UseProxy
 	}
-	d.clientID.SetText(clientID)
-	d.clientSecret.SetText(clientSecret)
+	d.clientID.SetText(client.ClientID)
+	d.clientSecret.SetText(client.ClientSecret)
 	d.step = accountStepAuth
 	a.showOverlay(d)
 	d.start()

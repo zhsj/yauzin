@@ -270,22 +270,29 @@ func newApp() *App {
 
 // configuredAccounts lists the stored accounts followed by the demo one. An
 // account without a refresh token cannot be read, so it is skipped with a
-// warning instead of failing on the first request.
+// warning instead of failing on the first request. The same applies to an
+// entry without a kind: it predates the typed format and cannot be handed to a
+// backend, so the user signs in again to write a new one.
 func configuredAccounts(store *accounts.Store) []mail.Account {
 	out := make([]mail.Account, 0, len(store.List())+1)
 	for _, e := range store.List() {
+		if e.Kind == "" {
+			slog.Warn("skip account without a kind", "account", e.ID)
+			continue
+		}
 		if e.Token.RefreshToken == "" {
 			slog.Warn("skip account without a refresh token", "account", e.ID)
 			continue
 		}
-		out = append(out, mail.Account{ID: e.ID, Kind: mail.KindGmail, Name: e.Name, Email: e.Email})
+		out = append(out, mail.Account{ID: e.ID, Kind: e.Kind, Name: e.Name, Email: e.Email})
 	}
 	return append(out, demoAccounts()...)
 }
 
-// serviceFactory builds the Gmail backend of one account and follows the proxy
+// serviceFactory builds the backend of one account and follows the proxy
 // setting: changing it replaces the backends that use it through the same
-// value.
+// value. Gmail is the only real backend for now; the kind switch is the point
+// where another one is added.
 type serviceFactory struct {
 	store *accounts.Store
 	proxy string
@@ -294,6 +301,10 @@ type serviceFactory struct {
 func (f *serviceFactory) newService(acc mail.Account) mail.Service {
 	if acc.ID == demoAccountID {
 		return mock.New(acc)
+	}
+	if acc.Kind != mail.KindGmail {
+		slog.Warn("no backend for account kind", "account", acc.ID, "kind", acc.Kind)
+		return nil
 	}
 	entry, ok := f.store.Entry(acc.ID)
 	if !ok {

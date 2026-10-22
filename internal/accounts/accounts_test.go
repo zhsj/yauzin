@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/zhsj/yauzin/internal/mail"
 )
 
 func TestOpenMissingFileIsEmpty(t *testing.T) {
@@ -19,8 +21,8 @@ func TestOpenMissingFileIsEmpty(t *testing.T) {
 	if got := s.List(); len(got) != 0 {
 		t.Fatalf("List = %+v, want none", got)
 	}
-	if id, secret := s.Credentials(); id != "" || secret != "" {
-		t.Fatalf("Credentials = %q/%q, want empty", id, secret)
+	if o, ok := s.Credentials(mail.KindGmail); ok {
+		t.Fatalf("Credentials = %+v, want none", o)
 	}
 }
 
@@ -49,6 +51,7 @@ func TestUpsertRoundTrip(t *testing.T) {
 	}
 	entry := Entry{
 		ID:       "gmail:user@example.com",
+		Kind:     mail.KindGmail,
 		Email:    "user@example.com",
 		Name:     "User",
 		UseProxy: true,
@@ -59,7 +62,8 @@ func TestUpsertRoundTrip(t *testing.T) {
 			ExpiresAt:    time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC),
 		},
 	}
-	if err := s.SetCredentials("client-id", "client-secret"); err != nil {
+	client := OAuth{Provider: mail.KindGmail, ClientID: "client-id", ClientSecret: "client-secret"}
+	if err := s.SetCredentials(client); err != nil {
 		t.Fatalf("SetCredentials: %v", err)
 	}
 	if err := s.Upsert(entry); err != nil {
@@ -74,14 +78,14 @@ func TestUpsertRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("account missing after reopen")
 	}
-	if got.Email != entry.Email || got.Name != entry.Name || got.UseProxy != entry.UseProxy {
+	if got.Email != entry.Email || got.Kind != entry.Kind || got.Name != entry.Name || got.UseProxy != entry.UseProxy {
 		t.Fatalf("entry = %+v, want %+v", got, entry)
 	}
 	if got.Token != entry.Token {
 		t.Fatalf("token = %+v, want %+v", got.Token, entry.Token)
 	}
-	if id, secret := reopened.Credentials(); id != "client-id" || secret != "client-secret" {
-		t.Fatalf("credentials = %q/%q", id, secret)
+	if o, ok := reopened.Credentials(mail.KindGmail); !ok || o != client {
+		t.Fatalf("credentials = %+v/%v, want %+v", o, ok, client)
 	}
 }
 
@@ -90,10 +94,10 @@ func TestUpsertReplacesSameID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if err := s.Upsert(Entry{ID: "a", Email: "old@example.com"}); err != nil {
+	if err := s.Upsert(Entry{ID: "a", Kind: mail.KindGmail, Email: "old@example.com"}); err != nil {
 		t.Fatalf("first upsert: %v", err)
 	}
-	if err := s.Upsert(Entry{ID: "a", Email: "new@example.com", UseProxy: true}); err != nil {
+	if err := s.Upsert(Entry{ID: "a", Kind: mail.KindGmail, Email: "new@example.com", UseProxy: true}); err != nil {
 		t.Fatalf("second upsert: %v", err)
 	}
 	list := s.List()
@@ -110,8 +114,35 @@ func TestUpsertRejectsEmptyID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if err := s.Upsert(Entry{Email: "user@example.com"}); err == nil {
+	if err := s.Upsert(Entry{Kind: mail.KindGmail, Email: "user@example.com"}); err == nil {
 		t.Fatal("Upsert accepted an empty ID")
+	}
+}
+
+func TestUpsertRejectsEmptyKind(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := s.Upsert(Entry{ID: "a", Email: "user@example.com"}); err == nil {
+		t.Fatal("Upsert accepted an empty kind")
+	}
+}
+
+func TestCredentialsRejectOtherProvider(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	client := OAuth{Provider: mail.KindGmail, ClientID: "id", ClientSecret: "secret"}
+	if err := s.SetCredentials(client); err != nil {
+		t.Fatalf("SetCredentials: %v", err)
+	}
+	if o, ok := s.Credentials(mail.KindIMAP); ok {
+		t.Fatalf("Credentials(imap) = %+v, want none", o)
+	}
+	if err := s.SetCredentials(OAuth{ClientID: "id"}); err == nil {
+		t.Fatal("SetCredentials accepted an empty provider")
 	}
 }
 
@@ -120,7 +151,7 @@ func TestSaveToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if err := s.Upsert(Entry{ID: "a", Email: "a@example.com"}); err != nil {
+	if err := s.Upsert(Entry{ID: "a", Kind: mail.KindGmail, Email: "a@example.com"}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 	tok := Token{AccessToken: "new", RefreshToken: "r", ExpiresAt: time.Unix(1000, 0)}
@@ -141,7 +172,7 @@ func TestWriteUsesOwnerOnlyPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if err := s.Upsert(Entry{ID: "a"}); err != nil {
+	if err := s.Upsert(Entry{ID: "a", Kind: mail.KindGmail}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 	info, err := os.Stat(filepath.Join(dir, fileName))
@@ -160,7 +191,7 @@ func TestWriteLeavesNoTempFiles(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	for _, id := range []string{"a", "b", "c"} {
-		if err := s.Upsert(Entry{ID: id}); err != nil {
+		if err := s.Upsert(Entry{ID: id, Kind: mail.KindGmail}); err != nil {
 			t.Fatalf("Upsert %q: %v", id, err)
 		}
 	}
@@ -181,10 +212,10 @@ func TestDocumentShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if err := s.SetCredentials("id", "secret"); err != nil {
+	if err := s.SetCredentials(OAuth{Provider: mail.KindGmail, ClientID: "id", ClientSecret: "secret"}); err != nil {
 		t.Fatalf("SetCredentials: %v", err)
 	}
-	if err := s.Upsert(Entry{ID: "gmail:a@example.com", Email: "a@example.com", UseProxy: true}); err != nil {
+	if err := s.Upsert(Entry{ID: "gmail:a@example.com", Kind: mail.KindGmail, Email: "a@example.com", UseProxy: true}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, fileName))
@@ -200,6 +231,20 @@ func TestDocumentShape(t *testing.T) {
 	if _, ok := raw["proxy"]; ok {
 		t.Fatalf("accounts.json contains a proxy field: %s", data)
 	}
+	// The credentials and the account must name their backend, so the file
+	// says what they belong to without relying on the account ID prefix.
+	oauth, ok := raw["oauth"].(map[string]any)
+	if !ok || oauth["provider"] != string(mail.KindGmail) {
+		t.Fatalf("oauth.provider missing: %s", data)
+	}
+	accounts, ok := raw["accounts"].([]any)
+	if !ok || len(accounts) != 1 {
+		t.Fatalf("accounts = %v, want one entry: %s", raw["accounts"], data)
+	}
+	account, ok := accounts[0].(map[string]any)
+	if !ok || account["kind"] != string(mail.KindGmail) {
+		t.Fatalf("accounts[0].kind missing: %s", data)
+	}
 }
 
 func TestConcurrentUpserts(t *testing.T) {
@@ -213,7 +258,7 @@ func TestConcurrentUpserts(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			if err := s.Upsert(Entry{ID: string(rune('a' + i))}); err != nil {
+			if err := s.Upsert(Entry{ID: string(rune('a' + i)), Kind: mail.KindGmail}); err != nil {
 				t.Errorf("Upsert: %v", err)
 			}
 			if _, err := Open(dir); err != nil {

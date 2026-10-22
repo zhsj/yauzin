@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/zhsj/yauzin/internal/mail"
 )
 
 // ErrNotExist reports an account ID the store does not hold.
@@ -31,21 +33,25 @@ type Token struct {
 	ExpiresAt    time.Time `json:"expiresAt,omitempty"`
 }
 
-// OAuth is the OAuth client the accounts were authorized with. It is shared:
+// OAuth is the OAuth client of one backend. It is stored once per document:
 // Google expects one client per deployment, and the same client is reused when
-// a second account signs in.
+// a second account signs in. Provider names the backend the client belongs to
+// so the file says what the credentials are for instead of relying on the file
+// name.
 type OAuth struct {
-	ClientID     string `json:"clientId,omitempty"`
-	ClientSecret string `json:"clientSecret,omitempty"`
+	Provider     mail.Kind `json:"provider,omitempty"`
+	ClientID     string    `json:"clientId,omitempty"`
+	ClientSecret string    `json:"clientSecret,omitempty"`
 }
 
 // Entry is one stored account.
 type Entry struct {
-	ID       string `json:"id"`
-	Email    string `json:"email"`
-	Name     string `json:"name,omitempty"`
-	UseProxy bool   `json:"useProxy,omitempty"`
-	Token    Token  `json:"token,omitempty"`
+	ID       string    `json:"id"`
+	Kind     mail.Kind `json:"kind"`
+	Email    string    `json:"email"`
+	Name     string    `json:"name,omitempty"`
+	UseProxy bool      `json:"useProxy,omitempty"`
+	Token    Token     `json:"token,omitempty"`
 }
 
 // file is the on-disk document.
@@ -84,17 +90,25 @@ func Open(dir string) (*Store, error) {
 	return s, nil
 }
 
-// Credentials returns the shared OAuth client credentials, if any.
-func (s *Store) Credentials() (clientID, clientSecret string) {
+// Credentials returns the OAuth client of the given backend. It reports false
+// when the stored client belongs to another backend, so a backend cannot pick
+// up the credentials of a different one by accident.
+func (s *Store) Credentials(kind mail.Kind) (OAuth, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.data.OAuth.ClientID, s.data.OAuth.ClientSecret
+	if kind == "" || s.data.OAuth.Provider != kind {
+		return OAuth{}, false
+	}
+	return s.data.OAuth, true
 }
 
-// SetCredentials stores the shared OAuth client credentials.
-func (s *Store) SetCredentials(clientID, clientSecret string) error {
+// SetCredentials stores the OAuth client of one backend.
+func (s *Store) SetCredentials(o OAuth) error {
+	if o.Provider == "" {
+		return errors.New("accounts: empty OAuth provider")
+	}
 	return s.update(func(f *file) error {
-		f.OAuth = OAuth{ClientID: clientID, ClientSecret: clientSecret}
+		f.OAuth = o
 		return nil
 	})
 }
@@ -145,10 +159,15 @@ func (s *Store) SaveToken(id string, t Token) error {
 }
 
 // Upsert inserts an account or replaces the one with the same ID, which is how
-// signing in again refreshes the credentials of an existing account.
+// signing in again refreshes the credentials of an existing account. Both the
+// ID and the backend kind are required: an entry without a kind could not be
+// handed to any backend on the next start.
 func (s *Store) Upsert(e Entry) error {
 	if e.ID == "" {
 		return errors.New("accounts: empty account ID")
+	}
+	if e.Kind == "" {
+		return errors.New("accounts: empty account kind")
 	}
 	return s.update(func(f *file) error {
 		for i := range f.Accounts {

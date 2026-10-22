@@ -28,7 +28,9 @@ const refreshSkew = 60 * time.Second
 // Store is the part of accounts.Store the backend needs. It is an interface so
 // tests can hand in a fake without touching the disk.
 type Store interface {
-	Credentials() (clientID, clientSecret string)
+	// Credentials returns the OAuth client of the given backend, which for
+	// this package is always mail.KindGmail.
+	Credentials(kind mail.Kind) (accounts.OAuth, bool)
 	Token(accountID string) (accounts.Token, bool)
 	SaveToken(accountID string, t accounts.Token) error
 }
@@ -215,13 +217,13 @@ func (c *client) accessToken(ctx context.Context, force bool) (string, error) {
 	if tok.RefreshToken == "" {
 		return "", fmt.Errorf("%w: account %s has no refresh token", mail.ErrUnauthorized, c.accountID)
 	}
-	clientID, clientSecret := c.store.Credentials()
-	if clientID == "" {
+	client, ok := c.store.Credentials(mail.KindGmail)
+	if !ok || client.ClientID == "" {
 		return "", fmt.Errorf("%w: OAuth client credentials are missing", mail.ErrUnauthorized)
 	}
 	cfg := &oauth2.Config{
-		ClientID:     clientID,
-		ClientSecret: clientSecret,
+		ClientID:     client.ClientID,
+		ClientSecret: client.ClientSecret,
 		Endpoint: oauth2.Endpoint{
 			TokenURL:  c.tokenURL,
 			AuthStyle: googleEndpoint.AuthStyle,
