@@ -1,9 +1,13 @@
 package ui
 
 import (
+	"strings"
+
 	"gioui.org/app"
 
 	"github.com/zhsj/yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/mail/gmail"
 	"github.com/zhsj/yauzin/internal/prefs"
 )
 
@@ -93,4 +97,58 @@ func (a *App) setPerfMonitor(on bool) {
 	}
 	a.perf.setVisible(on)
 	a.rebuildSettingsPanel()
+}
+
+// setProxy validates and stores the shared proxy address, then replaces the
+// Gmail backends that opt into it. A returned error is meant for the settings
+// form; a storage failure has already been reported by updateSettings.
+func (a *App) setProxy(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if _, err := gmail.ParseProxy(raw); err != nil {
+		return err
+	}
+	if !a.updateSettings(func(s *prefs.Settings) { s.Proxy = raw }) {
+		return nil
+	}
+	a.proxy = raw
+	if a.factory != nil {
+		a.factory.proxy = raw
+	}
+	a.rebuildProxiedServices()
+	a.notify(i18n.T("toast.proxySaved"), false)
+	return nil
+}
+
+// rebuildProxiedServices swaps the backend of every Gmail account that opts
+// into the proxy, so a new address is used without a restart. In-flight
+// requests are cancelled first: they belong to the clients being replaced.
+func (a *App) rebuildProxiedServices() {
+	if a.factory == nil || a.accountStore == nil {
+		return
+	}
+	var targets []mail.Account
+	for _, acc := range a.accounts {
+		if acc.ID == demoAccountID {
+			continue
+		}
+		if entry, ok := a.accountStore.Entry(acc.ID); ok && entry.UseProxy {
+			targets = append(targets, acc)
+		}
+	}
+	if len(targets) == 0 {
+		return
+	}
+	a.cancelRequests()
+	for _, acc := range targets {
+		svc := a.factory.newService(acc)
+		if svc == nil {
+			continue
+		}
+		if old := a.services[acc.ID]; old != nil {
+			_ = old.Close()
+		}
+		a.services[acc.ID] = svc
+	}
+	a.reloadFolders()
+	a.refreshThreads()
 }

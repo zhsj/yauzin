@@ -13,6 +13,8 @@
 - 状态条通知只保留最后一条（`show`/`clear` 停掉旧消退定时器）；`post` 的补帧重试共用单个槽位。
 - 后端装配点收敛到 `appOptions`，`newApp()` 的零配置默认仍是 demo + mock。
 - `mail.Service` 去掉未使用的单封 `Get`，正文只按会话读取。
+- Gmail 只读接入：`internal/accounts` 保存 OAuth 凭据与令牌，`internal/mail/gmail` 实现文件夹/会话列表/会话正文（PKCE 回环授权），其余方法返回 `ErrUnsupported`。
+- 通用代理设置：`settings.json` 的 `proxy`，账号条目只记 `useProxy`；保存后按新代理重建对应后端。
 
 当前验证基线：`gofmt` 与 `goimports -local github.com/zhsj/yauzin` 均干净、纯 Go 包 `go vet`/`go test` 通过、容器内 `go build ./cmd/yauzin` 与 `go test ./...` 通过。
 

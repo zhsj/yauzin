@@ -28,6 +28,7 @@ func TestErrorTextMapsCategories(t *testing.T) {
 		{"not found", wrapped(mail.ErrNotFound), i18n.T("error.notFound")},
 		{"unsupported", wrapped(mail.ErrUnsupported), i18n.T("error.unsupported")},
 		{"invalid argument", wrapped(mail.ErrInvalidArgument), i18n.T("error.invalidArgument")},
+		{"unauthorized", wrapped(mail.ErrUnauthorized), i18n.T("error.unauthorized")},
 		{"unknown", errors.New("dial tcp 127.0.0.1:993: refused"), "dial tcp 127.0.0.1:993: refused"},
 	}
 	for _, tt := range tests {

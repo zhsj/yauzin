@@ -23,8 +23,10 @@ import (
 	"gioui.org/unit"
 	"gioui.org/x/explorer"
 
+	"github.com/zhsj/yauzin/internal/accounts"
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/mail/gmail"
 	"github.com/zhsj/yauzin/internal/mail/mock"
 	"github.com/zhsj/yauzin/internal/prefs"
 	"github.com/zhsj/yauzin/internal/tray"
@@ -60,6 +62,21 @@ type App struct {
 	// Accounts and the backend that serves each one.
 	accounts []mail.Account
 	services map[string]mail.Service
+	// accountStore holds the OAuth credentials and tokens of the real accounts.
+	// It is shared with the Gmail backends, which write refreshed tokens back.
+	accountStore *accounts.Store
+	// newService builds the backend of an account added while the app runs. It
+	// is nil for an App assembled by a test that injects no factory.
+	newService func(mail.Account) mail.Service
+	// proxy is the shared outbound proxy, empty for a direct connection. Only
+	// the accounts whose stored entry opts in use it.
+	proxy string
+	// factory reflects the proxy setting into the backends it builds; nil when
+	// the app was assembled without real accounts.
+	factory *serviceFactory
+	// accountAdd is the sign-in dialog while it is open. It owns the pending
+	// authorization context so closing the panel can cancel the wait.
+	accountAdd *accountDialog
 
 	// The active mailbox: which account, folder and query the list shows.
 	activeAcc    string
@@ -182,22 +199,37 @@ func (a *App) clientSide() bool {
 	return !a.decorated || (a.csd && os.Getenv("WAYLAND_DISPLAY") != "")
 }
 
-// appOptions is the single assembly point for the backends: a real Gmail or
-// IMAP implementation replaces newService, and accounts come from the
-// configuration layer once it exists. The zero value keeps the shipped demo
-// account served by the mock. A newService that returns nil leaves the account
-// without a backend, which is how tests install their own fake.
+// appOptions is the single assembly point for the backends. newApp fills it
+// from accounts.json (stored Gmail accounts plus the shipped demo one), and
+// newService builds the backend of each. The zero value keeps the demo account
+// served by the mock. A newService that returns nil leaves the account without
+// a backend, which is how tests install their own fake.
 type appOptions struct {
 	accounts   []mail.Account
 	newService func(mail.Account) mail.Service
+	// The real-account assembly: the shared credential store, the proxy the
+	// accounts may use and the factory that reflects proxy changes. They are
+	// nil for the zero options and for test apps.
+	store   *accounts.Store
+	proxy   string
+	factory *serviceFactory
+}
+
+// demoAccountID identifies the shipped demo mailbox, which is always served by
+// the mock backend so the app opens with something to show.
+const demoAccountID = "demo-gmail"
+
+// demoAccounts is the account list of a zero configuration app.
+func demoAccounts() []mail.Account {
+	return []mail.Account{
+		{ID: demoAccountID, Kind: mail.KindGmail, Name: "Ada Chen", Email: "ada.chen@gmail.com"},
+	}
 }
 
 // withDefaults fills the empty fields of opts.
 func (o appOptions) withDefaults() appOptions {
 	if len(o.accounts) == 0 {
-		o.accounts = []mail.Account{
-			{ID: "demo-gmail", Kind: mail.KindGmail, Name: "Ada Chen", Email: "ada.chen@gmail.com"},
-		}
+		o.accounts = demoAccounts()
 	}
 	if o.newService == nil {
 		o.newService = func(acc mail.Account) mail.Service { return mock.New(acc) }
@@ -213,7 +245,63 @@ func newApp() *App {
 		slog.Warn("read settings", "err", err)
 	}
 	i18n.SetLanguage(resolveLanguage(pref.Language))
-	return newAppWith(pref, appOptions{})
+
+	store, err := accounts.Open(prefs.Dir())
+	if err != nil {
+		// A broken accounts file costs the stored accounts, not the startup.
+		slog.Warn("read accounts", "err", err)
+	}
+	factory := &serviceFactory{store: store, proxy: pref.Proxy}
+	return newAppWith(pref, appOptions{
+		accounts:   configuredAccounts(store),
+		newService: factory.newService,
+		store:      store,
+		proxy:      pref.Proxy,
+		factory:    factory,
+	})
+}
+
+// configuredAccounts lists the stored accounts followed by the demo one. An
+// account without a refresh token cannot be read, so it is skipped with a
+// warning instead of failing on the first request.
+func configuredAccounts(store *accounts.Store) []mail.Account {
+	out := make([]mail.Account, 0, len(store.List())+1)
+	for _, e := range store.List() {
+		if e.Token.RefreshToken == "" {
+			slog.Warn("skip account without a refresh token", "account", e.ID)
+			continue
+		}
+		out = append(out, mail.Account{ID: e.ID, Kind: mail.KindGmail, Name: e.Name, Email: e.Email})
+	}
+	return append(out, demoAccounts()...)
+}
+
+// serviceFactory builds the Gmail backend of one account and follows the proxy
+// setting: changing it replaces the backends that use it through the same
+// value.
+type serviceFactory struct {
+	store *accounts.Store
+	proxy string
+}
+
+func (f *serviceFactory) newService(acc mail.Account) mail.Service {
+	if acc.ID == demoAccountID {
+		return mock.New(acc)
+	}
+	entry, ok := f.store.Entry(acc.ID)
+	if !ok {
+		return nil
+	}
+	var opts []gmail.Option
+	if entry.UseProxy {
+		opts = append(opts, gmail.WithProxyURL(f.proxy))
+	}
+	svc, err := gmail.New(acc, f.store, opts...)
+	if err != nil {
+		slog.Warn("build gmail backend", "account", acc.ID, "err", err)
+		return nil
+	}
+	return svc
 }
 
 // newAppWith assembles the app from already resolved settings and backends. It
@@ -225,6 +313,10 @@ func newAppWith(pref prefs.Settings, opts appOptions) *App {
 		th:           newTheme(loadFonts()),
 		services:     map[string]mail.Service{},
 		accounts:     opts.accounts,
+		accountStore: opts.store,
+		newService:   opts.newService,
+		proxy:        opts.proxy,
+		factory:      opts.factory,
 		page:         1,
 		tokens:       []string{""},
 		expanded:     map[string]bool{},

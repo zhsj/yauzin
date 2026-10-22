@@ -22,6 +22,8 @@ func errorText(err error) string {
 		return i18n.T("error.unsupported")
 	case errors.Is(err, mail.ErrInvalidArgument):
 		return i18n.T("error.invalidArgument")
+	case errors.Is(err, mail.ErrUnauthorized):
+		return i18n.T("error.unauthorized")
 	}
 	// Anything else is a transport or filesystem failure; its text is the only
 	// detail the user can act on.

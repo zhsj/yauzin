@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
@@ -63,7 +64,10 @@ func (a *App) openThread(sum mail.ThreadSummary) {
 		})
 
 	if sum.UnreadCount > 0 {
-		a.markThreadRead(sum, true)
+		// Reading the conversation marks it read, but a backend that cannot
+		// change flags must not interrupt the reader with a toast: the unread
+		// badge rolls back instead.
+		a.setThreadRead(sum, true, true)
 	}
 }
 
@@ -82,6 +86,13 @@ func (a *App) closeThread() {
 }
 
 func (a *App) markThreadRead(sum mail.ThreadSummary, read bool) {
+	a.setThreadRead(sum, read, false)
+}
+
+// setThreadRead flips the read state and, unless quiet, reports a failure.
+// quiet only silences the unsupported-operation case: a real transport failure
+// is still worth telling the user about.
+func (a *App) setThreadRead(sum mail.ThreadSummary, read, quiet bool) {
 	if len(sum.MessageIDs) == 0 {
 		return
 	}
@@ -110,6 +121,9 @@ func (a *App) markThreadRead(sum mail.ThreadSummary, read bool) {
 		func() { a.reloadFolders() },
 		func(err error) {
 			setUnread(prev)
+			if quiet && errors.Is(err, mail.ErrUnsupported) {
+				return
+			}
 			a.notify(i18n.T("toast.markReadFailed", map[string]string{"Error": errorText(err)}), true)
 		})
 }

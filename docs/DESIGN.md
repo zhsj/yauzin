@@ -17,16 +17,25 @@
 
 依赖方向单向：`cmd` → `internal/ui` → 领域包；`internal/ui` 只依赖 `mail.Service` 接口，不依赖任何具体后端。各文件职责见 [§15 目录结构](#15-目录结构)，契约与不变量见下文。
 
-- **后端装配点**：`internal/ui/app.go` 的 `appOptions{accounts, newService}` 是唯一装配后端的地方。`newApp()` 零配置时仍用 demo 账号 + `internal/mail/mock`；接入真实后端时只需提供账号列表与 `newService`，UI 其余部分继续只认 `mail.Service`。`newAppWith(pref, opts)` 接受已解析的设置，测试经它构造 `App`，不再手抄字段列表。
+- **后端装配点**：`internal/ui/app.go` 的 `appOptions{accounts, newService, store, proxy, factory}` 是唯一装配后端的地方。`newApp()` 读取 `settings.json` 与 `accounts.json`，账号列表 = 已存 Gmail 账号 + 始终保留的 demo 账号（`demo-gmail`，仍由 `internal/mail/mock` 服务）；`newAppWith(pref, opts)` 接受已解析的设置与注入的工厂，测试经它构造 `App`，不触碰磁盘。UI 其余部分继续只认 `mail.Service`。
 
 ## 3. 后端契约（`internal/mail`）
 
 - **会话聚合在服务层**，UI 不做分组：`ThreadSummary` 恒描述整段会话，`ListRequest.Query` 只决定会话是否命中，不会裁剪会话内的邮件。
 - **会话粒度的读取**：正文只通过 `GetThread(ctx, threadID)` 按会话读取，`Service` 不提供单封 `Get`。真实后端因此不必为 UI 不使用的懒加载路径写实现；若将来确实需要单封读取，先在设计里说明用途再重新加回。
 - **游标分页**：`ListThreads(ctx, ListRequest{FolderID, Query, PageToken, Limit}) (ThreadPage, error)`；`ThreadPage{Threads, Total, NextPageToken}`，`NextPageToken` 为空表示最后一页，`Total` 为负表示后端无法估算。UI 只在 `tokens []string` 里压栈游标，不向下传页码。
-- **错误是分类不是句子**：`ErrNotFound` / `ErrUnsupported` / `ErrInvalidArgument` 由 `internal/ui/errors.go` 用 `errors.Is` 映射到 i18n 键，未知错误才回退 `err.Error()`。
+- **错误是分类不是句子**：`ErrNotFound` / `ErrUnsupported` / `ErrInvalidArgument` / `ErrUnauthorized` 由 `internal/ui/errors.go` 用 `errors.Is` 映射到 i18n 键，未知错误才回退 `err.Error()`。`ErrUnauthorized` 只表示「账号需要重新授权」，不让传输层文案冒充原因。
+- **能力边界按方法表达**：只读后端（当前 Gmail）对 `SetFlag` / `Archive` / `Delete` / `Send` / `SaveAttachment` 统一返回 `ErrUnsupported`，UI 保留原入口并由既有错误映射提示「当前账号不支持该操作」；打开未读会话触发的自动已读在只读后端上静默回滚徽标，不打断阅读。
 - 实现必须并发安全并尊重 `ctx`（UI 从多个 goroutine 并发调用、不串行化）。mock 的延迟存在的意义就是暴露加载态与竞态。
 - 跨层数据必须复制：mock 的 `cloneMessage` / 附件切片深拷贝，避免 UI 通过返回指针改到存储。
+
+### 3.1 Gmail 只读接入（`internal/mail/gmail`）
+
+- **授权**：用户自带 Google Cloud「桌面应用」OAuth 客户端，在「设置 → 账号 → 添加账号」中填写 Client ID / Secret。流程是授权码 + PKCE（`oauth2.GenerateVerifier` / `S256ChallengeOption`），回调走 `http://127.0.0.1:<随机端口>/oauth2/callback` 的一次性本地服务；scope 只有 `gmail.readonly`，并带 `access_type=offline` 与 `prompt=consent` 以取得 refresh token。没有 refresh token 视为授权失败。授权码、令牌、client secret、含密码的代理地址一律不写日志。
+- **存储**：`accounts.json`（与 `settings.json` 同目录，0600，临时文件 + rename 原子写）保存共享的 `oauth{clientId, clientSecret}` 与每账号 `{id,email,name,useProxy,token{accessToken,refreshToken,tokenType,expiresAt}}`；`id` 为 `gmail:` + 小写邮箱，重复登录同一邮箱即覆盖（重新授权）。一个 `*accounts.Store` 同时被 UI 与所有后端持有，后端刷新令牌后立即回写。文件损坏只告警并退化为「仅 demo 账号」，不阻止启动。
+- **代理**：代理地址是通用设置（`settings.json` 的 `proxy`，在「设置 → 界面 → 网络」维护），账号条目只记 `useProxy`。保存代理后，使用代理的 Gmail 后端被关闭并重建（先取消在途请求），新 Transport 立即生效。`net/url` 只接受 `http` / `https` / `socks5` / `socks5h` 且必须有 host 与端口；`socks5` 由 `http.Transport` 原生支持。回环回调不经代理。
+- **读取映射**：Gmail 系统标签 `INBOX/STARRED/SENT/TRASH` 映射为 `inbox/starred/sent/trash` 与对应 `FolderKind`（名称留给 UI 按 kind 翻译），`DRAFT/SPAM/IMPORTANT/UNREAD/CATEGORY_*` 不展示；用户标签保留 Gmail label ID、名称、`color.backgroundColor` 与 `messagesUnread`。列表用 `threads.list`，随后每会话一次 `threads.get?format=metadata`（并发 6）补全参与者、未读数、星标、附件标记与最新时间；`Total` 取 `resultSizeEstimate`，缺省或用空时为 -1。正文用 `format=full` 递归解析 MIME：首个 `text/plain` 与首个 `text/html` 作正文，带 `filename` 的部件只留元数据（附件下载不在本期范围）。
+- **已知取舍**：一页 50 个会话 = 1 次 list + 50 次 metadata get（Gmail 无批量端点），首屏延迟明显高于 mock，后续可考虑批量或减少 `metadataHeaders`；`resultSizeEstimate` 是估算值；列表中附件标记依赖 metadata 返回的 part 树，若某条消息未返回 parts 则该行可能漏标记；token 与代理凭据都是明文 0600 存储，没有系统密钥环集成。
 
 ## 4. UI 架构（`internal/ui`）
 
@@ -160,8 +169,11 @@
 | `language` | 语言标签，空/`auto` 表示跟随系统 |
 | `clientDecorations` | Wayland 下强制自绘标题栏 |
 | `showPerfMonitor` | 顶栏显示性能读数 |
+| `proxy` | 出站邮件请求使用的代理（`http`/`https`/`socks5`，空表示直连） |
 
 约定：`LoadOrZero` 把「文件不存在」当首次运行，其余错误只告警、不覆盖；修改设置一律「先落盘成功再改内存」，失败提示并回滚。
+
+账号凭据与令牌另存 `accounts.json`（`internal/accounts`，同为 0600 原子写，目录由 `prefs.Dir()` 统一解析，`YAUZIN_CONFIG_DIR` 对两者同时生效）。它不放进 `settings.json`：令牌刷新频繁且由后端在 worker goroutine 写回，与 UI 设置的读写节奏不同。
 
 ## 11. 托盘与单实例
 
@@ -189,12 +201,18 @@
 
 ### 13.2 依赖与 vendor
 
-GUI 使用 Gio v0.10.3，文件选择使用 `gioui.org/x/explorer`。`vendor/` 已提交，构建使用 `-mod=vendor`（构建镜像内已固化为 `GOFLAGS`）。依赖变更后：
+GUI 使用 Gio v0.10.3，文件选择使用 `gioui.org/x/explorer`，Gmail 授权使用 `golang.org/x/oauth2`。`vendor/` 已被 `.gitignore` 排除、不入库，但构建镜像使用 `-mod=vendor`，所以本地必须先生成。依赖变更后（沙箱无外网直连，走镜像代理）：
 
 ```bash
-go mod tidy
-go mod vendor
+GOFLAGS=-mod=mod CGO_ENABLED=1 \
+  GOPROXY=https://goproxy.cn GOSUMDB=sum.golang.google.cn \
+  go mod tidy
+GOFLAGS=-mod=mod CGO_ENABLED=1 \
+  GOPROXY=https://goproxy.cn GOSUMDB=sum.golang.google.cn \
+  go mod vendor
 ```
+
+Gmail 只引入 `golang.org/x/oauth2`，不引入 `google.golang.org/api`：官方生成客户端的 `option` 包会连带 grpc / protobuf / OpenTelemetry 依赖，而本项目只用到 4 个 REST 端点，手写 JSON 结构更轻。
 
 ### 13.3 本地构建与运行
 
@@ -289,6 +307,8 @@ python3 scripts/gen_app_icons.py            # 需要 rsvg-convert（librsvg2-bin
 cmd/yauzin/main.go             入口：app.Main + 窗口事件循环
 internal/mail/mail.go          领域模型（会话摘要 / 分页）与 Service 接口
 internal/mail/mock/            内存 mock 后端（140ms 模拟延迟，按会话聚合）
+internal/mail/gmail/           Gmail 只读后端：OAuth（PKCE 回环）、REST 客户端、MIME 解析
+internal/accounts/             accounts.json：OAuth 凭据、令牌与每账号 useProxy
 internal/ui/app.go             状态与构造：App 字段、构造器、异步原语
 internal/ui/app_lifecycle.go   窗口生命周期、post 队列、临时目录
 internal/ui/app_data.go        账号、文件夹、分页与加载
@@ -313,7 +333,8 @@ internal/ui/reader.go          阅读器容器与工具栏
 internal/ui/messagecard.go     可折叠消息卡片
 internal/ui/compose_view.go    写信浮层布局
 internal/ui/compose_actions.go 发送、附件暂存与丢弃
-internal/ui/settings.go        设置浮层
+internal/ui/settings.go        设置浮层（含网络代理）
+internal/ui/account_add.go     添加 Gmail 账号浮层（浏览器授权）
 internal/ui/menu.go            下拉菜单
 internal/ui/status.go          轻量状态条
 internal/ui/fonts.go           字体集合（系统字体 + Material Symbols）与 Shaper

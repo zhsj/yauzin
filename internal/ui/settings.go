@@ -30,7 +30,12 @@ type settingsView struct {
 	perfRows []*settingsRow
 	accRows  []*settingsRow
 	decoRow  *settingsRow
-	list     layout.List
+	// The network section: one proxy address shared by the accounts that opt
+	// into it. proxyErr holds the form message of the last save attempt.
+	proxy     *widget.Editor
+	proxySave *pillButton
+	proxyErr  string
+	list      layout.List
 }
 
 // settingsTab is one tab of the page switcher.
@@ -95,6 +100,16 @@ func newSettingsView(a *App) *settingsView {
 		},
 	}
 
+	s.proxy = &widget.Editor{SingleLine: true}
+	s.proxy.SetText(a.proxy)
+	s.proxySave = newPillButton(i18n.T("settings.save"), icon{}, true, func() {
+		if err := a.setProxy(s.proxy.Text()); err != nil {
+			s.proxyErr = i18n.T("settings.proxyInvalid")
+			return
+		}
+		s.proxyErr = ""
+	})
+
 	for _, acc := range a.accounts {
 		account := acc
 		subtitle := ""
@@ -116,7 +131,7 @@ func newSettingsView(a *App) *settingsView {
 		icon:  glyphPlus,
 		title: i18n.T("settings.addAccount"),
 		onTap: func() {
-			a.notify(i18n.T("settings.addAccountSoon"), false)
+			a.showOverlay(newAccountDialog(a))
 		},
 	})
 	return s
@@ -230,6 +245,8 @@ func (s *settingsView) pageContent(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(sectionHeading(th, i18n.T("settings.performance"))),
 			layout.Rigid(rows(s.perfRows, th)),
 			layout.Rigid(sectionHint(th, i18n.T("settings.perfHint"))),
+			layout.Rigid(sectionHeading(th, i18n.T("settings.network"))),
+			layout.Rigid(s.proxySection(th)),
 		)
 	case 2:
 		sections := shortcutSections()
@@ -265,6 +282,52 @@ func sectionHint(th *theme, text string) layout.Widget {
 		return layout.Inset{Top: 4, Bottom: 10, Left: 20, Right: 20}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			return th.wrappedText(gtx, text, 12, colMuted, font.Normal)
 		})
+	}
+}
+
+// proxySection is the network row: a proxy editor, the save button and the
+// hint or the last validation error below it.
+func (s *settingsView) proxySection(th *theme) layout.Widget {
+	return func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Left: 20, Right: 20, Bottom: 6}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+							h := gtx.Dp(40)
+							if h > gtx.Constraints.Max.Y {
+								h = gtx.Constraints.Max.Y
+							}
+							size := image.Pt(gtx.Constraints.Max.X, h)
+							gtx.Constraints = layout.Exact(size)
+							strokeRect(gtx, colSurface, colBorder, 6, 1)
+							layout.Inset{Left: 12, Right: 12}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+								// The editor owns the cell so the caret starts at
+								// its left edge instead of the middle.
+								gtx.Constraints.Min.X = gtx.Constraints.Max.X
+								gtx.Constraints.Min.Y = 0
+								handleEditorEvents(gtx, s.proxy)
+								return th.textField(gtx, s.proxy, i18n.T("settings.proxyHint"), 13)
+							})
+							return layout.Dimensions{Size: size}
+						}),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return s.proxySave.Layout(gtx, th)
+						}),
+					)
+				})
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				msg, col := i18n.T("settings.proxyHint"), colMuted
+				if s.proxyErr != "" {
+					msg, col = s.proxyErr, colDanger
+				}
+				return layout.Inset{Left: 20, Right: 20, Bottom: 10}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return th.wrappedText(gtx, msg, 12, col, font.Normal)
+				})
+			}),
+		)
 	}
 }
 

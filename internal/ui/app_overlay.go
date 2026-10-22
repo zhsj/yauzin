@@ -181,10 +181,8 @@ func (a *App) showOverlay(o overlay) {
 	// take over the focus.
 	a.blurRequested = true
 	a.discardCompose(o)
+	a.closeOverlay()
 	a.overlay = o
-	a.compose = nil
-	a.settings = nil
-	a.menu = nil
 	switch v := o.(type) {
 	case *composeView:
 		a.compose = v
@@ -192,7 +190,21 @@ func (a *App) showOverlay(o overlay) {
 		a.settings = v
 	case *menuOverlay:
 		a.menu = v
+	case *accountDialog:
+		a.accountAdd = v
 	}
+}
+
+// closeOverlay releases the resources the current panel holds. The sign-in
+// dialog owns a pending authorization context that has to be cancelled.
+func (a *App) closeOverlay() {
+	if a.accountAdd != nil {
+		a.accountAdd.abort()
+		a.accountAdd = nil
+	}
+	a.compose = nil
+	a.settings = nil
+	a.menu = nil
 }
 
 func (a *App) hideOverlay() {
@@ -200,9 +212,7 @@ func (a *App) hideOverlay() {
 	a.blurRequested = true
 	a.discardCompose(nil)
 	a.overlay = nil
-	a.compose = nil
-	a.settings = nil
-	a.menu = nil
+	a.closeOverlay()
 }
 
 // discardCompose drops the staged attachment files of the draft that is being
