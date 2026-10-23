@@ -11,8 +11,8 @@ import (
 )
 
 // The cached read methods have no expiry: the account is read-only, so a
-// response stays valid until the caller drops it with Invalidate. The LRU
-// capacities only bound how much memory the cache may hold.
+// response stays valid until CheckChanges drops it because the mailbox moved.
+// The LRU capacities only bound how much memory the cache may hold.
 const (
 	foldersCacheSize = 4
 	detailsCacheSize = 4

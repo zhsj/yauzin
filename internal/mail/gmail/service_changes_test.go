@@ -3,7 +3,9 @@ package gmail
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,8 +28,6 @@ type changesServer struct {
 
 	profileGate    chan struct{}
 	profileStarted chan struct{}
-	threadsGate    chan struct{}
-	threadsStarted chan struct{}
 
 	batch *threadBatchServer
 }
@@ -48,15 +48,14 @@ func newChangesService(t *testing.T) (*Service, *changesServer) {
 	return svc, s
 }
 
-// release unblocks every gate, so a failing test cannot leave the test server
-// hanging during cleanup.
+// release unblocks the profile gate, so a failing test cannot leave the test
+// server hanging during cleanup.
 func (s *changesServer) release() {
 	s.mu.Lock()
-	profile, threads := s.profileGate, s.threadsGate
-	s.profileGate, s.threadsGate = nil, nil
+	profile := s.profileGate
+	s.profileGate = nil
 	s.mu.Unlock()
 	closeGate(profile)
-	closeGate(threads)
 }
 
 func closeGate(ch chan struct{}) {
@@ -127,12 +126,7 @@ func (s *changesServer) threads(t *testing.T) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.listCalls++
-		gate, started := s.threadsGate, s.threadsStarted
 		s.mu.Unlock()
-		signal(started)
-		if gate != nil {
-			<-gate
-		}
 		writeJSON(t, w, `{"threads":[{"id":"t1"}],"resultSizeEstimate":1}`)
 	}
 }
@@ -402,37 +396,81 @@ func TestUncachedReadLeavesWhenItsContextEnds(t *testing.T) {
 	}
 }
 
-// TestInvalidateDuringAReadDropsItsPage is the epoch guard end to end: a page
-// whose request started before a clear must not land in the cache afterwards.
-// Invalidate stands in for CheckChanges here because the account has a single
-// request slot, so a check cannot run while a read is still on the wire; the
-// read's last leg (after its slot is released) is what the guard protects.
-func TestInvalidateDuringAReadDropsItsPage(t *testing.T) {
+// TestHistoryChangeDropsTheListAndSearchCaches covers the two page caches: a
+// moved mailbox makes the next browse and the next search fetch again, while
+// repeated reads of an unchanged one stay cached.
+func TestHistoryChangeDropsTheListAndSearchCaches(t *testing.T) {
 	svc, srv := newChangesService(t)
-
-	gate, started := make(chan struct{}), make(chan struct{}, 1)
-	srv.mu.Lock()
-	srv.threadsGate, srv.threadsStarted = gate, started
-	srv.mu.Unlock()
-
-	slow := make(chan error, 1)
-	go func() {
-		_, err := svc.ListThreads(context.Background(), mail.ListRequest{FolderID: "inbox"})
-		slow <- err
-	}()
-	<-started
-
-	svc.Invalidate()
-	close(gate)
-	if err := <-slow; err != nil {
-		t.Fatalf("the slow ListThreads: %v", err)
+	if _, err := svc.CheckChanges(context.Background()); err != nil {
+		t.Fatalf("baseline: %v", err)
 	}
 
-	// The stale page was dropped, so the next read has to go to the network.
-	if _, err := svc.ListThreads(context.Background(), mail.ListRequest{FolderID: "inbox"}); err != nil {
-		t.Fatalf("ListThreads: %v", err)
+	list := mail.ListRequest{FolderID: "inbox"}
+	search := mail.SearchRequest{Query: "invoice"}
+	for i := 0; i < 2; i++ {
+		if _, err := svc.ListThreads(context.Background(), list); err != nil {
+			t.Fatalf("ListThreads: %v", err)
+		}
+		if _, err := svc.SearchThreads(context.Background(), search); err != nil {
+			t.Fatalf("SearchThreads: %v", err)
+		}
 	}
 	if got := srv.count("threads"); got != 2 {
-		t.Fatalf("threads.list calls = %d, want 2: the cleared cache kept the stale page", got)
+		t.Fatalf("threads.list calls = %d, want one per view", got)
+	}
+
+	srv.setHistoryID("200")
+	if changed, err := svc.CheckChanges(context.Background()); err != nil {
+		t.Fatalf("CheckChanges: %v", err)
+	} else if !changed {
+		t.Fatal("the check missed the change")
+	}
+	if _, err := svc.ListThreads(context.Background(), list); err != nil {
+		t.Fatalf("ListThreads: %v", err)
+	}
+	if _, err := svc.SearchThreads(context.Background(), search); err != nil {
+		t.Fatalf("SearchThreads: %v", err)
+	}
+	if got := srv.count("threads"); got != 4 {
+		t.Fatalf("threads.list calls after the change = %d, want 4", got)
+	}
+}
+
+// TestCheckChangesLogsAHistoryChange pins the observable side of a change: a
+// quiet check logs nothing, a moved one names both ids, and the first call only
+// records a baseline.
+func TestCheckChangesLogsAHistoryChange(t *testing.T) {
+	svc, srv := newChangesService(t)
+	buf := captureLogs(t, slog.LevelDebug)
+
+	if _, err := svc.CheckChanges(context.Background()); err != nil {
+		t.Fatalf("baseline: %v", err)
+	}
+	if got := buf.String(); !strings.Contains(got, "gmail history baseline") {
+		t.Fatalf("baseline log missing: %q", got)
+	}
+	if strings.Contains(buf.String(), "gmail mailbox changed") {
+		t.Fatal("the baseline call reported a change")
+	}
+
+	buf.Reset()
+	if _, err := svc.CheckChanges(context.Background()); err != nil {
+		t.Fatalf("CheckChanges: %v", err)
+	}
+	if strings.Contains(buf.String(), "gmail mailbox changed") {
+		t.Fatal("an unchanged mailbox logged a change")
+	}
+
+	buf.Reset()
+	srv.setHistoryID("200")
+	if _, err := svc.CheckChanges(context.Background()); err != nil {
+		t.Fatalf("CheckChanges: %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "gmail mailbox changed") {
+		t.Fatalf("change log missing: %q", got)
+	}
+	if !strings.Contains(got, "from=100") || !strings.Contains(got, "to=200") {
+		t.Fatalf("change log does not name both ids: %q", got)
 	}
 }

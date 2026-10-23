@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -99,14 +100,6 @@ func New(acc mail.Account, store Store, opts ...Option) (*Service, error) {
 // Account returns the account this service was built for.
 func (s *Service) Account() mail.Account { return s.acc }
 
-// Invalidate drops every cached response, so the next Folders, FolderDetails,
-// ListThreads or SearchThreads call fetches fresh data.
-//
-// CheckChanges is what invalidates the cache in normal operation: this method
-// is the escape hatch for callers that know better than the history id, and for
-// tests.
-func (s *Service) Invalidate() { s.cache.clear() }
-
 // CheckChanges compares the mailbox history id with the one the previous call
 // recorded, dropping every cached response when it moved.
 //
@@ -138,8 +131,13 @@ func (s *Service) CheckChanges(ctx context.Context) (bool, error) {
 	s.historyID = id
 	// Every entry predates the state this call observed, so it cannot be kept.
 	s.cache.clear()
-	// A baseline has nothing to be compared against yet.
-	return baseline != "", nil
+	if baseline == "" {
+		// Nothing to compare against yet: this call only sets the baseline.
+		slog.Debug("gmail history baseline", "account", s.acc.ID, "history_id", id)
+		return false, nil
+	}
+	slog.Debug("gmail mailbox changed", "account", s.acc.ID, "from", baseline, "to", id)
+	return true, nil
 }
 
 // beginCheck registers a check in flight.

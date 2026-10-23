@@ -93,3 +93,29 @@ func TestCloneThreadPageIsDeep(t *testing.T) {
 		t.Fatalf("message ID leaked into the original: %q", orig.MessageIDs[0])
 	}
 }
+
+// TestSetAtDropsAnEntryFromBeforeAClear pins the epoch contract of the LRU: a
+// response whose request started before a clear must not be written back, while
+// a read started after it writes normally. The account has a single request
+// slot, so CheckChanges cannot produce this race against an in-flight read in a
+// test; the cache is asserted directly.
+func TestSetAtDropsAnEntryFromBeforeAClear(t *testing.T) {
+	c := newLRUCache[string](4)
+	c.set("old", "page")
+
+	gen := c.epoch()
+	c.clear()
+
+	c.setAt(gen, "stale", "page")
+	if _, ok := c.get("stale"); ok {
+		t.Fatal("a response fetched before the clear landed in the cache")
+	}
+	if _, ok := c.get("old"); ok {
+		t.Fatal("clear kept the previous entry")
+	}
+
+	c.setAt(c.epoch(), "fresh", "page")
+	if got, ok := c.get("fresh"); !ok || got != "page" {
+		t.Fatalf("fresh entry = %q/%v, want page/true", got, ok)
+	}
+}
