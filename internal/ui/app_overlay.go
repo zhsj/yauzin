@@ -146,6 +146,13 @@ func (a *App) notify(msg string, isErr bool) {
 	if msg == "" {
 		return
 	}
+	// While the process lives only in the tray there is no bar to show the
+	// message on, and it would be minutes out of date by the time a window
+	// reopened. Only the tray can keep a windowless process alive (Run exits as
+	// soon as the last window closes without one), so that is the condition.
+	if a.tray != nil && a.window() == nil {
+		return
+	}
 	a.status.show(msg, isErr)
 	gen := a.status.gen
 	a.status.arm(statusDismissDelay, func() {

@@ -184,6 +184,13 @@ type App struct {
 	quitCh   chan struct{}
 	quitting atomic.Bool
 
+	// wake nudges the lifecycle loop to drain the post queue while no window is
+	// open, where there is no invalidation to do it. It is buffered: one queued
+	// wake is enough for any burst of callbacks.
+	wake chan struct{}
+	// pollStop ends the minute ticker. Nil while polling is not running.
+	pollStop chan struct{}
+
 	// tray mirrors the unread state into the notification area. It is nil when
 	// the platform has no notification area.
 	tray *tray.Tray
@@ -387,6 +394,7 @@ func newAppWith(pref prefs.Settings, opts appOptions) *App {
 		cursorThread: -1,
 		openCh:       make(chan struct{}, 1),
 		quitCh:       make(chan struct{}, 1),
+		wake:         make(chan struct{}, 1),
 	}
 
 	for _, acc := range a.accounts {
@@ -418,7 +426,7 @@ func newAppWith(pref prefs.Settings, opts appOptions) *App {
 // which used to leave the mail list empty until the next pointer event.
 func (a *App) startInitialLoad() {
 	a.startOnce.Do(func() {
-		a.reloadAll()
+		a.reloadChecked()
 		a.loaded = true
 	})
 }
@@ -443,6 +451,10 @@ func resolveLanguage(pref string) string {
 // folders and lists must answer fast enough to keep the UI honest, a mutation
 // may take a little longer, and a send may wait on a slow SMTP server.
 const (
+	// timeoutCheck bounds the mailbox change check. It matches the folders
+	// timeout: both are small metadata calls, and a check that hangs holds back
+	// the loads waiting on it.
+	timeoutCheck    = 15 * time.Second
 	timeoutFolders  = 15 * time.Second
 	timeoutList     = 30 * time.Second
 	timeoutThread   = 30 * time.Second

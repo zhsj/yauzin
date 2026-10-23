@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image"
+	"time"
 
 	"gioui.org/font"
 	"gioui.org/layout"
@@ -10,6 +11,11 @@ import (
 
 	"github.com/zhsj/yauzin/internal/i18n"
 )
+
+// loadingWatchdog bounds how long the refresh glyph may spin. Every loader
+// clears the flag on its own paths; this only keeps a missed one from leaving
+// the window at 60fps forever. It is longer than any load timeout.
+const loadingWatchdog = 45 * time.Second
 
 // toolbarMoreLeftPad is the distance from the list edge to the first control:
 // the content card insets (4+8) plus the toolbar's own 12dp left inset.
@@ -45,7 +51,10 @@ type listToolbar struct {
 	// translated while laying out, so a language change needs no reload.
 	rangeStart, rangeEnd, rangeTotal int
 	loading                          bool
-	moreRect                         image.Rectangle
+	// loadingUntil is when the loading flag is given up on. See
+	// loadingWatchdog.
+	loadingUntil time.Time
+	moreRect     image.Rectangle
 }
 
 func newListToolbar(a *App) *listToolbar {
@@ -57,7 +66,7 @@ func newListToolbar(a *App) *listToolbar {
 		}
 		a.list.clearSelection()
 	})
-	t.refresh = newListIcon(iconRefresh, 32, a.reloadAll)
+	t.refresh = newListIcon(iconRefresh, 32, a.reloadChecked)
 	// Refreshing has its own button just left of this one, so the menu only
 	// carries the actions that have no toolbar glyph.
 	t.more = newListIcon(iconMoreVert, 32, func() {
@@ -75,7 +84,16 @@ func newListToolbar(a *App) *listToolbar {
 	return t
 }
 
-func (t *listToolbar) setLoading(v bool) { t.loading = v }
+// setLoading is the one place the loading flag changes: the refresh glyph
+// spins exactly when the list is loading, and the watchdog window is armed
+// here so no caller has to remember it.
+func (t *listToolbar) setLoading(v bool) {
+	t.loading = v
+	t.refresh.setSpinning(v)
+	if v {
+		t.loadingUntil = time.Now().Add(loadingWatchdog)
+	}
+}
 
 // setTips refreshes the hover labels in the active language; the labels are
 // re-translated every frame, so a language switch needs no rebuild.
@@ -130,6 +148,11 @@ func (t *listToolbar) rangeText() string {
 
 func (t *listToolbar) Layout(gtx layout.Context) layout.Dimensions {
 	th := t.app.th
+	// The last line of defence for the spinner: a clear that some path forgot
+	// costs one watchdog period of redraws, not a window that never idles.
+	if t.loading && time.Now().After(t.loadingUntil) {
+		t.setLoading(false)
+	}
 	h := gtx.Dp(48)
 	w := gtx.Constraints.Max.X
 	t.setTips()

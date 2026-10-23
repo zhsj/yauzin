@@ -73,6 +73,9 @@ func Run() {
 	defer t.Close()
 	a.tray = t
 	a.refreshTrayIcon()
+	// Polling belongs to the process, not to a window: the tray keeps the
+	// mailbox watched while the window is closed, so the badge stays honest.
+	a.startPolling()
 
 	for {
 		if a.quitting.Load() {
@@ -87,12 +90,19 @@ func Run() {
 		}
 		// Gio cannot hide a window on Wayland, so closing it destroys the
 		// window and the process waits here for the tray to reopen one.
+		// The poll and the status timer post callbacks here: draining them on
+		// the lifecycle goroutine keeps every App field single-writer even
+		// without a window.
 		select {
 		case <-a.openCh:
 		case <-a.quitCh:
+		case <-a.wake:
+			a.drain()
 		}
 	}
 
+	// The ticker must stop before the exit path closes the backends.
+	a.stopPolling()
 	a.cleanupTemp()
 	t.Close()
 	a.closeServices()
@@ -185,9 +195,9 @@ func (a *App) attach(w *app.Window) {
 	a.winMu.Unlock()
 	if a.loaded {
 		// detach cancelled whatever was in flight, and the mailbox may have
-		// changed while the app sat in the tray: refresh before the first
-		// frame instead of showing the state of the closed window.
-		a.reloadAll()
+		// changed while the app sat in the tray: check and refresh before the
+		// first frame instead of showing the state of the closed window.
+		a.reloadChecked()
 	}
 }
 
@@ -280,14 +290,18 @@ func (a *App) refreshTrayIcon() {
 	if a.tray == nil {
 		return
 	}
-	unread := 0
-	for _, f := range a.folders {
+	a.tray.SetActive(inboxUnread(a.folders) > 0)
+}
+
+// inboxUnread returns the unread count of the inbox, or zero when the sidebar
+// carries no inbox entry.
+func inboxUnread(folders []mail.Folder) int {
+	for _, f := range folders {
 		if f.Kind == mail.FolderInbox {
-			unread = f.Unread
-			break
+			return f.Unread
 		}
 	}
-	a.tray.SetActive(unread > 0)
+	return 0
 }
 
 // applyCursorTheme exports the desktop cursor theme for Gio's backends. Gio
@@ -310,10 +324,15 @@ func (a *App) post(fn func()) {
 	a.postMu.Lock()
 	a.queue = append(a.queue, fn)
 	a.postMu.Unlock()
+	// Wake the lifecycle loop even without a window: in the tray it is what
+	// drains the queue, and a callback that only ran when the next window
+	// opened would arrive long after it stopped meaning anything.
+	select {
+	case a.wake <- struct{}{}:
+	default:
+	}
 	w := a.window()
 	if w == nil {
-		// Without a window the callback just waits: the first frame of the
-		// next window drains the queue before laying anything out.
 		return
 	}
 	w.Invalidate()

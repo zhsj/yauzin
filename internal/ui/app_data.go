@@ -29,6 +29,47 @@ func (a *App) reloadFolders() {
 	a.loadFolderNames(a.loadFolderDetails)
 }
 
+// reloadChecked checks the mailbox and then reloads it in full. Every full load
+// goes through it, so the history baseline the check records always precedes
+// the data it describes: a response cached before the baseline could already be
+// stale by the time the baseline was taken.
+func (a *App) reloadChecked() {
+	if a.service() == nil {
+		return
+	}
+	// The check is part of the load the user asked for, so the spinner covers
+	// it: a refresh that only started turning when the rows were requested
+	// would look slow to react.
+	a.toolbar.setLoading(true)
+	a.checkChanges(func(bool) { a.reloadAll() })
+}
+
+// checkChanges asks the backend whether the mailbox moved and runs then with
+// the answer. A failed check is not a failure the user needs to hear about: the
+// load that follows reports whatever is really wrong with the backend, and the
+// poll runs once a minute, where an error log per attempt would bury the log in
+// an offline session.
+func (a *App) checkChanges(then func(changed bool)) {
+	svc := a.service()
+	if svc == nil {
+		return
+	}
+	accID := a.activeAcc
+	guard := func() bool { return accID == a.activeAcc }
+	var changed bool
+	a.async("check changes", timeoutCheck, guard,
+		func(ctx context.Context) error {
+			var err error
+			changed, err = svc.CheckChanges(ctx)
+			return err
+		},
+		func() { then(changed) },
+		func(err error) {
+			slog.Debug("mailbox check failed", "err", err)
+			then(false)
+		})
+}
+
 // loadFolderNames loads the sidebar names without the unread counters or label
 // colours, then runs next on the UI goroutine.
 func (a *App) loadFolderNames(next func()) {
@@ -55,6 +96,10 @@ func (a *App) loadFolderNames(next func()) {
 			}
 		},
 		func(err error) {
+			// reloadChecked armed the spinner before the check: a sidebar
+			// failure means the list stage it would have cleared it in never
+			// runs.
+			a.toolbar.setLoading(false)
 			a.notify(i18n.T("toast.foldersFailed", map[string]string{"Error": errorText(err)}), true)
 		})
 }
@@ -82,6 +127,10 @@ func (a *App) loadFolderDetails() {
 		func() {
 			a.folders = folders
 			a.side.reload()
+			// The counters land here and nowhere else, so this is where the
+			// tray badge follows them: start, refresh, poll and account switch
+			// all end in this callback.
+			a.refreshTrayIcon()
 		},
 		func(err error) {
 			a.notify(i18n.T("toast.foldersFailed", map[string]string{"Error": errorText(err)}), true)
@@ -315,8 +364,13 @@ func (a *App) switchAccount(id string) {
 	a.resetSelection()
 	a.clearList()
 	a.hideOverlay()
-	a.reloadFolders()
-	a.loadThreads()
+	// Checking first keeps the new account's cache free of entries fetched
+	// before its baseline.
+	a.toolbar.setLoading(true)
+	a.checkChanges(func(bool) {
+		a.reloadFolders()
+		a.loadThreads()
+	})
 	a.notify(i18n.T("toast.accountSwitched", map[string]string{"Name": a.accountName()}), false)
 	a.rememberActiveAccount(id)
 }

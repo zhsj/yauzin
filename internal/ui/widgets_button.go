@@ -2,6 +2,8 @@ package ui
 
 import (
 	"image"
+	"math"
+	"time"
 
 	"image/color"
 
@@ -16,6 +18,9 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget"
 )
+
+// spinPeriod is how long one turn of a spinning glyph takes.
+const spinPeriod = 800 * time.Millisecond
 
 // iconButton is a square, circular-hover button drawing one glyph.
 type iconButton struct {
@@ -51,6 +56,13 @@ type iconButton struct {
 	// inside its own area.
 	track bool
 	rect  image.Rectangle
+
+	// spinning rotates the glyph and keeps requesting frames: the refresh
+	// button turns while a load is in flight. spinStart anchors the rotation,
+	// and is cleared whenever the button stops, so the next spin starts from
+	// the upright glyph.
+	spinning  bool
+	spinStart time.Time
 }
 
 func newIconButton(ic icon, size unit.Dp, onTap func()) *iconButton {
@@ -65,6 +77,11 @@ const listIconGlyph = unit.Sp(24)
 func (b *iconButton) setIcon(ic icon)    { b.ic = ic }
 func (b *iconButton) setDisabled(v bool) { b.disabled = v }
 func (b *iconButton) setTip(text string) { b.tip = text }
+
+// setSpinning starts or stops the rotating glyph. A spinning button ignores
+// clicks: a second tap would supersede the request the first one started, and
+// the list would be reloaded once per tap.
+func (b *iconButton) setSpinning(v bool) { b.spinning = v }
 
 // newListIcon is newIconButton with the glyph raised to listIconGlyph. Message
 // rows and the list and reader toolbars share it so their icons match.
@@ -86,7 +103,7 @@ func (b *iconButton) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 // built for the light header can be reused on the indigo CSD header without
 // rebuilding it.
 func (b *iconButton) layout(gtx layout.Context, th *theme, ic icon, hoverCol color.NRGBA) layout.Dimensions {
-	b.hit = b.click.Clicked(gtx) && !b.disabled
+	b.hit = b.click.Clicked(gtx) && !b.disabled && !b.spinning
 	if b.hit && b.onTap != nil {
 		b.onTap()
 		invalidateAfterTap(gtx)
@@ -126,7 +143,7 @@ func (b *iconButton) layout(gtx layout.Context, th *theme, ic icon, hoverCol col
 		if b.disabled {
 			ic.col.A = uint8(float32(ic.col.A) * 0.35)
 		}
-		th.glyphIn(gtx, ic, glyph, b.size)
+		b.drawGlyph(gtx, th, ic, glyph)
 		return layout.Dimensions{Size: image.Pt(s, s)}
 	})
 	// The hover label is queued after the clickable returns: Clickable clips
@@ -160,6 +177,27 @@ func (b *iconButton) layout(gtx layout.Context, th *theme, ic icon, hoverCol col
 		b.anchored = false
 	}
 	return dims
+}
+
+// drawGlyph paints the glyph, rotated while the button spins. A spinning button
+// requests its own frames: a spinner that stopped doing so would freeze
+// mid-turn until the next unrelated redraw.
+func (b *iconButton) drawGlyph(gtx layout.Context, th *theme, ic icon, glyph unit.Sp) {
+	if !b.spinning {
+		b.spinStart = time.Time{}
+		th.glyphIn(gtx, ic, glyph, b.size)
+		return
+	}
+	if b.spinStart.IsZero() {
+		b.spinStart = gtx.Now
+	}
+	turn := float32(math.Mod(float64(gtx.Now.Sub(b.spinStart)), float64(spinPeriod))) / float32(spinPeriod)
+	s := gtx.Dp(b.size)
+	centre := f32.Pt(float32(s)/2, float32(s)/2)
+	stack := op.Affine(f32.Affine2D{}.Rotate(centre, turn*2*math.Pi)).Push(gtx.Ops)
+	th.glyphIn(gtx, ic, glyph, b.size)
+	stack.Pop()
+	gtx.Execute(op.InvalidateCmd{})
 }
 
 // readPointer consumes the pointer events of the button's private area.

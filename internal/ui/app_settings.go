@@ -186,7 +186,7 @@ func (a *App) setAccountProxy(acc mail.Account, on bool) {
 	}
 	a.swapService(acc)
 	if acc.ID == a.activeAcc {
-		a.reloadAll()
+		a.reloadChecked()
 	}
 }
 
@@ -285,6 +285,5 @@ func (a *App) rebuildProxiedServices() {
 	for _, acc := range targets {
 		a.swapService(acc)
 	}
-	a.reloadFolders()
-	a.refreshThreads()
+	a.reloadChecked()
 }

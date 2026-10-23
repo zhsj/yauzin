@@ -18,7 +18,40 @@ type fakeService struct {
 	foldersErr error
 	setFlagErr error
 
+	// checkChanged and checkErr answer CheckChanges; calls records the order of
+	// the backend calls the UI made, so a test can pin "check before load".
+	checkChanged bool
+	checkErr     error
+	calls        []string
+
 	setFlagCalls []setFlagCall
+}
+
+// record appends name to the call log.
+func (f *fakeService) record(name string) {
+	f.mu.Lock()
+	f.calls = append(f.calls, name)
+	f.mu.Unlock()
+}
+
+// callLog returns the recorded calls.
+func (f *fakeService) callLog() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
+}
+
+// countCalls returns how many times one recorded call ran.
+func (f *fakeService) countCalls(name string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		if c == name {
+			n++
+		}
+	}
+	return n
 }
 
 type setFlagCall struct {
@@ -28,6 +61,7 @@ type setFlagCall struct {
 }
 
 func (f *fakeService) Folders(_ context.Context) ([]mail.Folder, error) {
+	f.record("folders")
 	if f.foldersErr != nil {
 		return nil, f.foldersErr
 	}
@@ -35,17 +69,30 @@ func (f *fakeService) Folders(_ context.Context) ([]mail.Folder, error) {
 }
 
 func (f *fakeService) FolderDetails(_ context.Context, folders []mail.Folder) ([]mail.Folder, error) {
+	f.record("details")
 	if f.foldersErr != nil {
 		return nil, f.foldersErr
 	}
 	return folders, nil
 }
 
+// CheckChanges answers what the test configured. The demo data of this fake
+// never moves on its own, so an unconfigured fake reports no change.
+func (f *fakeService) CheckChanges(context.Context) (bool, error) {
+	f.record("check")
+	f.mu.Lock()
+	changed, err := f.checkChanged, f.checkErr
+	f.mu.Unlock()
+	return changed, err
+}
+
 func (f *fakeService) ListThreads(context.Context, mail.ListRequest) (mail.ThreadPage, error) {
+	f.record("list")
 	return mail.ThreadPage{}, nil
 }
 
 func (f *fakeService) SearchThreads(context.Context, mail.SearchRequest) (mail.ThreadPage, error) {
+	f.record("search")
 	return mail.ThreadPage{}, nil
 }
 

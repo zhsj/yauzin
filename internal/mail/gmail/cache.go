@@ -55,6 +55,10 @@ type lruCache[V any] struct {
 	cap int
 	ll  *list.List
 	m   map[string]*list.Element
+	// gen counts the clears. A read captures it before its request and hands it
+	// to setAt, so a response fetched before a clear can never be written back:
+	// the entry would describe the mailbox state the clear already replaced.
+	gen uint64
 }
 
 // lruEntry is one element of the recency list.
@@ -86,6 +90,31 @@ func (c *lruCache[V]) get(key string) (V, bool) {
 func (c *lruCache[V]) set(key string, value V) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.setLocked(key, value)
+}
+
+// setAt stores value under key unless the cache has been cleared since gen was
+// read: the response then describes a mailbox state a newer entry replaced.
+func (c *lruCache[V]) setAt(gen uint64, key string, value V) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if gen != c.gen {
+		return
+	}
+	c.setLocked(key, value)
+}
+
+// epoch returns the generation a read has to present to setAt. Reading it
+// before the request and comparing it again inside setAt is what keeps a slow
+// response from landing in a cache that was cleared while it was in flight.
+func (c *lruCache[V]) epoch() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.gen
+}
+
+// setLocked is set and setAt without the lock.
+func (c *lruCache[V]) setLocked(key string, value V) {
 	if el, ok := c.m[key]; ok {
 		el.Value.(*lruEntry[V]).value = value
 		c.ll.MoveToFront(el)
@@ -101,12 +130,14 @@ func (c *lruCache[V]) set(key string, value V) {
 	}
 }
 
-// clear drops every entry.
+// clear drops every entry and advances the generation, which invalidates the
+// responses still being fetched.
 func (c *lruCache[V]) clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.ll.Init()
 	c.m = make(map[string]*list.Element)
+	c.gen++
 }
 
 // serviceCache holds the memoized reads of one account.

@@ -251,6 +251,16 @@ type Service interface {
 	// FolderDetails fills in the unread counters and label colours of the
 	// folders Folders returned.
 	FolderDetails(ctx context.Context, folders []Folder) ([]Folder, error)
+	// CheckChanges asks the backend whether the mailbox changed since the
+	// previous call and drops its cached responses when it did. The first call
+	// records the mailbox's current state, drops whatever was cached before it
+	// and reports false, so a caller checks before it loads and the baseline
+	// always precedes the data it describes.
+	//
+	// A cached read that needs the network waits for a check in flight instead
+	// of fetching data the check may be about to drop; the wait honours ctx. A
+	// read that hits the cache is answered at once.
+	CheckChanges(ctx context.Context) (bool, error)
 	// ListThreads returns one page of conversations of one folder, newest
 	// first.
 	ListThreads(ctx context.Context, req ListRequest) (ThreadPage, error)

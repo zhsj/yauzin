@@ -28,6 +28,7 @@
 - **游标分页**：`ListThreads(ctx, ListRequest{FolderID, PageToken, Limit})` 浏览单个文件夹，`SearchThreads(ctx, SearchRequest{Query, PageToken, Limit})` 跨全部文件夹搜索；两者的 `FolderID` / `Query` 都是必填，空值返回 `ErrInvalidArgument`。`ThreadPage{Threads, Total, NextPageToken}`，`NextPageToken` 为空表示最后一页，`Total` 为负表示后端无法估算。UI 只在 `tokens []string` 里压栈游标，不向下传页码。
 - **搜索是独立的读路径**：query 原样交给后端（Gmail 支持 `from:` / `subject:` / `has:attachment` 等原生语法），不带 folder 过滤；Gmail 的 `includeSpamTrash` 取默认 false，因此天然排除垃圾邮件与垃圾箱，与 mock 的 `matchFolder("")` 语义一致。`Total` 取后端估算，无法估算时为 -1。
 - **读取缓存**：gmail 后端对 `Folders` / `FolderDetails` / `ListThreads` / `SearchThreads` 各做一份无过期 LRU（容量 4 / 4 / 64 / 32；键为固定键、标签 ID 集合、`(labelID, pageToken, limit)`、`(query, pageToken, limit)`），命中返回深拷贝，`Invalidate()` 整体清空。列表与搜索的缓存分开，互不挤占。
+- **缓存失效由检查驱动**：`CheckChanges(ctx) (bool, error)` 请求一次 `users.getProfile?fields=historyId` 与上次基线比较；首次调用只记基线、清掉之前缓存并返回 false，值不相等（回退也算）则清空该账号全部读缓存并返回 true。检查在途时**缓存缺失**的读取先等检查结束（尊重 ctx），命中则立即返回；每个 LRU 自带纪元，读取发出请求前取纪元、写回走 `setAt`，期间发生 clear（检查或 `Invalidate()`）就丢弃结果。全量加载入口统一「先检查再加载」（`reloadChecked`），因此基线总先于它所描述的数据。
 - **错误是分类不是句子**：`ErrNotFound` / `ErrUnsupported` / `ErrInvalidArgument` / `ErrUnauthorized` 由 `internal/ui/errors.go` 用 `errors.Is` 映射到 i18n 键，未知错误才回退 `err.Error()`。`ErrUnauthorized` 只表示「账号需要重新授权」，不让传输层文案冒充原因。
 - **能力边界按方法表达**：只读后端（当前 Gmail）对 `SetFlag` / `Archive` / `Delete` / `Send` / `SaveAttachment` 统一返回 `ErrUnsupported`，UI 保留原入口并由既有错误映射提示「当前账号不支持该操作」；`RawMessage` 属于读操作，只读账号照常实现。打开未读会话触发的自动已读在只读后端上静默回滚徽标，不打断阅读。
 - 实现必须并发安全并尊重 `ctx`（UI 从多个 goroutine 并发调用、不串行化）。mock 的延迟存在的意义就是暴露加载态与竞态。
@@ -40,8 +41,9 @@
 - **代理**：代理地址是通用设置（`settings.json` 的 `proxy`，在「设置 → 通用 → 网络 → 代理」维护），账号条目只记 `useProxy`。开关在两处出现：添加账号/重新登录浮层里决定本次授权与该账号的初始选择；「设置 → 账号」里点击账号行展开后，浅灰子卡片的第一行「通过代理连接」可随时切换。切换只重写该账号的条目并只重建它自己的后端（开启与关闭都重建，先取消在途请求），正在浏览的邮箱会重新加载；写盘失败时开关按存储状态自动回退。未配置代理地址时该行禁用并提示先去通用页填写。保存代理后，使用代理的 Gmail 后端被关闭并重建（先取消在途请求），新 Transport 立即生效。`net/url` 只接受 `http` / `https` / `socks5` 且必须有 host 与端口；`socks5` 由 `http.Transport` 原生支持（`socks5h` 不接受：net/http 没有对应 dialer）。回环回调不经代理。
 - **请求日志**：每个账号的每次 HTTP 请求在 DEBUG 级别各记一行 `gmail request`，字段为 `account`（账号 ID，新增账号授权时为 `-`）、`method`、`endpoint`（host + path，不含 query）与 `status`；传输层失败时改记 `err`、不记状态。日志装在 `transport.go` 的 `http.RoundTripper` 上，覆盖单次 REST、batch、令牌刷新与授权交换；包装只克隆 `*http.Client`，不改 `http.DefaultClient` 或测试注入的 client。级别来自「设置 → 通用 → 日志」（`settings.json` 的 `logLevel`），默认 `info`，改后对运行中的后端立即生效。
 - **读取映射**：Gmail 系统标签 `INBOX/STARRED/SENT/TRASH` 映射为 `inbox/starred/sent/trash` 与对应 `FolderKind`（名称留给 UI 按 kind 翻译），`DRAFT/SPAM/IMPORTANT/UNREAD/CATEGORY_*` 不展示；用户标签保留 Gmail label ID 与名称；`labels.list` 返回的是部分资源（只有 id/name/type），因此未读数与颜色来自一次 **batch** 请求：`POST /batch/gmail/v1`（multipart/mixed）里每个子请求是 `labels.get?fields=messagesUnread,color/backgroundColor`，**单批 25 个子请求**、超出则分片，子请求用 `Content-ID` 索引回填，响应乱序也能对应；全部批次完成后一次性返回，补齐对应标签的未读数/颜色。一次文件夹加载因此是 `1 + ceil(L/25)` 个 HTTP 请求；单个子请求失败（标签刚被删除）只告警并按 0 显示，全部失败才报错。列表用 `threads.list`，随后用同样的一次 **batch** 请求补全本页每个会话的 `threads.get?format=metadata`（参与者、未读数、星标、附件标记与最新时间），同样**每批 25**、按 `Content-ID` 回填并按 list 顺序输出，全部批次完成后一次性返回；子请求 404（会话在两次调用之间被删除）只丢弃该行，其它子请求失败或整批失败则该次调用报错，空页不发 batch。一次列表加载因此是 `1 + ceil(N/25)` 个 HTTP 请求。搜索走同一个 `threads.list`，只带 `q`、`maxResults` 与 `fields`（不带 `labelIds`），因此也是 `1 + ceil(N/25)` 个请求。**batch 按账号串行**：`client` 持有一个容量 1、可被 ctx 取消的信号量，从发起到响应体读闭一直持有（含整批 401 重发），因此侧栏的 labels batch 与列表的 threads batch 不会叠加——Gmail 会并发执行 batch 内的子请求并按用户计并发，叠加正是触发 429 的原因。`Total` 取 `resultSizeEstimate`，缺省或用空时为 -1。正文用 `format=full` 递归解析 MIME：首个 `text/plain` 与首个 `text/html` 作正文，带 `filename` 的部件只留元数据（附件下载不在本期范围）。
+- **变更检查（historyId）**：`CheckChanges` 是 `users.getProfile?fields=historyId`（1 次请求、1 配额、无消息数据），与上次基线比较后由后端自己清缓存，调用方不需要模式参数。`checkMu` 只在「登记检查状态」和「比较 + 清缓存」两处短持有，HTTP 往返不在锁内；检查在途时缓存缺失的读取在 `checkDone` 上等待（ctx 取消即返回），命中不等待。读取发请求前取 LRU 纪元，返回时 `setAt` 校验：clear 之后写入的只可能是在该次 clear 之后发起的请求。`GetThread` / `RawMessage` 不是缓存读取，不等检查。`Invalidate()` 保留为逃生口（测试与确知更清楚的调用方），语义仍是直接清空。
 - **类型来源**：`discovery_types.go` 由 `internal/cmd/gmailgen` 从 Google 的 Discovery 文档生成（`//go:generate`，文件头记录文档 `revision`），字段名按 initialism 表保持 `ID` / `IDs` / `MIMEType` / `AttachmentID` 等写法；`api.go` 只留 `headers` / `hasFlag` / `date` / `hasAttachment` 这些把文档折算成领域模型的辅助方法。文档本身不入库，每次生成都取官方当前版本，schema 变化靠 `git diff` 审阅。
-- **已知取舍**：一页 25 个会话 = 1 次 list + 1 次 metadata batch（`1 + ceil(N/25)`），首屏延迟仍高于 mock；每批 25 是并发预算而非 Gmail 协议上限（协议仍允许 100），串行后 batch 子请求峰值固定为 25，若线上仍偶发 429 再下调 `batchLimit`；标签多时文件夹加载仍拆成多批（每次 `FolderDetails` 一次性返回，不再逐批渐进渲染），缓存未命中时仍是一次 `labels.list` 加 `ceil(L/25)` 个 `labels.get`，且缓存无过期、邮箱变化不会自动反映，只能靠 `Invalidate()` 清空；Gmail 按子请求计配额，batch 只省往返与连接开销、不省配额，`metadataHeaders` 也仍是每会话一份；`resultSizeEstimate` 是估算值；列表中附件标记依赖 metadata 返回的 part 树，若某条消息未返回 parts 则该行可能漏标记；token 与代理凭据都是明文 0600 存储，没有系统密钥环集成。
+- **已知取舍**：一页 25 个会话 = 1 次 list + 1 次 metadata batch（`1 + ceil(N/25)`），首屏延迟仍高于 mock；每批 25 是并发预算而非 Gmail 协议上限（协议仍允许 100），串行后 batch 子请求峰值固定为 25，若线上仍偶发 429 再下调 `batchLimit`；标签多时文件夹加载仍拆成多批（每次 `FolderDetails` 一次性返回，不再逐批渐进渲染），缓存未命中时仍是一次 `labels.list` 加 `ceil(L/25)` 个 `labels.get`；缓存本身无过期，邮箱变化靠每分钟一次 `users.getProfile` 检查（托盘驻留期间也在跑），检查只换来 historyId，内容仍要重新拉；变更检查的失败不打扰界面（后台只记 DEBUG），由随后的加载自己报错；Gmail 按子请求计配额，batch 只省往返与连接开销、不省配额，`metadataHeaders` 也仍是每会话一份；`resultSizeEstimate` 是估算值；列表中附件标记依赖 metadata 返回的 part 树，若某条消息未返回 parts 则该行可能漏标记；token 与代理凭据都是明文 0600 存储，没有系统密钥环集成。
 
 ## 4. UI 架构（`internal/ui`）
 
@@ -68,7 +70,11 @@
 - 过期响应靠**代际号**丢弃：`listGen`（列表/分页）、`folderGen`（文件夹未读数）、`msgGen`（阅读器）；回调里同时校验 `activeAcc`、页码或会话 ID。`context.Canceled` 是预期结果，不弹错误提示。
 - 切账号 / 切文件夹 / 搜索时先清空视图（`App.clearList` 清 `setThreads(nil)` 并抹掉工具栏范围文案，`resetSelection` 关阅读器）再发起加载，避免旧行、旧标签色块与旧页码闪现。
 - 列表请求按查询分流：`query` 非空走 `SearchThreads`，否则 `ListThreads`。两者共用同一个 `listGen` / `listCancel` / `tokens`，因此搜索、翻页、切文件夹互相取代；worker 启动前快照 `folder` 与 `query`，worker 内不读 `App` 字段。
+- **先检查再加载**：所有全量加载入口（首屏、窗口重建、切账号、工具栏刷新、代理/凭据变更后重建后端、新增或重登账号）都经 `reloadChecked` 或 `checkChanges` + 加载回调——`CheckChanges` 成功与否都继续加载，失败只记 DEBUG，真实的加载错误由加载自己报，界面因此离线也可用。检查阶段就开始转圈，所以手动刷新立刻有反馈。
+- **轮询贯穿进程生命周期**：`Run` 启动一次 1 分钟 ticker（`app_poll.go`），退出前停止，不随窗口开关起停。有窗口时变化才刷新侧栏与当前列表（保留滚动与勾选）；无窗口（托盘）时只刷新侧栏与徽标，列表交给 `attach` 的「检查 + 全量加载」；列表请求在途时跳过列表刷新，等下一分钟补，避免取消用户刚发起的切文件夹/翻页/搜索。
+- **托盘期间的回投**：`post` 在没有窗口时也向容量 1 的 `wake` 投递，生命周期循环在 `openCh` / `quitCh` 之外 select `wake` 并 `drain()`，于是 App 字段仍只有一个 goroutine 写；`notify` 在无窗口（只有托盘能让进程无窗口存活）时早退，避免重开窗口看到几分钟前的提示。
 - 列表只渲染可见行（`layout.List`），行内控件状态按会话 ID 缓存在视图结构里。
+- **已知限制**：`loading` 是单一布尔，侧栏阶段失败的清除可能让仍在跑的列表请求提前停止转圈（影响仅为观感，由「新请求取代旧请求」兜底）；托盘期间打开着的阅读器不随后台刷新更新正文（`openThread` 对同一会话直接早退）；轮询与手动刷新撞车时可能多发一次 profile 请求与一次全量加载。
 
 ### 4.3 浮层
 
@@ -93,7 +99,7 @@
 - `Run()` 掌管生命周期循环：`App` 实例**跨窗口复用**，`attach`/`detach` 维护 `win`，托盘通过容量 1 的 `openCh`/`quitCh` 唤醒。
 - 关闭窗口默认销毁窗口、进程留在托盘；无通知区时降级为「关闭即退出」。
 - `windowActions` 收集标题栏请求，**帧绘制结束后**统一 `w.Perform`，避免布局中途销毁窗口；Ctrl+W 与标题栏关闭按钮共用这条路径，Ctrl+Q 直接走 `requestQuit()`。
-- `startInitialLoad()` 由 `startOnce` 门禁，首帧加载只跑一次，后续窗口重建不重复。
+- `startInitialLoad()` 由 `startOnce` 门禁，首帧经 `reloadChecked`（先检查再加载）只跑一次；后续窗口重建不重复，由 `attach` 的 `reloadChecked` 刷新。
 - Gio 的 `app.Main()` 在 Linux 不返回，退出必须显式 `cleanupTemp()` + `os.Exit(0)`；不要调用 systray 返回的 `end()`。
 - 生命周期循环之外的结束方式也要收拾现场：`watchInterrupt()` 在 `newApp()` 之后就开始监听 `SIGINT`（`Ctrl+C`，`signal.Notify` 就地注册），收到后先 `cleanupTemp()` 再 `os.Exit(0)`，否则托盘驻留期间被 `Ctrl+C` 停止的运行都会留下临时目录。`SIGTERM`/`SIGHUP` 故意不接管，保留默认行为：桌面会话结束、`kill`、终端挂断都按系统语义立即结束进程，不等待清理。信号路径与 UI goroutine 会并发访问临时目录，`tmpMu` 保护 `tmpDir`，`tmpClosed` 保证清理后不会再建一个新目录。
 
@@ -122,6 +128,7 @@
 8. **光标必须 clip 到控件矩形**：`cursor.Apply` 作用于当前 clip，裸调用会让整片区域变手型。
 9. **字体**：`text.Shaper` 只建一次，界面族固定 `sans-serif, emoji`（字体来源与顺序原因见 [§14.1](#141-文本字体)）；图标字形尺寸按 (fill, size, pxPerSp) 缓存，避免每帧 shaping。
 10. **不要在视图构造期长期缓存译文**：语言切换会重建视图，缓存的旧语言字符串不会自动更新。
+11. **转圈自驱帧**：列表工具栏刷新按钮的 `spinning` 在绘制时 `gtx.Execute(op.InvalidateCmd{})` 请求下一帧，`spinStart` 只在旋转期间非零（停止时归零，下次从正立开始）。`listToolbar.setLoading` 是唯一切换点，并给 45s 看门狗（`loadingUntil`，`Layout` 里过期即清除）：任何遗漏的清除路径最多多转一个看门狗周期，不会留下永久 60fps。转圈期间按钮吞点击，避免连点叠出多次 reload；不要用 `setDisabled` 表达转圈，它会把字形压到 35% 不透明度。
 
 ## 7. 窗口装饰（CSD）与光标
 
@@ -194,6 +201,7 @@
 
 - `internal/tray` 是 `fyne.io/systray` 的薄封装：左键 `SetOnTapped` 直接开窗，右键菜单只有「打开 / 退出」；回调在库的 goroutine 上，必须经 `post` / channel 回 UI 线程。通知区预检失败时 `Start` 返回错误，应用降级。托盘只持有 PNG 字节：`Icons.Idle`/`Icons.Active` 分别对应灰点与红点两态，`SetActive` 在状态未变化时不重复调用 `SetIcon`。
 - 图标设计源为 `internal/ui/assets/icon-gray.svg`（灰封蜡，托盘 idle）与 `icon-red.svg`（红封蜡，托盘 unread 与顶栏 mark），由 `scripts/gen_app_icons.py` 用 rsvg-convert 派生 PNG 后提交；运行时不解析 SVG。顶栏 mark 用红点母版，cell 固定 36dp：内嵌 32–128px 多个尺寸，按设备像素取刚好覆盖的一张（`internal/ui/appicon.go`），1x / 1.25x / 1.5x / 2x / 3x 正好命中 36 / 45 / 54 / 72 / 108px（旧的 32/40/48/64/96/128px 变体保留，覆盖 1.1x、1.75x 这类零散比例），缩放比例为 1，不会被线性滤波插值而发糊。Gio v0.10.3 没有窗口图标 API，窗口/任务栏图标由桌面集成使用 `icon-red-512.png`（与顶栏 mark 同一母版）。
+- **轮询与徽标**：轮询属于进程而不是窗口——`Run` 在 `tray.Start` 之后 `startPolling()`，退出前 `stopPolling()`。托盘驻留期间每分钟检查一次，变化时只重载侧栏（标签名 + 未读数/颜色），不拉列表；徽标在 `loadFolderDetails` 的成功回调里统一刷新（收件箱未读 > 0 红、= 0 灰），因此启动、手动刷新、轮询、切账号、重建后端都会更新它。重开窗口时 `attach` 的「检查 + 全量加载」补齐列表。
 - `internal/singleinstance` 用会话总线名 `me.zhsj.yauzin`（同时是 Gio application ID）保证单实例：第一个进程持有名字并导出 `Open`，后续启动调用 `Open` 唤起窗口后 `os.Exit(0)`。Wayland 不允许强制前置已有窗口，这是已知限制。
 
 ## 12. 性能监视器
@@ -340,7 +348,8 @@ internal/cmd/gmailgen/         Gmail Discovery 文档 → Go 类型生成器（g
 internal/accounts/             accounts.json：OAuth 凭据（provider）与每账号 kind/令牌/useProxy
 internal/ui/app.go             状态与构造：App 字段、构造器、异步原语
 internal/ui/app_lifecycle.go   窗口生命周期、post 队列、临时目录与 Ctrl+C 清理
-internal/ui/app_data.go        账号、文件夹、分页与加载
+internal/ui/app_data.go        账号、文件夹、分页与加载（含先检查再加载）
+internal/ui/app_poll.go        1 分钟变更检查轮询（进程生命周期，含托盘驻留）
 internal/ui/app_thread.go      会话打开与批量动作
 internal/ui/app_overlay.go     帧骨架、指针区域与浮层编排
 internal/ui/app_settings.go    设置读写与语言/装饰/性能/日志级别/代理（全局与单账号）、账号删除

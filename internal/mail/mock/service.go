@@ -306,6 +306,10 @@ func (s *Service) FolderDetails(ctx context.Context, folders []mail.Folder) ([]m
 	return out, nil
 }
 
+// CheckChanges implements mail.Service. The demo data never changes on its own,
+// so there is no baseline to keep and nothing to invalidate.
+func (s *Service) CheckChanges(context.Context) (bool, error) { return false, nil }
+
 // ListThreads implements mail.Service: one page of one folder, newest first.
 func (s *Service) ListThreads(ctx context.Context, req mail.ListRequest) (mail.ThreadPage, error) {
 	if err := s.wait(ctx); err != nil {

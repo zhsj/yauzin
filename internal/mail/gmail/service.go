@@ -65,8 +65,22 @@ type Service struct {
 	c   *client
 
 	// cache memoizes the read-only responses of this account. It has no
-	// expiry: entries are valid until Invalidate drops them.
+	// expiry: an entry stays valid until CheckChanges drops it because the
+	// mailbox moved.
 	cache *serviceCache
+
+	// checkMu guards the change-check state below. It is never held across a
+	// request: a check compares and clears under it, but the profile call runs
+	// without it.
+	checkMu sync.Mutex
+	// historyID is the mailbox state the last check recorded, empty until the
+	// first one.
+	historyID string
+	// checking counts the checks in flight. While it is non-zero, a cached read
+	// that misses waits on checkDone instead of sending its request.
+	checking int
+	// checkDone is closed when checking drops back to zero.
+	checkDone chan struct{}
 
 	closeOnce sync.Once
 }
@@ -86,11 +100,87 @@ func New(acc mail.Account, store Store, opts ...Option) (*Service, error) {
 func (s *Service) Account() mail.Account { return s.acc }
 
 // Invalidate drops every cached response, so the next Folders, FolderDetails,
-// ListThreads or SearchThreads call fetches fresh data. The cache never expires
-// on its own:
-// this is the hook external logic (such as a future refresh or sync) calls
-// when the mailbox has changed.
+// ListThreads or SearchThreads call fetches fresh data.
+//
+// CheckChanges is what invalidates the cache in normal operation: this method
+// is the escape hatch for callers that know better than the history id, and for
+// tests.
 func (s *Service) Invalidate() { s.cache.clear() }
+
+// CheckChanges compares the mailbox history id with the one the previous call
+// recorded, dropping every cached response when it moved.
+//
+// users.getProfile is the cheapest way to read the current history id: one
+// request, no message data, one quota unit. The first call records the id as
+// the baseline and drops whatever was cached before it, so a caller that checks
+// before it loads always holds data at least as new as the baseline.
+func (s *Service) CheckChanges(ctx context.Context) (bool, error) {
+	s.beginCheck()
+	defer s.endCheck()
+
+	q := url.Values{}
+	q.Set("fields", "historyId")
+	var profile Profile
+	if err := s.c.do(ctx, "users.getProfile", "GET", "/users/me/profile", q, &profile); err != nil {
+		return false, err
+	}
+	id := strings.TrimSpace(profile.HistoryID)
+	if id == "" {
+		return false, fmt.Errorf("gmail users.getProfile: response carries no history id")
+	}
+
+	s.checkMu.Lock()
+	defer s.checkMu.Unlock()
+	baseline := s.historyID
+	if baseline == id {
+		return false, nil
+	}
+	s.historyID = id
+	// Every entry predates the state this call observed, so it cannot be kept.
+	s.cache.clear()
+	// A baseline has nothing to be compared against yet.
+	return baseline != "", nil
+}
+
+// beginCheck registers a check in flight.
+func (s *Service) beginCheck() {
+	s.checkMu.Lock()
+	defer s.checkMu.Unlock()
+	s.checking++
+	if s.checkDone == nil {
+		s.checkDone = make(chan struct{})
+	}
+}
+
+// endCheck retires the check and wakes the reads waiting for it. CheckChanges
+// clears the cache before this runs, so a woken read captures the new epoch.
+func (s *Service) endCheck() {
+	s.checkMu.Lock()
+	defer s.checkMu.Unlock()
+	s.checking--
+	if s.checking == 0 && s.checkDone != nil {
+		close(s.checkDone)
+		s.checkDone = nil
+	}
+}
+
+// waitCheck holds a cache miss back while a check is in flight: a response
+// fetched now could describe the state the check is about to drop. The wait
+// honours ctx, so a cancelled request leaves the queue immediately.
+func (s *Service) waitCheck(ctx context.Context) error {
+	s.checkMu.Lock()
+	done := s.checkDone
+	s.checkMu.Unlock()
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 // Folders lists the four system folders plus the user labels, without the
 // unread counters and label colours: those are read by FolderDetails, which the
@@ -99,6 +189,14 @@ func (s *Service) Folders(ctx context.Context) ([]mail.Folder, error) {
 	if cached, ok := s.cache.folders.get(cacheKeyFolders); ok {
 		return slices.Clone(cached), nil
 	}
+	if err := s.waitCheck(ctx); err != nil {
+		return nil, err
+	}
+	// A read that waited may have been beaten to the entry by another one.
+	if cached, ok := s.cache.folders.get(cacheKeyFolders); ok {
+		return slices.Clone(cached), nil
+	}
+	gen := s.cache.folders.epoch()
 	var resp ListLabelsResponse
 	q := url.Values{}
 	q.Set("fields", "labels(id,name,type)")
@@ -130,7 +228,7 @@ func (s *Service) Folders(ctx context.Context) ([]mail.Folder, error) {
 	}
 
 	folders := s.folders(selected, specs)
-	s.cache.folders.set(cacheKeyFolders, folders)
+	s.cache.folders.setAt(gen, cacheKeyFolders, folders)
 	return slices.Clone(folders), nil
 }
 
@@ -155,12 +253,19 @@ func (s *Service) FolderDetails(ctx context.Context, folders []mail.Folder) ([]m
 	key := detailsCacheKey(ids)
 	details, ok := s.cache.details.get(key)
 	if !ok {
+		if err := s.waitCheck(ctx); err != nil {
+			return nil, err
+		}
+		details, ok = s.cache.details.get(key)
+	}
+	if !ok {
+		gen := s.cache.details.epoch()
 		var err error
 		details, err = s.c.labelDetails(ctx, ids)
 		if err != nil {
 			return nil, err
 		}
-		s.cache.details.set(key, details)
+		s.cache.details.setAt(gen, key, details)
 	}
 
 	out := make([]mail.Folder, len(folders))
@@ -203,11 +308,18 @@ func (s *Service) ListThreads(ctx context.Context, req mail.ListRequest) (mail.T
 	if cached, ok := s.cache.threads.get(key); ok {
 		return cloneThreadPage(cached), nil
 	}
+	if err := s.waitCheck(ctx); err != nil {
+		return mail.ThreadPage{}, err
+	}
+	if cached, ok := s.cache.threads.get(key); ok {
+		return cloneThreadPage(cached), nil
+	}
+	gen := s.cache.threads.epoch()
 	page, err := s.listThreads(ctx, labelID, "", req.PageToken, limit)
 	if err != nil {
 		return mail.ThreadPage{}, err
 	}
-	s.cache.threads.set(key, page)
+	s.cache.threads.setAt(gen, key, page)
 	return cloneThreadPage(page), nil
 }
 
@@ -225,11 +337,19 @@ func (s *Service) SearchThreads(ctx context.Context, req mail.SearchRequest) (ma
 	if cached, ok := s.cache.search.get(key); ok {
 		return cloneThreadPage(cached), nil
 	}
+	if err := s.waitCheck(ctx); err != nil {
+		return mail.ThreadPage{}, err
+	}
+	// A read that waited may have been beaten to the entry by another one.
+	if cached, ok := s.cache.search.get(key); ok {
+		return cloneThreadPage(cached), nil
+	}
+	gen := s.cache.search.epoch()
 	page, err := s.listThreads(ctx, "", query, req.PageToken, limit)
 	if err != nil {
 		return mail.ThreadPage{}, err
 	}
-	s.cache.search.set(key, page)
+	s.cache.search.setAt(gen, key, page)
 	return cloneThreadPage(page), nil
 }
 

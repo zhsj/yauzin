@@ -331,7 +331,7 @@ func (d *accountDialog) finish(res gmail.SignInResult, clientID, clientSecret st
 		a.notify(i18n.T("toast.accountUpdated", map[string]string{"Name": acc.DisplayName()}), false)
 		a.showSettingsPage(settingsTabAccounts)
 		if a.activeAcc == id {
-			a.reloadAll()
+			a.reloadChecked()
 		}
 		return
 	}
@@ -339,9 +339,10 @@ func (d *accountDialog) finish(res gmail.SignInResult, clientID, clientSecret st
 	a.notify(i18n.T("toast.accountAdded", map[string]string{"Name": acc.DisplayName()}), false)
 	if a.activeAcc == id {
 		// Signing in again replaces the backend of the mailbox on screen; its
-		// data has to be fetched with the new token.
+		// data has to be fetched with the new token, starting from a baseline
+		// the fresh backend recorded itself.
 		a.hideOverlay()
-		a.reloadAll()
+		a.reloadChecked()
 		return
 	}
 	a.switchAccount(id)
