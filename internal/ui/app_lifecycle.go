@@ -90,15 +90,7 @@ func Run() {
 		}
 		// Gio cannot hide a window on Wayland, so closing it destroys the
 		// window and the process waits here for the tray to reopen one.
-		// The poll and the status timer post callbacks here: draining them on
-		// the lifecycle goroutine keeps every App field single-writer even
-		// without a window.
-		select {
-		case <-a.openCh:
-		case <-a.quitCh:
-		case <-a.wake:
-			a.drain()
-		}
+		a.waitForWindow()
 	}
 
 	// The ticker must stop before the exit path closes the backends.
@@ -239,6 +231,23 @@ func (a *App) windowExplorer() *explorer.Explorer {
 	return a.explorer
 }
 
+// waitForWindow blocks the lifecycle loop until the tray asks for a window or
+// the process quits. Posted callbacks wake it too, but only to run them: a poll
+// or a status expiry must not reopen the window the user just closed. Draining
+// here also keeps every App field single-writer while no window exists.
+func (a *App) waitForWindow() {
+	for {
+		select {
+		case <-a.openCh:
+			return
+		case <-a.quitCh:
+			return
+		case <-a.wake:
+			a.drain()
+		}
+	}
+}
+
 // requestOpen shows the window again. It runs on a tray goroutine.
 func (a *App) requestOpen() {
 	if w := a.window(); w != nil {
@@ -326,7 +335,8 @@ func (a *App) post(fn func()) {
 	a.postMu.Unlock()
 	// Wake the lifecycle loop even without a window: in the tray it is what
 	// drains the queue, and a callback that only ran when the next window
-	// opened would arrive long after it stopped meaning anything.
+	// opened would arrive long after it stopped meaning anything. A wake only
+	// runs the queue, it never reopens a window (see waitForWindow).
 	select {
 	case a.wake <- struct{}{}:
 	default:
