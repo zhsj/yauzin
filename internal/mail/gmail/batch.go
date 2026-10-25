@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 )
@@ -77,7 +78,7 @@ func (c *client) batchChunk(ctx context.Context, op string, targets []batchTarge
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.sendBatch(ctx, op, body, boundary, token)
+	resp, err := c.sendBatch(ctx, op, targets, body, boundary, token)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +90,7 @@ func (c *client) batchChunk(ctx context.Context, op string, targets []batchTarge
 		if err != nil {
 			return nil, err
 		}
-		resp, err = c.sendBatch(ctx, op, body, boundary, token)
+		resp, err = c.sendBatch(ctx, op, targets, body, boundary, token)
 		if err != nil {
 			return nil, err
 		}
@@ -131,8 +132,9 @@ func batchBody(apiPath string, targets []batchTarget) (body []byte, boundary str
 }
 
 // sendBatch performs one authorized batch POST. Like send, it holds the
-// account's request slot for the HTTP round trip.
-func (c *client) sendBatch(ctx context.Context, op string, body []byte, boundary, token string) (*http.Response, error) {
+// account's request slot for the HTTP round trip. It logs one line naming the
+// calls inside: the POST URL alone says nothing about what the batch does.
+func (c *client) sendBatch(ctx context.Context, op string, targets []batchTarget, body []byte, boundary, token string) (*http.Response, error) {
 	if err := c.acquireReq(ctx); err != nil {
 		return nil, err
 	}
@@ -147,9 +149,25 @@ func (c *client) sendBatch(ctx context.Context, op string, body []byte, boundary
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := c.http.Do(req)
 	if err != nil {
+		slog.Debug("gmail batch",
+			"account", logAccount(c.accountID), "endpoint", batchEndpoint(c.apiPath, targets),
+			"calls", len(targets), "err", err)
 		return nil, fmt.Errorf("gmail %s batch: %w", op, err)
 	}
+	slog.Debug("gmail batch",
+		"account", logAccount(c.accountID), "endpoint", batchEndpoint(c.apiPath, targets),
+		"calls", len(targets), "status", resp.StatusCode)
 	return resp, nil
+}
+
+// batchEndpoint names the calls embedded in one batch. Every target of a batch
+// is a GET under the same parent (only labels.get and threads.get use batches),
+// so the parent path describes the whole batch and no IDs are logged.
+func batchEndpoint(apiPath string, targets []batchTarget) string {
+	if len(targets) == 0 {
+		return apiPath
+	}
+	return apiPath + path.Dir(targets[0].path)
 }
 
 // parseBatch decodes the embedded responses of a batch and drives handle with

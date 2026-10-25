@@ -133,10 +133,10 @@ func (s *Service) CheckChanges(ctx context.Context) (bool, error) {
 	s.cache.clear()
 	if baseline == "" {
 		// Nothing to compare against yet: this call only sets the baseline.
-		slog.Debug("gmail history baseline", "account", s.acc.ID, "history_id", id)
+		slog.Debug("gmail history baseline", "account", logAccount(s.acc.ID), "history_id", id)
 		return false, nil
 	}
-	slog.Debug("gmail mailbox changed", "account", s.acc.ID, "from", baseline, "to", id)
+	slog.Debug("gmail mailbox changed", "account", logAccount(s.acc.ID), "from", baseline, "to", id)
 	return true, nil
 }
 

@@ -139,9 +139,6 @@ func newClient(accountID string, store Store, opts []Option) (*client, error) {
 			c.http = http.DefaultClient
 		}
 	}
-	// Every request of the account, including the token refresh that runs on
-	// this same client, passes through the logging transport.
-	c.http = withRequestLogging(c.http, accountID)
 	return c, nil
 }
 
@@ -223,7 +220,32 @@ func (c *client) send(ctx context.Context, method, path string, query url.Values
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
-	return c.http.Do(req)
+	resp, err := c.http.Do(req)
+	logRequest(c.accountID, method, c.apiPath+path, resp, err)
+	return resp, err
+}
+
+// logRequest reports one Gmail API call at DEBUG. endpoint is the API path
+// without host or query: the query carries search terms and must not be
+// logged. A failed round trip reports err instead of a status.
+func logRequest(account, method, endpoint string, resp *http.Response, err error) {
+	if err != nil {
+		slog.Debug("gmail request",
+			"account", logAccount(account), "method", method, "endpoint", endpoint, "err", err)
+		return
+	}
+	slog.Debug("gmail request",
+		"account", logAccount(account), "method", method, "endpoint", endpoint, "status", resp.StatusCode)
+}
+
+// logAccount is the account label of a log line. The backend prefix repeats
+// what the message already says, so only the address is kept; an empty ID
+// (no stored account yet) is shown as "-".
+func logAccount(id string) string {
+	if id == "" {
+		return "-"
+	}
+	return strings.TrimPrefix(id, string(mail.KindGmail)+":")
 }
 
 // accessToken returns a usable access token, refreshing and persisting it when
@@ -271,7 +293,7 @@ func (c *client) accessToken(ctx context.Context, force bool) (string, error) {
 	}
 	if err := c.store.SaveToken(c.accountID, tokenFromOAuth(fresh)); err != nil {
 		// The token works for this request; only the next start loses it.
-		slog.Warn("persist refreshed token", "account", c.accountID, "err", err)
+		slog.Warn("persist refreshed token", "account", logAccount(c.accountID), "err", err)
 	}
 	return fresh.AccessToken, nil
 }
