@@ -361,6 +361,7 @@ func (a *App) switchAccount(id string) {
 	a.top.clearSearch()
 	a.folders = nil
 	a.side.reload()
+	a.resetInboxState()
 	a.resetSelection()
 	a.clearList()
 	a.hideOverlay()

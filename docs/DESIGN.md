@@ -72,10 +72,11 @@
 - 切账号 / 切文件夹 / 搜索时先清空视图（`App.clearList` 清 `setThreads(nil)` 并抹掉工具栏范围文案，`resetSelection` 关阅读器）再发起加载，避免旧行、旧标签色块与旧页码闪现。
 - 列表请求按查询分流：`query` 非空走 `SearchThreads`，否则 `ListThreads`。两者共用同一个 `listGen` / `listCancel` / `tokens`，因此搜索、翻页、切文件夹互相取代；worker 启动前快照 `folder` 与 `query`，worker 内不读 `App` 字段。
 - **先检查再加载**：所有全量加载入口（首屏、窗口重建、切账号、工具栏刷新、代理/凭据变更后重建后端、新增或重登账号）都经 `reloadChecked` 或 `checkChanges` + 加载回调——`CheckChanges` 成功与否都继续加载，失败只记 DEBUG，真实的加载错误由加载自己报，界面因此离线也可用。检查阶段就开始转圈，所以手动刷新立刻有反馈。
-- **轮询贯穿进程生命周期**：`Run` 启动一次 1 分钟 ticker（`app_poll.go`），退出前停止，不随窗口开关起停。有窗口时变化才刷新侧栏与当前列表（保留滚动与勾选）；无窗口（托盘）时只刷新侧栏与徽标，列表交给 `attach` 的「检查 + 全量加载」；列表请求在途时跳过列表刷新，等下一分钟补，避免取消用户刚发起的切文件夹/翻页/搜索。
-- **托盘期间的回投**：`post` 在没有窗口时也向容量 1 的 `wake` 投递，生命周期循环的 `waitForWindow` 在 `openCh` / `quitCh` 之外 select `wake` 并 `drain()`，于是 App 字段仍只有一个 goroutine 写。`wake` **只执行回调、不建窗**：建窗的唯一来源是托盘的 `openCh`，否则一次轮询或状态条过期的回投就会把用户刚关掉的窗口重新弹出来。`notify` 在无窗口（只有托盘能让进程无窗口存活）时早退，避免重开窗口看到几分钟前的提示。
+- **进程级轮询只维护托盘与通知**：`Run` 启动一次 1 分钟 ticker（`app_poll.go`），退出前停止，不随窗口开关起停。每次 tick 只做 `CheckChanges`（1 次 profile）；变化或尚无基线时才由 `internal/inboxwatch` 读取 `label:inbox is:unread`（`SearchThreads`，上限 3 条，threads.list + metadata batch）。轮询**不刷新侧栏、不刷新列表/阅读器**，也不取消用户请求；结果只更新托盘两态与未读快照。未读会话新建、未读数增加或同一会话最新 message 变化时，`internal/notify` 经 D-Bus 发桌面通知（最多 3 条单行截断主题 + 未读会话数）；首次读取只建基线，不因启动时已有未读而弹窗。窗口内容只在首屏、`attach`、手动刷新、切账号/账号变更与写操作后更新。
+- **轮询与通知分层**：`internal/inboxwatch` 是纯 Go 的轮询状态机（未读快照、主题截断、通知文案），`internal/notify` 封装 Linux D-Bus 通知（`ActionInvoked` 点击回调）；`internal/ui` 只保留 ticker、`async` 超时/回投、托盘落地与点击后打开收件箱，三者都不反向依赖 UI。
+- **托盘期间的回投**：`post` 在没有窗口时也向容量 1 的 `wake` 投递，生命周期循环的 `waitForWindow` 在 `openCh` / `quitCh` 之外 select `wake` 并 `drain()`，于是 App 字段仍只有一个 goroutine 写。`wake` **只执行回调、不建窗**：建窗的唯一入口是 `requestOpen` → `openCh`（托盘打开、通知点击、单实例激活都走它），否则一次轮询或状态条过期的回投就会把用户刚关掉的窗口重新弹出来。应用内状态条在无窗口（只有托盘能让进程无窗口存活）时早退，避免重开窗口看到几分钟前的提示。
 - 列表只渲染可见行（`layout.List`），行内控件状态按会话 ID 缓存在视图结构里。
-- **已知限制**：`loading` 是单一布尔，侧栏阶段失败的清除可能让仍在跑的列表请求提前停止转圈（影响仅为观感，由「新请求取代旧请求」兜底）；托盘期间打开着的阅读器不随后台刷新更新正文（`openThread` 对同一会话直接早退）；轮询与手动刷新撞车时可能多发一次 profile 请求与一次全量加载。
+- **已知限制**：`loading` 是单一布尔，侧栏阶段失败的清除可能让仍在跑的列表请求提前停止转圈（影响仅为观感，由「新请求取代旧请求」兜底）；托盘期间打开着的阅读器不随后台刷新更新正文（`openThread` 对同一会话直接早退）；轮询不再刷新窗口内容，新邮件需手动刷新、重开窗口或点击通知才出现；未读总数来自 Gmail 的 `resultSizeEstimate`（会话数估算），且只跟踪最新 3 条未读会话，同一 tick 内「读掉一封 + 新到一封」可能互相抵消；桌面通知仅 Linux（D-Bus），无通知服务或其它平台时静默降级。
 
 ### 4.3 浮层
 
@@ -180,6 +181,7 @@
 - 语言列表由内嵌文件与各文件的 `language.name` 推导；`"auto"` 跟随系统 locale。
 - 运行时切换顺序敏感：`i18n.SetLanguage` → `prefs.Save` → 重建侧栏 / 清空阅读器卡片缓存 → 更新窗口标题 → `tray.Relabel` → 新状态条 → **最后**重建设置面板。
 - 系统文件夹名按 `FolderKind` 翻译，用户标签名与账号名不翻译。
+- 桌面通知文案同样走 i18n：`notify.title`、`notify.count`（复数，按未读会话数）、`notify.open`；空主题复用 `list.noSubject`。通知在发送时取当前语言，切换语言后随即生效。
 
 ## 10. 持久化
 

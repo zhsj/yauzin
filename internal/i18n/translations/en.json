@@ -7,6 +7,13 @@
   "tray.quit": "Quit",
   "tray.tooltip": "{{.Name}} – click to open",
 
+  "notify.title": "New mail in Inbox",
+  "notify.count": {
+    "one": "{{.Count}} unread conversation",
+    "other": "{{.Count}} unread conversations"
+  },
+  "notify.open": "Open inbox",
+
   "topbar.search": "Search mail",
 
   "settings.title": "Settings",

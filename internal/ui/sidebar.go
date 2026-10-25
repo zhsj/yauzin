@@ -63,7 +63,6 @@ func (s *sidebarView) reload() {
 	// read) must not pop the labels the user just folded shut.
 	s.tree = buildLabelTree(labelFolders, a.selectFolder)
 	s.flattenLabels()
-	a.refreshTrayIcon()
 }
 
 // flattenLabels rebuilds the visible rows after a fold or a refresh.

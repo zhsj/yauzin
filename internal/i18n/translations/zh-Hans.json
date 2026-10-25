@@ -7,6 +7,12 @@
   "tray.quit": "退出",
   "tray.tooltip": "{{.Name}} - 点击打开",
 
+  "notify.title": "收件箱有新邮件",
+  "notify.count": {
+    "other": "共 {{.Count}} 个未读会话"
+  },
+  "notify.open": "打开收件箱",
+
   "topbar.search": "搜索邮件",
 
   "settings.title": "设置",

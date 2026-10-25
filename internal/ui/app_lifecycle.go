@@ -20,6 +20,7 @@ import (
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/logging"
 	"github.com/zhsj/yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/notify"
 	"github.com/zhsj/yauzin/internal/singleinstance"
 	"github.com/zhsj/yauzin/internal/tray"
 )
@@ -73,8 +74,12 @@ func Run() {
 	defer t.Close()
 	a.tray = t
 	a.refreshTrayIcon()
-	// Polling belongs to the process, not to a window: the tray keeps the
-	// mailbox watched while the window is closed, so the badge stays honest.
+	// The notifier belongs to the process as well: a click on a notification
+	// asks for the window through the same requestOpen path as the tray.
+	a.notifier = notify.Start(a.openInboxFromNotification)
+	// Polling belongs to the process, not to a window: the tray and the
+	// desktop notifications keep watching the mailbox while the window is
+	// closed.
 	a.startPolling()
 
 	for {
@@ -95,6 +100,9 @@ func Run() {
 
 	// The ticker must stop before the exit path closes the backends.
 	a.stopPolling()
+	if a.notifier != nil {
+		a.notifier.Close()
+	}
 	a.cleanupTemp()
 	t.Close()
 	a.closeServices()

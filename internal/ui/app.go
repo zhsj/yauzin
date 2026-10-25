@@ -25,10 +25,12 @@ import (
 
 	"github.com/zhsj/yauzin/internal/accounts"
 	"github.com/zhsj/yauzin/internal/i18n"
+	"github.com/zhsj/yauzin/internal/inboxwatch"
 	"github.com/zhsj/yauzin/internal/logging"
 	"github.com/zhsj/yauzin/internal/mail"
 	"github.com/zhsj/yauzin/internal/mail/gmail"
 	"github.com/zhsj/yauzin/internal/mail/mock"
+	"github.com/zhsj/yauzin/internal/notify"
 	"github.com/zhsj/yauzin/internal/prefs"
 	"github.com/zhsj/yauzin/internal/tray"
 )
@@ -194,6 +196,13 @@ type App struct {
 	// tray mirrors the unread state into the notification area. It is nil when
 	// the platform has no notification area.
 	tray *tray.Tray
+
+	// watcher keeps the process-level unread baseline of the inbox and decides
+	// what the poll reports. It is created once and follows the active account.
+	watcher *inboxwatch.Watcher
+	// notifier publishes desktop notifications. It is nil when the platform or
+	// the session cannot deliver them.
+	notifier notify.Notifier
 
 	// tmpMu guards tmpDir: the signal handler reaches it from its own
 	// goroutine while the UI goroutine may still ask for the directory.
@@ -404,6 +413,8 @@ func newAppWith(pref prefs.Settings, opts appOptions) *App {
 	}
 	a.activeAcc = restoredAccount(pref.ActiveAccount, a.accounts, a.services)
 	a.activeFolder = "inbox"
+	a.watcher = inboxwatch.New()
+	a.watcher.Reset(a.activeAcc)
 
 	a.top = newTopBar(a)
 	a.side = newSidebar(a)
@@ -427,6 +438,9 @@ func newAppWith(pref prefs.Settings, opts appOptions) *App {
 func (a *App) startInitialLoad() {
 	a.startOnce.Do(func() {
 		a.reloadChecked()
+		// The baseline makes the first change notify about the new mail only,
+		// instead of treating everything unread at startup as new.
+		a.pollInboxUnread()
 		a.loaded = true
 	})
 }
@@ -461,6 +475,9 @@ const (
 	timeoutMutation = 20 * time.Second
 	timeoutSend     = 2 * time.Minute
 	timeoutAttach   = time.Minute
+	// timeoutPoll bounds one process-level inbox poll: the change check plus
+	// the search for the unread conversations, so both fit in one budget.
+	timeoutPoll = 45 * time.Second
 )
 
 // async runs fn off the UI goroutine with a timeout and posts the outcome back

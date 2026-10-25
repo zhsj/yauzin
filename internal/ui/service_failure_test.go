@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/zhsj/yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/notify"
 )
 
 // fakeService is a mail.Service whose answers the test decides. It records the
@@ -23,6 +24,12 @@ type fakeService struct {
 	checkChanged bool
 	checkErr     error
 	calls        []string
+
+	// searchPage and searchErr answer the inbox poll's SearchThreads;
+	// searchCalls keeps the requests so a test can pin the query and limit.
+	searchPage  mail.ThreadPage
+	searchErr   error
+	searchCalls []mail.SearchRequest
 
 	setFlagCalls []setFlagCall
 }
@@ -91,9 +98,20 @@ func (f *fakeService) ListThreads(context.Context, mail.ListRequest) (mail.Threa
 	return mail.ThreadPage{}, nil
 }
 
-func (f *fakeService) SearchThreads(context.Context, mail.SearchRequest) (mail.ThreadPage, error) {
+func (f *fakeService) SearchThreads(_ context.Context, req mail.SearchRequest) (mail.ThreadPage, error) {
 	f.record("search")
-	return mail.ThreadPage{}, nil
+	f.mu.Lock()
+	f.searchCalls = append(f.searchCalls, req)
+	page, err := f.searchPage, f.searchErr
+	f.mu.Unlock()
+	return page, err
+}
+
+// searchRequests returns the requests the poll sent.
+func (f *fakeService) searchRequests() []mail.SearchRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]mail.SearchRequest(nil), f.searchCalls...)
 }
 
 func (f *fakeService) GetThread(context.Context, string) ([]*mail.Message, error) {
@@ -382,4 +400,37 @@ func TestSetFlagReceivesThreadMessages(t *testing.T) {
 	if len(call.ids) != 2 {
 		t.Fatalf("ids = %v, want both messages of the conversation", call.ids)
 	}
+}
+
+// fakeNotifier records the desktop notifications the app publishes.
+type fakeNotifier struct {
+	mu      sync.Mutex
+	notices []notify.Notice
+	closed  bool
+}
+
+func (f *fakeNotifier) Show(notice notify.Notice) {
+	f.mu.Lock()
+	f.notices = append(f.notices, notice)
+	f.mu.Unlock()
+}
+
+func (f *fakeNotifier) Close() {
+	f.mu.Lock()
+	f.closed = true
+	f.mu.Unlock()
+}
+
+// sent returns the published notifications.
+func (f *fakeNotifier) sent() []notify.Notice {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]notify.Notice(nil), f.notices...)
+}
+
+// wasClosed reports whether Close ran.
+func (f *fakeNotifier) wasClosed() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closed
 }

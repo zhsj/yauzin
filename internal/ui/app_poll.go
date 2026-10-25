@@ -1,10 +1,17 @@
 package ui
 
-import "time"
+import (
+	"context"
+	"log/slog"
+	"time"
+
+	"github.com/zhsj/yauzin/internal/inboxwatch"
+)
 
 // pollInterval is how often the running process asks the backend whether the
-// mailbox moved. It is one light metadata call per account; the loads that
-// follow a change are what cost quota, and they only happen when it did.
+// mailbox moved. It is one light metadata call per account; the follow-up read
+// only happens when it did, and it only serves the tray and the desktop
+// notification.
 const pollInterval = time.Minute
 
 // startPolling starts the change check ticker. Run calls it once for the whole
@@ -42,35 +49,38 @@ func (a *App) stopPolling() {
 	a.pollStop = nil
 }
 
-// pollChanges reacts to one tick. The backend already dropped its cache when
-// the mailbox moved, so this only decides what has to be reloaded now.
+// pollChanges reacts to one tick. The poll only maintains the tray and the
+// desktop notification: it never reloads the sidebar or the thread list, so it
+// cannot cancel a request the user just started and the window keeps showing
+// whatever it showed until the next explicit refresh.
 func (a *App) pollChanges() {
-	if a.service() == nil {
-		return
-	}
-	a.checkChanges(func(changed bool) {
-		if !changed {
-			return
-		}
-		// The sidebar feeds the tray badge as well as the window, so it is
-		// reloaded even while the app sits in the tray.
-		a.reloadFolders()
-		if !a.canRefreshList() {
-			return
-		}
-		a.refreshThreads()
-	})
+	a.pollInboxUnread()
 }
 
-// canRefreshList reports whether a poll may replace the page on screen. Without
-// a window there is nothing to replace: attach checks and reloads the list when
-// one comes back, which also picks up whatever changed since. A list request in
-// flight means the user just switched folder, page or query, and replacing it
-// would cancel their own request and, on an empty page, walk them back one
-// page; the next tick catches up.
-func (a *App) canRefreshList() bool {
-	if a.window() == nil {
-		return false
+// pollInboxUnread reads the unread inbox conversations of the active account
+// and applies the result to the tray and the notification. Without a tray and
+// without a notification backend there is nothing to maintain, so the poll
+// costs nothing.
+func (a *App) pollInboxUnread() {
+	if a.tray == nil && a.notifier == nil {
+		return
 	}
-	return !a.toolbar.loading
+	svc := a.service()
+	if svc == nil || a.watcher == nil {
+		return
+	}
+	accID := a.activeAcc
+	var out inboxwatch.Outcome
+	a.async("inbox unread", timeoutPoll, func() bool { return accID == a.activeAcc },
+		func(ctx context.Context) error {
+			var err error
+			out, err = a.watcher.Poll(ctx, accID, svc)
+			return err
+		},
+		func() { a.applyInboxOutcome(out) },
+		func(err error) {
+			// The poll runs once a minute: an unreachable mailbox must not raise
+			// a status bar every tick, and the next one retries anyway.
+			slog.Debug("inbox unread failed", "err", err)
+		})
 }

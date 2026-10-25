@@ -254,6 +254,7 @@ func (a *App) clearAccountView() {
 	a.cancelRequests()
 	a.folders = nil
 	a.side.reload()
+	a.resetInboxState()
 	a.query = ""
 	a.top.clearSearch()
 	a.page, a.tokens = 1, []string{""}

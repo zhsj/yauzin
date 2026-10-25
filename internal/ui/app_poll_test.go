@@ -2,11 +2,19 @@ package ui
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/zhsj/yauzin/internal/mail"
 	"github.com/zhsj/yauzin/internal/prefs"
+	"github.com/zhsj/yauzin/internal/tray"
 )
+
+// pollThread builds one unread conversation for the poll tests. ids are
+// ordered oldest first.
+func pollThread(id, subject string, unread int, ids ...string) mail.ThreadSummary {
+	return mail.ThreadSummary{ID: id, Subject: subject, UnreadCount: unread, MessageIDs: ids}
+}
 
 // TestInitialLoadChecksBeforeLoading pins the order every full load follows: the
 // check records the baseline first, so the data that follows cannot predate it.
@@ -71,46 +79,134 @@ func TestSwitchAccountChecksFirst(t *testing.T) {
 }
 
 // TestPollIgnoresAnUnchangedMailbox keeps a quiet mailbox from costing anything
-// beyond the check itself.
+// beyond the check itself. The first poll builds the baseline, which needs one
+// search even when the mailbox reports no change.
 func TestPollIgnoresAnUnchangedMailbox(t *testing.T) {
 	a := testApp(t)
+	a.tray = &tray.Tray{}
 	svc := &fakeService{}
 	useService(a, svc)
 
 	a.pollChanges()
-	waitFor(t, a, "the check", func() bool { return svc.countCalls("check") == 1 })
+	waitFor(t, a, "the baseline", func() bool { return svc.countCalls("search") == 1 })
+	before := len(svc.callLog())
 
-	if got := svc.callLog(); len(got) != 1 {
-		t.Fatalf("calls = %v, want only the check", got)
+	a.pollChanges()
+	waitFor(t, a, "the quiet check", func() bool { return svc.countCalls("check") == 2 })
+
+	if got := svc.callLog(); len(got) != before+1 {
+		t.Fatalf("calls = %v, want only one more check", got)
 	}
 }
 
-// TestPollInTheTrayReloadsTheSidebarOnly covers the windowless process: the
-// badge and the label counters are refreshed, the list is left to attach.
-func TestPollInTheTrayReloadsTheSidebarOnly(t *testing.T) {
+// TestPollOnlyRefreshesTheTray covers the process-level poll: a changed
+// mailbox reads the unread conversations of the inbox and touches nothing the
+// window shows.
+func TestPollOnlyRefreshesTheTray(t *testing.T) {
+	a := testApp(t)
+	a.tray = &tray.Tray{}
+	svc := &fakeService{
+		checkChanged: true,
+		searchPage: mail.ThreadPage{
+			Threads: []mail.ThreadSummary{pollThread("t1", "First", 1, "m1")},
+			Total:   1,
+		},
+	}
+	useService(a, svc)
+
+	a.pollChanges()
+	waitFor(t, a, "the inbox search", func() bool { return svc.countCalls("search") == 1 })
+
+	if got := svc.countCalls("folders"); got != 0 {
+		t.Fatalf("folder reloads = %d, want 0 from the poll", got)
+	}
+	if got := svc.countCalls("list"); got != 0 {
+		t.Fatalf("threads loads = %d, want 0 from the poll", got)
+	}
+	requests := svc.searchRequests()
+	if len(requests) != 1 {
+		t.Fatalf("searches = %d, want 1", len(requests))
+	}
+	if got := requests[0]; got.Query != "label:inbox is:unread" || got.Limit != 3 {
+		t.Fatalf("search = %+v, want the unread inbox query limited to 3", got)
+	}
+}
+
+// TestPollNotifiesANewConversation checks the whole path: the first poll seeds
+// the baseline silently, a second one with a new unread conversation publishes
+// one notification.
+func TestPollNotifiesANewConversation(t *testing.T) {
+	a := testApp(t)
+	a.tray = &tray.Tray{}
+	notifier := &fakeNotifier{}
+	a.notifier = notifier
+	svc := &fakeService{
+		checkChanged: true,
+		searchPage: mail.ThreadPage{
+			Threads: []mail.ThreadSummary{pollThread("t1", "First", 1, "m1")},
+			Total:   1,
+		},
+	}
+	useService(a, svc)
+
+	a.pollChanges()
+	waitFor(t, a, "the baseline search", func() bool { return svc.countCalls("search") == 1 })
+	if sent := notifier.sent(); len(sent) != 0 {
+		t.Fatalf("notices = %v, want none while seeding the baseline", sent)
+	}
+
+	svc.mu.Lock()
+	svc.searchPage = mail.ThreadPage{
+		Threads: []mail.ThreadSummary{
+			pollThread("t2", "Second subject", 1, "m2"),
+			pollThread("t1", "First", 1, "m1"),
+		},
+		Total: 4,
+	}
+	svc.mu.Unlock()
+	a.pollChanges()
+	waitFor(t, a, "the notification", func() bool { return len(notifier.sent()) == 1 })
+
+	notice := notifier.sent()[0]
+	if !strings.Contains(notice.Body, "Second subject") || !strings.Contains(notice.Body, "4 unread conversations") {
+		t.Fatalf("body = %q, want the new subject and the total", notice.Body)
+	}
+}
+
+// TestPollStaysQuietWithoutATrayOrNotifier keeps a backend without a
+// destination from being polled at all.
+func TestPollStaysQuietWithoutATrayOrNotifier(t *testing.T) {
 	a := testApp(t)
 	svc := &fakeService{checkChanged: true}
 	useService(a, svc)
 
 	a.pollChanges()
-	waitFor(t, a, "the sidebar reload", func() bool { return svc.countCalls("folders") == 1 })
 
-	if got := svc.countCalls("list"); got != 0 {
-		t.Fatalf("threads loads = %d without a window, want 0", got)
+	if got := svc.countCalls("check"); got != 0 {
+		t.Fatalf("checks = %d without a tray or notifier, want 0", got)
+	}
+	if got := svc.countCalls("search"); got != 0 {
+		t.Fatalf("searches = %d without a tray or notifier, want 0", got)
 	}
 }
 
-// TestPollLeavesABusyListAlone pins the guard around a request the user just
-// started: replacing it would cancel their folder, page or query change.
-func TestPollLeavesABusyListAlone(t *testing.T) {
+// TestNotificationClickOpensInbox checks the posted callback: without a window
+// it brings the state back to the inbox and asks for one.
+func TestNotificationClickOpensInbox(t *testing.T) {
 	a := testApp(t)
-	a.toolbar.setLoading(true)
-	if a.canRefreshList() {
-		t.Fatal("the poll would replace a list request in flight")
+	a.activeFolder = "sent"
+	a.query = "report"
+
+	a.openInboxFromNotification()
+	a.drain()
+
+	if a.activeFolder != "inbox" || a.query != "" {
+		t.Fatalf("folder/query = %q/%q, want inbox with no search", a.activeFolder, a.query)
 	}
-	a.toolbar.setLoading(false)
-	if a.canRefreshList() {
-		t.Fatal("the poll would touch the list without a window")
+	select {
+	case <-a.openCh:
+	default:
+		t.Fatal("the notification click did not ask for a window")
 	}
 }
 
