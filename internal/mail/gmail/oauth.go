@@ -19,6 +19,7 @@ import (
 
 	"github.com/zhsj/yauzin/internal/accounts"
 	"github.com/zhsj/yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/netproxy"
 )
 
 const (
@@ -394,34 +395,10 @@ func oauthToken(t accounts.Token) *oauth2.Token {
 }
 
 // ParseProxy validates a proxy address from the settings and returns it in the
-// form http.Transport expects. Empty input means a direct connection and is
-// not an error. socks5h is not accepted: net/http has no dialer for it, and its
-// socks5 dialer already lets the proxy resolve the destination host.
+// form http.Transport expects. The rules live in netproxy, which the SMTP
+// sender shares, so both transports accept exactly the same addresses.
 func ParseProxy(raw string) (*url.URL, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, nil
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return nil, fmt.Errorf("invalid proxy address: %w", err)
-	}
-	switch strings.ToLower(u.Scheme) {
-	case "http", "https", "socks5":
-	default:
-		return nil, fmt.Errorf("invalid proxy scheme %q: use http, https or socks5", u.Scheme)
-	}
-	if u.Host == "" {
-		return nil, errors.New("invalid proxy address: missing host")
-	}
-	if u.Port() == "" {
-		return nil, errors.New("invalid proxy address: missing port")
-	}
-	if u.Path != "" && u.Path != "/" {
-		return nil, errors.New("invalid proxy address: unexpected path")
-	}
-	u.Path = ""
-	return u, nil
+	return netproxy.Parse(raw)
 }
 
 // HTTPClient returns a client that sends its requests through the proxy in
