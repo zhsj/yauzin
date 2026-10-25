@@ -82,14 +82,16 @@ func newComposeView(a *App, mode composeMode, msg *mail.Message, replySelection 
 	for _, sender := range c.senders {
 		item := sender
 		row := &settingsRow{
-			title:    item.name,
-			subtitle: item.email,
-			active:   item.id == c.fromID,
-			indent:   true,
-			onTap:    func() { c.setSender(item.id) },
+			title:  item.name,
+			active: item.id == c.fromID,
+			indent: true,
+			onTap:  func() { c.setSender(item.id) },
 		}
+		// The address is the subtitle only when a name already fills the title.
 		if row.title == "" {
 			row.title = item.email
+		} else {
+			row.subtitle = item.email
 		}
 		c.fromRows = append(c.fromRows, row)
 	}
