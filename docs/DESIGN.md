@@ -85,6 +85,7 @@
 - 吞点击层必须是 `Stack` 的第一个子对象，否则挡住卡片自身的交互。菜单用 pass-through blocker（点击外部只关菜单），设置保持模态阻塞；写信浮窗**不设全窗 blocker**，由卡片内 `Clickable` 自己消费空白点击。
 - Esc 优先级：状态条 / 菜单 → 写信 / 设置 → 阅读器返回列表。Esc 不清空查询、不在搜索时回退文件夹；搜索框胶囊的 ✕ 只清空输入框文字，列表保持当前搜索结果（`query` 与 `activeFolder` 都不变）。
 - 面板内的下拉**必须页内展开**，不能复用 `App.showMenu`：`showOverlay` 先 `closeOverlay()` 把 `a.settings` 置 nil，菜单关闭时 `hideOverlay()` 又直接清空 `a.overlay`，设置面板不会回来。设置页的语言选择即按此实现（`settingsView.langOpen`，候选行在同一张卡片内展开）。
+- 写信浮窗的引用块由 `format.go` 的 `replyQuote` / `forwardQuote` 生成，文案固定英文、不走 i18n（它们属于邮件内容而非界面文案，中文界面下同样是英文）：回复是 Gmail 的 `On <时间> <发件人> wrote:` 抬头（本地时区的 `Mon, Jan 2, 2006 at 3:04 PM`）加逐行 `> ` 前缀的正文，转发是 `---------- Forwarded message ----------` 加 `From:` / `Date:` / `Subject:` 与完整正文。回复前阅读器里该封邮件正文若有选区，只引用选中片段（`messageCard.selectedText` → `readerView.replySelection` → `openCompose` 快照一次），选区为空或只有空白时回退完整正文；转发不使用选区。`replySubject` / `forwardSubject` 的 `Re: ` / `Fwd: ` 同理写死英文。
 
 ### 4.5 键盘
 
@@ -168,13 +169,13 @@
 
 ## 8. 正文与 HTML 安全
 
-- 阅读器只渲染 `text/plain`（可选中复制），HTML 与原文都从每封邮件卡片头部的「更多」菜单打开，回复/转发旁不再有浏览器按钮。选区按 `msg.ID` 变化时重建/清空，避免跨邮件残留。
+- 阅读器只渲染 `text/plain`（可选中复制），HTML 与原文都从每封邮件卡片头部的「更多」菜单打开，回复/转发旁不再有浏览器按钮。选区按 `msg.ID` 变化时重建/清空，避免跨邮件残留；回复时该邮件自身的选区会成为引用内容（见 §4.3）。
 - 菜单三项：`安全预览`（注入严格 CSP）、`完整预览（不安全）`（只声明 charset，不加策略，脚本与远程资源可用，风险写在文案里且不再二次确认）、`查看原始邮件`（`RawMessage` → 原文页）。前两项仅在有 HTML 正文时出现，第三项恒有。菜单项文案不复用旧键 `reader.openInBrowser`。
 - 原文页（`htmlsource.go`）是独立文档：顶部元信息表（邮件 ID、账号、发件人、收件人、抄送、主题、日期），下方 `<pre>` 展示完整源码。源码经 `html.EscapeString` + `strings.ToValidUTF8` 处理，绝不当 HTML 渲染；页面自身固定 `default-src 'none'; style-src 'unsafe-inline'`。
 - HTML 落盘：文件名 = 净化后的消息 ID（`[A-Za-z0-9._-]`，截断 64）+ 内容 sha256 前 8 字节（防目录穿越、绕开 `file://` 缓存），模式后缀 `-unsafe` / `-source` 保证三种产物互不覆盖（安全预览沿用原命名）。
 - CSP 用 `x/net/html` 解析后插到**真实 `<head>` 的第一个子节点**（防注释/脚本里的假 `<head>`），`html.Render` 重新序列化是有意取舍；解析失败走 `wrapperDocument` 安全包裹。策略为 `default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; form-action 'none'; base-uri 'none'`，远程图片/追踪像素故意禁用。默认路径不被弱化：不点「完整预览」时策略照旧注入。
 - 临时目录惰性创建于 `$XDG_RUNTIME_DIR/yauzin`（0700；该变量缺失、非绝对路径或不可用时回退 `os.MkdirTemp` 到系统临时目录）：会话运行目录在登录会话结束时由系统回收，被 `SIGKILL` 的运行最多留下一个会自动过期的目录，不会在 `/tmp` 里逐次累积。会话内路径固定，首次创建前先删掉上次异常退出留下的同名目录；正常退出与 `Ctrl+C`（`SIGINT`）都会整体删除，删除后 `tempDir()` 返回错误而不再重建。
-- 正文只认 `text/plain`：没有纯文本的邮件就是没有正文，阅读器显示 `reader.noPlainText`，回复/转发的引用写 `compose.noBody`。HTML 正文不做任何文本化（正则剥标签、`x/net/html` 取文本都不做），只有浏览器预览会读到它。
+- 正文只认 `text/plain`：没有纯文本的邮件就是没有正文，阅读器显示 `reader.noPlainText`，回复/转发的引用写英文占位 `(no body)`（`quoteNoBody`，不加 `> ` 前缀）。HTML 正文不做任何文本化（正则剥标签、`x/net/html` 取文本都不做），只有浏览器预览会读到它。
 
 ## 9. 国际化
 
@@ -390,7 +391,7 @@ internal/ui/widgets.go         组件共用的失效与光标辅助
 internal/ui/widgets_button.go  iconButton / pillButton
 internal/ui/widgets_input.go   复选框、开关、点击拦截与输入框
 internal/ui/widgets_nav.go     侧栏导航项与菜单行
-internal/ui/format.go          时间、地址与主题格式化
+internal/ui/format.go          时间、地址、主题与回复/转发引用块排版
 internal/ui/filepicker.go      xdg-desktop-portal 文件选择/保存
 internal/ui/openurl.go         跨平台打开链接/文件
 internal/ui/htmlfile.go        HTML 临时文件与 CSP 注入

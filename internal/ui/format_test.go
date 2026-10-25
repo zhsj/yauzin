@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -121,7 +122,6 @@ func TestFormatFullTimeUsesLocalZone(t *testing.T) {
 // has no body at all. Its HTML must never be turned into quoted text.
 func TestQuotedBodyOnlyUsesPlainText(t *testing.T) {
 	useLanguage(t, "en")
-	noBody := i18n.T("compose.noBody")
 
 	for _, tc := range []struct {
 		name string
@@ -130,17 +130,119 @@ func TestQuotedBodyOnlyUsesPlainText(t *testing.T) {
 	}{
 		{"plain", &mail.Message{TextBody: "hello\n\nworld"}, "hello\n\nworld"},
 		{"plain wins over html", &mail.Message{TextBody: "plain", HTMLBody: "<p>html</p>"}, "plain"},
-		{"html only", &mail.Message{HTMLBody: "<p>html only</p>"}, noBody},
-		{"blank", &mail.Message{TextBody: " \n\t ", HTMLBody: "<p>html</p>"}, noBody},
-		{"empty", &mail.Message{}, noBody},
+		{"html only", &mail.Message{HTMLBody: "<p>html only</p>"}, quoteNoBody},
+		{"blank", &mail.Message{TextBody: " \n\t ", HTMLBody: "<p>html</p>"}, quoteNoBody},
+		{"empty", &mail.Message{}, quoteNoBody},
 	} {
 		if got := quotedBody(tc.msg); got != tc.want {
 			t.Errorf("%s: quotedBody = %q, want %q", tc.name, got, tc.want)
 		}
 	}
+}
 
+// TestReplyQuoteLayout pins Gmail's reply header: the time comes first, the
+// sender follows, and the body is marked line by line.
+func TestReplyQuoteLayout(t *testing.T) {
+	useLanguage(t, "en")
+	when := time.Date(2026, 3, 5, 8, 7, 0, 0, time.Local)
+	msg := &mail.Message{
+		MessageSummary: mail.MessageSummary{
+			From: mail.Address{Name: "Alice", Email: "alice@example.com"},
+			Date: when,
+		},
+		TextBody: "hello\n   \nworld\n",
+	}
+
+	want := "\n\nOn Thu, Mar 5, 2026 at 8:07 AM Alice <alice@example.com> wrote:\n> hello\n>\n> world"
+	if got := replyQuote(msg, ""); got != want {
+		t.Fatalf("replyQuote = %q, want %q", got, want)
+	}
+	// A Chinese interface quotes the same mail: the header is content, not UI
+	// copy, so it never gets localized.
 	useLanguage(t, "zh-Hans")
-	if got, want := quotedBody(&mail.Message{HTMLBody: "<p>html</p>"}), i18n.T("compose.noBody"); got != want {
-		t.Errorf("zh quotedBody = %q, want %q", got, want)
+	if got := replyQuote(msg, ""); got != want {
+		t.Fatalf("zh replyQuote = %q, want the English header %q", got, want)
+	}
+	i18n.SetLanguage("en")
+
+	// Missing pieces drop out of the header instead of leaving a gap.
+	msg.Date = time.Time{}
+	if got, want := replyQuote(msg, ""), "\n\nAlice <alice@example.com> wrote:\n> hello"; !strings.HasPrefix(got, want) {
+		t.Fatalf("dateless replyQuote = %q, want the prefix %q", got, want)
+	}
+	msg.From = mail.Address{Email: "bob@example.com"}
+	if got, want := replyQuote(msg, ""), "\n\nbob@example.com wrote:\n> hello"; !strings.HasPrefix(got, want) {
+		t.Fatalf("nameless replyQuote = %q, want the prefix %q", got, want)
+	}
+}
+
+// TestReplyQuoteSelection pins what a selection replaces: the body only. A
+// selection without visible text falls back to the whole body, and a message
+// with no plain text has nothing to select in the first place.
+func TestReplyQuoteSelection(t *testing.T) {
+	useLanguage(t, "en")
+	msg := &mail.Message{
+		MessageSummary: mail.MessageSummary{
+			From: mail.Address{Name: "Alice", Email: "alice@example.com"},
+		},
+		TextBody: "one\ntwo\nthree",
+	}
+	header := replyHeader(msg)
+
+	for _, tc := range []struct {
+		name      string
+		selection string
+		want      string
+	}{
+		{"selected lines", "two\r\nthree\r\n\r\n", header + "\n> two\n> three"},
+		{"blank selection", " \n\t ", header + "\n> one\n> two\n> three"},
+		{"no selection", "", header + "\n> one\n> two\n> three"},
+	} {
+		if got := replyQuote(msg, tc.selection); got != "\n\n"+tc.want {
+			t.Errorf("%s: replyQuote = %q, want %q", tc.name, got, "\n\n"+tc.want)
+		}
+	}
+
+	// The reader selects its "no plain text" placeholder for an HTML-only
+	// message; that placeholder is not mail and must not be quoted.
+	html := &mail.Message{
+		MessageSummary: mail.MessageSummary{From: msg.From},
+		HTMLBody:       "<p>html</p>",
+	}
+	want := "\n\n" + replyHeader(html) + "\n" + quoteNoBody
+	if got := replyQuote(html, "some placeholder"); got != want {
+		t.Fatalf("html replyQuote = %q, want %q", got, want)
+	}
+}
+
+// TestForwardQuoteLayout pins the forwarded block: the same fixed English
+// header as the reply, with the body forwarded whole instead of quoted.
+func TestForwardQuoteLayout(t *testing.T) {
+	useLanguage(t, "en")
+	when := time.Date(2026, 3, 5, 8, 7, 0, 0, time.Local)
+	msg := &mail.Message{
+		MessageSummary: mail.MessageSummary{
+			From:    mail.Address{Name: "Alice", Email: "alice@example.com"},
+			Date:    when,
+			Subject: "Hello",
+		},
+		TextBody: "body\n",
+	}
+	want := "\n\n---------- Forwarded message ----------\n" +
+		"From: Alice <alice@example.com>\n" +
+		"Date: Thu, Mar 5, 2026 at 8:07 AM\n" +
+		"Subject: Hello\n\nbody\n"
+	if got := forwardQuote(msg); got != want {
+		t.Fatalf("forwardQuote = %q, want %q", got, want)
+	}
+	useLanguage(t, "zh-Hans")
+	if got := forwardQuote(msg); got != want {
+		t.Fatalf("zh forwardQuote = %q, want the English header %q", got, want)
+	}
+	i18n.SetLanguage("en")
+
+	// Lines the message cannot fill are left out rather than half written.
+	if got, want := forwardQuote(&mail.Message{}), "\n\n---------- Forwarded message ----------\n\n"+quoteNoBody; got != want {
+		t.Fatalf("empty forwardQuote = %q, want %q", got, want)
 	}
 }

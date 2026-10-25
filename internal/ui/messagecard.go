@@ -113,6 +113,16 @@ type messageCard struct {
 	selFor string
 }
 
+// selectedText returns the text selected in the body of this card's message, or
+// "" when nothing is selected. A selection belonging to another message is
+// ignored: the card drops it when it shows a different one.
+func (c *messageCard) selectedText() string {
+	if c == nil || c.sel == nil || c.selFor != c.id || c.sel.SelectionLen() == 0 {
+		return ""
+	}
+	return c.sel.SelectedText()
+}
+
 // bodySelection returns the Selectable for msg, dropping any selection left
 // over from the previous message shown in this card.
 func (c *messageCard) bodySelection(msg *mail.Message) *widget.Selectable {

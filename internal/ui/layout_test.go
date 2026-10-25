@@ -83,7 +83,7 @@ func TestLayoutFrames(t *testing.T) {
 	ops.Reset()
 
 	// All overlays must lay out without panicking.
-	a.overlay = newComposeView(a, composeNew, nil)
+	a.overlay = newComposeView(a, composeNew, nil, "")
 	a.layout(gtx)
 	ops.Reset()
 	a.overlay = newSettingsView(a)

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image"
+	"strings"
 	"testing"
 
 	"github.com/zhsj/yauzin/internal/i18n"
@@ -59,6 +60,73 @@ func TestReaderReplyUsesTheCurrentMessage(t *testing.T) {
 	}
 	if a.compose.msg == nil || a.compose.msg.Subject != "new subject" {
 		t.Fatalf("reply quoted %+v, want the refreshed message", a.compose.msg)
+	}
+}
+
+// TestReplyQuotesTheSelectedBody pins the selection rule at the card: the
+// composer quotes the fragment the reader selected, while forwarding keeps
+// quoting the whole message.
+func TestReplyQuotesTheSelectedBody(t *testing.T) {
+	a := testApp(t)
+	msg := &mail.Message{
+		MessageSummary: mail.MessageSummary{
+			ID:   "m1",
+			From: mail.Address{Name: "Bob", Email: "bob@example.com"},
+		},
+		TextBody: "first\nsecond\nthird",
+	}
+	a.msgs = []*mail.Message{msg}
+	card := a.reader.cardFor("m1")
+	card.actions(a)
+	sel := card.bodySelection(msg)
+	sel.SetText(msg.TextBody)
+	sel.SetCaret(6, 12) // "second"
+
+	card.reply.onTap()
+	if a.compose == nil {
+		t.Fatal("the reply button opened no composer")
+	}
+	got := a.compose.body.Text()
+	if want := replyQuote(msg, "second"); got != want {
+		t.Fatalf("reply body = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "> third") {
+		t.Fatalf("reply quoted text outside the selection: %q", got)
+	}
+
+	card.fwd.onTap()
+	if got, want := a.compose.body.Text(), forwardQuote(msg); got != want {
+		t.Fatalf("forward body = %q, want %q", got, want)
+	}
+}
+
+// TestReplyIgnoresAnotherMessagesSelection keeps a selection made in one
+// message out of a reply to another, and out of a card whose body was never
+// laid out.
+func TestReplyIgnoresAnotherMessagesSelection(t *testing.T) {
+	a := testApp(t)
+	older := &mail.Message{MessageSummary: mail.MessageSummary{ID: "m1"}, TextBody: "older text"}
+	newer := &mail.Message{
+		MessageSummary: mail.MessageSummary{ID: "m2", From: mail.Address{Email: "bob@example.com"}},
+		TextBody:       "newer text",
+	}
+	a.msgs = []*mail.Message{older, newer}
+
+	card := a.reader.cardFor("m1")
+	sel := card.bodySelection(older)
+	sel.SetText(older.TextBody)
+	sel.SetCaret(0, 5)
+
+	if got := a.reader.replySelection("m2"); got != "" {
+		t.Fatalf("replySelection(m2) = %q, want nothing from another message", got)
+	}
+	if got := a.reader.replySelection("m3"); got != "" {
+		t.Fatalf("replySelection(m3) = %q, want nothing from a card that does not exist", got)
+	}
+
+	a.openCompose(composeReply, newer)
+	if got, want := a.compose.body.Text(), replyQuote(newer, ""); got != want {
+		t.Fatalf("reply body = %q, want the whole message %q", got, want)
 	}
 }
 

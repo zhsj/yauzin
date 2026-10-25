@@ -317,5 +317,11 @@ func (a *App) showAccountMenu() {
 }
 
 func (a *App) openCompose(mode composeMode, msg *mail.Message) {
-	a.showOverlay(newComposeView(a, mode, msg))
+	// A reply quotes the part of the message the reader has selected, so the
+	// selection is read once here: the composer owns its text from then on.
+	selection := ""
+	if mode == composeReply && msg != nil {
+		selection = a.reader.replySelection(msg.ID)
+	}
+	a.showOverlay(newComposeView(a, mode, msg, selection))
 }

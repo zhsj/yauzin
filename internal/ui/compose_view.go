@@ -49,7 +49,7 @@ type composeView struct {
 	card widget.Clickable
 }
 
-func newComposeView(a *App, mode composeMode, msg *mail.Message) *composeView {
+func newComposeView(a *App, mode composeMode, msg *mail.Message, replySelection string) *composeView {
 	c := &composeView{app: a, mode: mode, msg: msg}
 
 	c.to.SingleLine = true
@@ -59,15 +59,11 @@ func newComposeView(a *App, mode composeMode, msg *mail.Message) *composeView {
 	if msg != nil && mode == composeReply {
 		c.to.SetText(msg.From.String())
 		c.subject.SetText(replySubject(msg.Subject))
-		c.body.SetText("\n\n" + i18n.T("compose.originalMessage") + "\n" + quotedBody(msg))
+		c.body.SetText(replyQuote(msg, replySelection))
 	}
 	if msg != nil && mode == composeForward {
 		c.subject.SetText(forwardSubject(msg.Subject))
-		c.body.SetText("\n\n" + i18n.T("compose.forwardHeader") + "\n" +
-			i18n.T("compose.from", map[string]string{"From": msg.From.String()}) + "\n" +
-			i18n.T("compose.date", map[string]string{"Date": formatFullTime(msg.Date)}) + "\n" +
-			i18n.T("compose.subjectLine", map[string]string{"Subject": msg.Subject}) + "\n\n" +
-			quotedBody(msg))
+		c.body.SetText(forwardQuote(msg))
 	}
 
 	c.attachBtn = newIconButton(iconAttach, 36, func() { a.pickAttachment(c) })

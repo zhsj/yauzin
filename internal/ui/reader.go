@@ -150,6 +150,12 @@ func (r *readerView) cardFor(id string) *messageCard {
 	return c
 }
 
+// replySelection returns the text selected in the body of the message with the
+// given ID, or "" when nothing is selected there or the card is not built.
+func (r *readerView) replySelection(id string) string {
+	return r.cards[id].selectedText()
+}
+
 // reset forgets the per-message state of the previous conversation, so the
 // caches cannot grow with every thread that was ever opened.
 func (r *readerView) reset() {
