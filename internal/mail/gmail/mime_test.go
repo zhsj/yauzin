@@ -94,17 +94,38 @@ func TestBodyBase64ToleratesPadding(t *testing.T) {
 	}
 }
 
-func TestBodyConvertsLatinOne(t *testing.T) {
-	svc := &Service{}
-	latin1 := []byte{0x63, 0x61, 0x66, 0xe9}
-	part := &MessagePart{
-		MIMEType: "text/plain",
-		Headers:  []*MessagePartHeader{{Name: "Content-Type", Value: `text/plain; charset="iso-8859-1"`}},
-		Body:     &MessagePartBody{Data: base64.RawURLEncoding.EncodeToString(latin1)},
+// TestBodyIgnoresTheDeclaredCharset pins the bytes Gmail hands back: they are
+// UTF-8 even when the part still says iso-8859-1 or windows-1252, as in a
+// latin-1 source whose quoted-printable "Gr=FC=DFe" arrives as UTF-8. Converting
+// by that label would read UTF-8 as latin-1 and render "GrÃ¼ÃŸe".
+func TestBodyIgnoresTheDeclaredCharset(t *testing.T) {
+	tests := []struct {
+		name        string
+		mimeType    string
+		contentType string
+		body        string
+	}{
+		{"latin1 label", "text/plain", `text/plain; charset="iso-8859-1"`, "Grüße aus München"},
+		{"unquoted latin1 label", "text/plain", `text/plain; charset=ISO-8859-1`, "Grüße aus Berlin"},
+		{"cp1252 label", "text/plain", `text/plain; charset="windows-1252"`, "Grüße – schöner Tag"},
+		{"html body", "text/html", `text/html; charset="iso-8859-1"`, "<p>Grüße aus Köln</p>"},
+		{"no content type", "text/plain", "", "Grüße"},
 	}
-	got := svc.message(&Message{ID: "m1", Payload: part})
-	if got.TextBody != "café" {
-		t.Fatalf("text body = %q, want café", got.TextBody)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			part := &MessagePart{MIMEType: tt.mimeType, Body: &MessagePartBody{Data: b64(tt.body)}}
+			if tt.contentType != "" {
+				part.Headers = []*MessagePartHeader{{Name: "Content-Type", Value: tt.contentType}}
+			}
+			got := (&Service{}).message(&Message{ID: "m1", Payload: part})
+			body := got.TextBody
+			if tt.mimeType == "text/html" {
+				body = got.HTMLBody
+			}
+			if body != tt.body {
+				t.Fatalf("body = %q, want %q", body, tt.body)
+			}
+		})
 	}
 }
 

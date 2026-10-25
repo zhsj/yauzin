@@ -2,12 +2,9 @@ package gmail
 
 import (
 	"encoding/base64"
-	"mime"
 	netmail "net/mail"
 	"strings"
 	"time"
-
-	"golang.org/x/text/encoding/charmap"
 
 	"github.com/zhsj/yauzin/internal/mail"
 )
@@ -60,12 +57,12 @@ func collectParts(p *MessagePart, out *mimeBodies) {
 	switch strings.ToLower(p.MIMEType) {
 	case "text/plain":
 		if out.text == "" {
-			out.text = decodeBody(p.Body, partHeader(p, "Content-Type"))
+			out.text = decodeBody(p.Body)
 		}
 		return
 	case "text/html":
 		if out.html == "" {
-			out.html = decodeBody(p.Body, partHeader(p, "Content-Type"))
+			out.html = decodeBody(p.Body)
 		}
 		return
 	}
@@ -85,26 +82,19 @@ func attachment(p *MessagePart) mail.Attachment {
 	return a
 }
 
-// decodeBody decodes a body part: Gmail already undid the transfer encoding,
-// so the data is base64url of the raw bytes, and only the charset is left to
-// convert.
-func decodeBody(b *MessagePartBody, contentType string) string {
+// decodeBody turns one part's body into text. Gmail has already undone the
+// transfer encoding and the charset conversion: the bytes it returns are UTF-8
+// even when the part declares charset=iso-8859-1 (a quoted-printable "Gr=FC=DFe"
+// arrives as the UTF-8 Grüße), while the Content-Type header keeps the original
+// label. Reading by that label would decode the UTF-8 bytes as latin-1 and turn
+// "Grüße" into "GrÃ¼ÃŸe", so the bytes are taken as they are.
+func decodeBody(b *MessagePartBody) string {
 	if b == nil || b.Data == "" {
 		return ""
 	}
 	raw, err := decodeBase64URL(b.Data)
 	if err != nil {
 		return ""
-	}
-	switch charsetOf(contentType) {
-	case "iso-8859-1", "latin1", "latin-1":
-		if converted, err := charmap.ISO8859_1.NewDecoder().Bytes(raw); err == nil {
-			return string(converted)
-		}
-	case "windows-1252", "cp1252":
-		if converted, err := charmap.Windows1252.NewDecoder().Bytes(raw); err == nil {
-			return string(converted)
-		}
 	}
 	return string(raw)
 }
@@ -115,28 +105,6 @@ func decodeBase64URL(data string) ([]byte, error) {
 		return raw, nil
 	}
 	return base64.URLEncoding.DecodeString(data)
-}
-
-// charsetOf returns the lower-cased charset parameter of a Content-Type value.
-func charsetOf(contentType string) string {
-	if contentType == "" {
-		return ""
-	}
-	_, params, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		return ""
-	}
-	return strings.ToLower(params["charset"])
-}
-
-// partHeader returns one header of a MIME part by case-insensitive name.
-func partHeader(p *MessagePart, name string) string {
-	for _, h := range p.Headers {
-		if strings.EqualFold(h.Name, name) {
-			return h.Value
-		}
-	}
-	return ""
 }
 
 // parseAddressList parses a header value, falling back to the raw text when it
