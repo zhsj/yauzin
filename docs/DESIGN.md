@@ -73,11 +73,11 @@
 - 列表请求按查询分流：`query` 非空走 `SearchThreads`，否则 `ListThreads`。两者共用同一个 `listGen` / `listCancel` / `tokens`，因此搜索、翻页、切文件夹互相取代；worker 启动前快照 `folder` 与 `query`，worker 内不读 `App` 字段。
 - **先检查再加载**：所有全量加载入口（首屏、窗口重建、切账号、工具栏刷新、代理/凭据变更后重建后端、新增或重登账号）都经 `reloadChecked` 或 `checkChanges` + 加载回调——`CheckChanges` 成功与否都继续加载，失败只记 DEBUG，真实的加载错误由加载自己报，界面因此离线也可用。检查阶段就开始转圈，所以手动刷新立刻有反馈。
 - **进程级轮询只维护托盘与通知**：`Run` 启动一次 1 分钟 ticker（`app_poll.go`），退出前停止，不随窗口开关起停。每次 tick 只做 `CheckChanges`（1 次 profile）；变化或尚无基线时才由 `internal/inboxwatch` 读取 `label:inbox is:unread`（`SearchThreads`，上限 3 条，threads.list + metadata batch）。轮询**不刷新侧栏、不刷新列表/阅读器**，也不取消用户请求；结果只更新托盘两态与未读快照。未读会话新建、未读数增加或同一会话最新 message 变化时，`internal/notify` 经 D-Bus 发桌面通知（最多 3 条单行截断主题 + 未读会话数）；首次读取只建基线，不因启动时已有未读而弹窗。窗口内容只在首屏、`attach`、手动刷新、切账号/账号变更与写操作后更新。
-- **通知显示时长与合并**：`notify` 显式传 `expire_timeout = 30s`，不交给服务端默认（Plasma 默认约 5 秒，装不下 3 条主题 + 未读数）；服务端仍可按应用设置覆盖。`replaces_id` 只在上一条通知**还在屏幕上**时才使用，服务端发来 `NotificationClosed` 清掉该 ID 后下一条就是新通知——Plasma 6.4 起替换一条已超时收进托盘的通知只更新托盘条目、不再弹气泡，且替换复用同一条历史条目，只有新建才会重新弹出并在历史里另起一条。
+- **通知显示时长与合并**：`notify` 显式传 `expire_timeout = 30s`，不交给服务端默认（Plasma 默认约 5 秒，装不下 3 条主题 + 未读数）；服务端仍可按应用设置覆盖。`replaces_id` 只在上一条通知**还在屏幕上**时才使用，服务端发来 `NotificationClosed` 清掉该 ID 后下一条就是新通知——Plasma 6.4 起替换一条已超时收进托盘的通知只更新托盘条目、不再弹气泡，且替换复用同一条历史条目，只有新建才会重新弹出并在历史里另起一条。hints 只带一项 `desktop-entry = me.zhsj.yauzin`（与 Gio application ID、单实例总线名同一字符串）：Plasma 按它把通知归到某个应用，查不到对应 `.desktop` 时弹窗照常显示，但通知不进历史、也不出现在「系统设置 → 通知 → 应用程序」；仓库目前不安装 `.desktop`，这条链路是否成立以实测为准。
 - **轮询与通知分层**：`internal/inboxwatch` 是纯 Go 的轮询状态机（未读快照、主题截断、通知文案），`internal/notify` 封装 Linux D-Bus 通知（`ActionInvoked` 点击回调、`NotificationClosed` 复位通知 ID）；`internal/ui` 只保留 ticker、`async` 超时/回投、托盘落地与点击后打开收件箱，三者都不反向依赖 UI。
 - **托盘期间的回投**：`post` 在没有窗口时也向容量 1 的 `wake` 投递，生命周期循环的 `waitForWindow` 在 `openCh` / `quitCh` 之外 select `wake` 并 `drain()`，于是 App 字段仍只有一个 goroutine 写。`wake` **只执行回调、不建窗**：建窗的唯一入口是 `requestOpen` → `openCh`（托盘打开、通知点击、单实例激活都走它），否则一次轮询或状态条过期的回投就会把用户刚关掉的窗口重新弹出来。应用内状态条在无窗口（只有托盘能让进程无窗口存活）时早退，避免重开窗口看到几分钟前的提示。
 - 列表只渲染可见行（`layout.List`），行内控件状态按会话 ID 缓存在视图结构里。
-- **已知限制**：`loading` 是单一布尔，侧栏阶段失败的清除可能让仍在跑的列表请求提前停止转圈（影响仅为观感，由「新请求取代旧请求」兜底）；托盘期间打开着的阅读器不随后台刷新更新正文（`openThread` 对同一会话直接早退）；轮询不再刷新窗口内容，新邮件需手动刷新、重开窗口或点击通知才出现；未读总数来自 Gmail 的 `resultSizeEstimate`（会话数估算），且只跟踪最新 3 条未读会话，同一 tick 内「读掉一封 + 新到一封」可能互相抵消；桌面通知仅 Linux（D-Bus），无通知服务或其它平台时静默降级；通知的应用名随界面语言变化，而 Plasma 按应用名保存按应用设置（含「在历史中显示」），切换语言后这些设置会落到另一个条目上，应用也无法覆盖服务端关掉的历史记录开关。
+- **已知限制**：`loading` 是单一布尔，侧栏阶段失败的清除可能让仍在跑的列表请求提前停止转圈（影响仅为观感，由「新请求取代旧请求」兜底）；托盘期间打开着的阅读器不随后台刷新更新正文（`openThread` 对同一会话直接早退）；轮询不再刷新窗口内容，新邮件需手动刷新、重开窗口或点击通知才出现；未读总数来自 Gmail 的 `resultSizeEstimate`（会话数估算），且只跟踪最新 3 条未读会话，同一 tick 内「读掉一封 + 新到一封」可能互相抵消；桌面通知仅 Linux（D-Bus），无通知服务或其它平台时静默降级；通知的应用名随界面语言变化，而 Plasma 按应用名保存按应用设置（含「在历史中显示」），切换语言后这些设置会落到另一个条目上，应用也无法覆盖服务端关掉的历史记录开关；`desktop-entry` 指向的 `me.zhsj.yauzin.desktop` 尚未随仓库安装，Plasma 解析不到时通知可能不进历史，且弹窗里的应用名可能退化成该 ID——实测仍不入历史时，下一步是提供 `packaging/me.zhsj.yauzin.desktop` 并装到 `~/.local/share/applications/`。
 
 ### 4.3 浮层
 
@@ -182,7 +182,7 @@
 - 语言列表由内嵌文件与各文件的 `language.name` 推导；`"auto"` 跟随系统 locale。
 - 运行时切换顺序敏感：`i18n.SetLanguage` → `prefs.Save` → 重建侧栏 / 清空阅读器卡片缓存 → 更新窗口标题 → `tray.Relabel` → 新状态条 → **最后**重建设置面板。
 - 系统文件夹名按 `FolderKind` 翻译，用户标签名与账号名不翻译。
-- 桌面通知文案同样走 i18n：应用名 `app.brand`、`notify.title`、`notify.count`（复数，按未读会话数）、`notify.open`；空主题复用 `list.noSubject`。通知在发送时取当前语言，切换语言后随即生效。应用名不固定成产品拉丁名：它同时是 Plasma 按应用分组的名字，翻译切换后按应用设置与历史分组随之落到新名字上（见 §4.2 已知限制）。
+- 桌面通知文案同样走 i18n：应用名 `app.brand`、`notify.title`、`notify.count`（复数，按未读会话数）、`notify.open`；空主题复用 `list.noSubject`。通知在发送时取当前语言，切换语言后随即生效。应用名不固定成产品拉丁名：它同时是 Plasma 按应用分组的名字，翻译切换后按应用设置与历史分组随之落到新名字上（见 §4.2 已知限制）。与之并列的 `desktop-entry` hint 是另一件事：它固定为应用 ID `me.zhsj.yauzin`，从不翻译。
 
 ## 10. 持久化
 

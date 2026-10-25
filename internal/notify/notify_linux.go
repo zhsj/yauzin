@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+
+	"github.com/zhsj/yauzin/internal/singleinstance"
 )
 
 const (
@@ -138,6 +140,17 @@ func (n *notifier) forget(id uint32) {
 	}
 }
 
+// notificationHints builds the hints sent with every notification. The only
+// one is desktop-entry, the desktop file id the notification server attributes
+// the notification to: an id it cannot resolve still shows the popup, but keeps
+// the notification out of the history and out of the per-application settings.
+// It is the Gio application id and the single-instance bus name as well.
+func notificationHints() map[string]dbus.Variant {
+	return map[string]dbus.Variant{
+		"desktop-entry": dbus.MakeVariant(singleinstance.Name),
+	}
+}
+
 // Show publishes the notification in the background.
 func (n *notifier) Show(notice Notice) {
 	go n.show(notice)
@@ -168,7 +181,7 @@ func (n *notifier) show(notice Notice) {
 		notice.Summary,
 		notice.Body,
 		actions,
-		map[string]dbus.Variant{},
+		notificationHints(),
 		int32(noticeTimeout/time.Millisecond),
 	).Store(&id)
 	if err != nil {

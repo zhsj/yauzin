@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/godbus/dbus/v5"
+
+	"github.com/zhsj/yauzin/internal/singleinstance"
 )
 
 // notificationSignal builds one signal of the notification interface.
@@ -103,5 +105,34 @@ func TestHandleSignalActivationAfterClose(t *testing.T) {
 	n.handleSignal(notificationSignal("NotificationClosed", uint32(4), uint32(1)))
 	if n.handleSignal(notificationSignal("ActionInvoked", uint32(4), actionKey)) {
 		t.Fatal("activation of a closed notification must be ignored")
+	}
+}
+
+// TestNotificationHints guards the hint the notification server needs to
+// attribute the notification to this application: its value has to stay the
+// desktop file id, which is the Gio application id as well.
+func TestNotificationHints(t *testing.T) {
+	hints := notificationHints()
+	if len(hints) != 1 {
+		t.Fatalf("hints = %v, want desktop-entry only", hints)
+	}
+	variant, ok := hints["desktop-entry"]
+	if !ok {
+		t.Fatal("desktop-entry hint is missing")
+	}
+	if sig := variant.Signature().String(); sig != "s" {
+		t.Fatalf("desktop-entry signature = %q, want %q", sig, "s")
+	}
+	value, ok := variant.Value().(string)
+	if !ok {
+		t.Fatalf("desktop-entry value = %T, want a string", variant.Value())
+	}
+	if value != singleinstance.Name {
+		t.Fatalf("desktop-entry = %q, want %q", value, singleinstance.Name)
+	}
+
+	hints["other"] = dbus.MakeVariant("x")
+	if _, ok := notificationHints()["other"]; ok {
+		t.Fatal("notificationHints must hand out a fresh map")
 	}
 }
