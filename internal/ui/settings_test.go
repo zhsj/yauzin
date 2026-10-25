@@ -100,7 +100,11 @@ func accountDetailsOf(t *testing.T, s *settingsView, title string) *accountDetai
 	if row.details == nil {
 		t.Fatalf("the account %q is collapsed", title)
 	}
-	return row.details
+	details, ok := row.details.(*accountDetails)
+	if !ok {
+		t.Fatalf("the account %q expanded into %T, want *accountDetails", title, row.details)
+	}
+	return details
 }
 
 // TestSettingsAccountRowExpands covers the accordion: a stored Gmail account

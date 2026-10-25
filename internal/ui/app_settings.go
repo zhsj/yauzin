@@ -208,6 +208,27 @@ func (a *App) swapService(acc mail.Account) {
 	}
 }
 
+// removeSMTPEntry deletes one sending account. Nothing else holds a copy: no
+// backend reads through it, and a draft that picked it as sender fails at send
+// time like any other missing server.
+func (a *App) removeSMTPEntry(entry accounts.Entry) {
+	if a.accountStore != nil {
+		if err := a.accountStore.Remove(entry.ID); err != nil && !errors.Is(err, accounts.ErrNotExist) {
+			logErr("remove sending account", err)
+			a.notify(i18n.T("toast.smtpRemoveFailed"), true)
+			return
+		}
+	}
+	name := entry.Name
+	if name == "" {
+		name = entry.Email
+	}
+	a.notify(i18n.T("toast.smtpRemoved", map[string]string{"Name": name}), false)
+	// Reopen the panel on the same page: the deleted row has to disappear
+	// without the user leaving and reopening the settings.
+	a.showSettingsPage(settingsTabAccounts)
+}
+
 // removeAccount deletes an account and its stored token, then drops it from the
 // running app. Removing the active account leaves the mailbox empty instead of
 // picking another one: the next mailbox is the user's choice in the account

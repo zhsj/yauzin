@@ -382,6 +382,164 @@ func (d *smtpDialog) content(gtx layout.Context, th *theme) layout.Dimensions {
 	})
 }
 
+// buildSMTPRows lists the sending accounts for the accounts page. They are not
+// mailboxes, so they get their own group instead of joining the account
+// accordion, and the add row at the end opens the same form the wizard does.
+func (s *settingsView) buildSMTPRows(a *App) {
+	s.smtpRows = nil
+	if a.accountStore != nil {
+		for _, entry := range a.accountStore.SMTPEntries() {
+			item := entry
+			open := s.expanded == item.ID
+			row := &settingsRow{
+				icon:      glyphSend,
+				title:     smtpEntryName(item),
+				subtitle:  smtpEntrySummary(item),
+				valueIcon: glyphExpandMore,
+			}
+			if open {
+				row.valueIcon = glyphExpandLess
+				row.details = newSMTPDetails(a, s, item)
+			}
+			row.onTap = func() {
+				s.confirmDelete = ""
+				if s.expanded == item.ID {
+					s.expanded = ""
+				} else {
+					s.expanded = item.ID
+				}
+				s.buildSMTPRows(a)
+			}
+			s.smtpRows = append(s.smtpRows, row)
+		}
+	}
+	s.smtpRows = append(s.smtpRows, &settingsRow{
+		icon:  glyphPlus,
+		title: i18n.T("settings.smtpAddRow"),
+		onTap: func() { a.showOverlay(newSMTPDialog(a, nil)) },
+	})
+}
+
+// smtpEntryName is what a sending account is called in the list: the display
+// name when it has one, the address otherwise.
+func smtpEntryName(entry accounts.Entry) string {
+	if entry.Name != "" {
+		return entry.Name
+	}
+	return entry.Email
+}
+
+// smtpEntrySummary says which server the account goes through, in one line.
+func smtpEntrySummary(entry accounts.Entry) string {
+	if entry.SMTP == nil {
+		return ""
+	}
+	cfg := entry.SMTP
+	summary := i18n.T("settings.smtpServer", map[string]string{
+		"Host": cfg.Host,
+		"Port": strconv.Itoa(cfg.Port),
+	})
+	if label := securityLabel(cfg.Security); label != "" {
+		summary += " · " + label
+	}
+	if entry.UseProxy {
+		summary += " · " + i18n.T("settings.accountUseProxy")
+	}
+	return summary
+}
+
+// smtpAccountDetails is the expandable block of one sending account: the
+// server it goes through and the two actions. It mirrors accountDetails, which
+// cannot be reused because a sending account has neither a proxy switch of its
+// own nor a sign-in to repeat.
+type smtpAccountDetails struct {
+	entry   accounts.Entry
+	edit    *outlineButton
+	remove  *outlineButton
+	cancel  *outlineButton
+	confirm *outlineButton
+	armed   bool
+}
+
+func newSMTPDetails(a *App, s *settingsView, entry accounts.Entry) *smtpAccountDetails {
+	d := &smtpAccountDetails{
+		entry: entry,
+		edit: newOutlineButton(i18n.T("settings.smtpEdit"), func() {
+			item := entry
+			a.showOverlay(newSMTPDialog(a, &item))
+		}),
+		remove:  newOutlineButton(i18n.T("settings.accountDelete"), nil),
+		cancel:  newOutlineButton(i18n.T("settings.cancel"), nil),
+		confirm: newOutlineButton(i18n.T("settings.accountDeleteConfirm"), func() { a.removeSMTPEntry(entry) }),
+		armed:   s.confirmDelete == entry.ID,
+	}
+	d.remove.danger = true
+	d.confirm.danger = true
+	// The armed state belongs to the panel, not to the block: the links rebuild
+	// the rows so the visible block and the stored state never disagree.
+	d.remove.onTap = func() {
+		s.confirmDelete = entry.ID
+		s.buildSMTPRows(a)
+	}
+	d.cancel.onTap = func() {
+		s.confirmDelete = ""
+		s.buildSMTPRows(a)
+	}
+	return d
+}
+
+func (d *smtpAccountDetails) Layout(gtx layout.Context, th *theme) layout.Dimensions {
+	return tintedBlock(gtx, func(gtx layout.Context) layout.Dimensions {
+		return column(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Left: 16, Right: 12, Top: 10, Bottom: 6}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return th.wrappedText(gtx, smtpDetailsText(d.entry), 12, colMuted, font.Normal)
+				})
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.actions(gtx, th) }),
+		)
+	})
+}
+
+// smtpDetailsText spells out what the one-line summary leaves out.
+func smtpDetailsText(entry accounts.Entry) string {
+	if entry.SMTP == nil {
+		return entry.Email
+	}
+	cfg := entry.SMTP
+	text := smtpEntrySummary(entry)
+	if cfg.Username != "" {
+		text += " · " + cfg.Username
+	}
+	if cfg.BccToAccount {
+		text += " · " + i18n.T("settings.smtpBccTitle")
+	}
+	return text
+}
+
+// actions is the second line of the sub-card: the edit and delete links, or the
+// delete confirmation that replaces them in place.
+func (d *smtpAccountDetails) actions(gtx layout.Context, th *theme) layout.Dimensions {
+	return layout.Inset{Left: 16, Right: 12, Bottom: 10}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if d.armed {
+			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					return th.text(gtx, i18n.T("settings.smtpDeletePrompt"), 12, colDanger, font.Normal, 1)
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.cancel.Layout(gtx, th) }),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.confirm.Layout(gtx, th) }),
+			)
+		}
+		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle, Spacing: layout.SpaceStart}.Layout(gtx,
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions { return layout.Dimensions{} }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.edit.Layout(gtx, th) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.remove.Layout(gtx, th) }),
+		)
+	})
+}
+
 // labelledField is one labelled editor box, shared by the sign-in and SMTP
 // forms so the two dialogs look the same.
 func labelledField(th *theme, label string, ed *widget.Editor, box *widget.Clickable, hint string) layout.Widget {

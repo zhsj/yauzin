@@ -44,6 +44,9 @@ type settingsView struct {
 	logOpen  bool
 	perfRows []*settingsRow
 	accRows  []*settingsRow
+	// smtpRows are the sending accounts: they have no mailbox, so they get a
+	// group of their own instead of joining the account accordion.
+	smtpRows []*settingsRow
 	// expanded is the account whose details are open: the accounts page is an
 	// accordion, so at most one account is expanded at a time. confirmDelete
 	// names the account whose delete row a first click has armed.
@@ -101,7 +104,7 @@ type settingsRow struct {
 	// details is the expandable block drawn under the row inside the same
 	// card item, so the account and its options read as one entry instead of
 	// a stack of sibling rows.
-	details *accountDetails
+	details rowDetails
 	// syncState runs at the start of every layout and mirrors the state the
 	// row displays from the place that owns it (the store, the app), so a
 	// failed write or an outside change shows up on the next frame instead of
@@ -130,6 +133,13 @@ func logLevelLabel(name string) string {
 		}
 	}
 	return i18n.T("settings.logLevelInfo")
+}
+
+// rowDetails is the block a row expands into. The account rows and the sending
+// account rows draw different content through the same slot, so the card and
+// the accordion stay unaware of what is inside.
+type rowDetails interface {
+	Layout(layout.Context, *theme) layout.Dimensions
 }
 
 // accountDetails is the expandable block of one account. It is painted on a
@@ -173,20 +183,27 @@ func newAccountDetails(a *App, s *settingsView, acc mail.Account) *accountDetail
 }
 
 func (d *accountDetails) Layout(gtx layout.Context, th *theme) layout.Dimensions {
+	return tintedBlock(gtx, func(gtx layout.Context) layout.Dimensions {
+		return d.content(gtx, th)
+	})
+}
+
+// tintedBlock paints content on the recessed sub-card of an expanded row. It
+// measures the content first: a hint may wrap, and the tint has to cover
+// exactly what the content took.
+func tintedBlock(gtx layout.Context, content func(layout.Context) layout.Dimensions) layout.Dimensions {
 	return layout.Inset{Left: 12, Right: 12, Bottom: 12}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		w := gtx.Constraints.Max.X
 		if w <= 0 {
 			w = gtx.Constraints.Min.X
 		}
-		// Measure first: the proxy hint may wrap, and the tint has to cover
-		// exactly what the content took.
 		measure := gtx
 		measure.Constraints = layout.Constraints{Max: image.Pt(w, 1<<16)}
 		macro := op.Record(gtx.Ops)
-		content := d.content(measure, th)
+		measured := content(measure)
 		call := macro.Stop()
 
-		size := image.Pt(w, content.Size.Y)
+		size := image.Pt(w, measured.Size.Y)
 		gtx.Constraints = layout.Exact(size)
 		rr := clip.RRect{Rect: image.Rectangle{Max: size}, NW: 8, NE: 8, SE: 8, SW: 8}
 		area := rr.Push(gtx.Ops)
@@ -378,6 +395,7 @@ func newSettingsView(a *App) *settingsView {
 	})
 
 	s.buildAccountRows(a)
+	s.buildSMTPRows(a)
 	return s
 }
 
@@ -581,6 +599,11 @@ func (s *settingsView) pageContent(gtx layout.Context) layout.Dimensions {
 		children = append(children,
 			layout.Rigid(sectionHeading(th, i18n.T("settings.accounts"))),
 			layout.Rigid(settingsCard(rowWidgets(s.accRows, th))),
+			// Sending accounts are not mailboxes: they get their own group so
+			// the account accordion stays about what can be read.
+			layout.Rigid(sectionHeading(th, i18n.T("settings.sendAccounts"))),
+			layout.Rigid(sectionHint(th, i18n.T("settings.sendAccountsHint"))),
+			layout.Rigid(settingsCard(rowWidgets(s.smtpRows, th))),
 			layout.Rigid(pageBottom),
 		)
 	}

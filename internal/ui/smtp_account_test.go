@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/zhsj/yauzin/internal/accounts"
@@ -201,6 +202,69 @@ func TestSMTPDialogKeepProxySwitchHonest(t *testing.T) {
 	}
 	if entry.UseProxy {
 		t.Fatal("an entry without a proxy was stored with the switch on")
+	}
+}
+
+// TestSettingsSendingAccountRows covers the group on the accounts page: one row
+// per stored server, an expandable block with the actions, and the add row that
+// opens the form.
+func TestSettingsSendingAccountRows(t *testing.T) {
+	a, store := smtpTestApp(t)
+	entry := accounts.Entry{
+		ID:    "smtp:me@example.com",
+		Kind:  mail.KindSMTP,
+		Email: "me@example.com",
+		Name:  "Sender",
+		SMTP: &accounts.SMTPConfig{
+			Host:         "smtp.example.com",
+			Port:         465,
+			Username:     "me",
+			Security:     "tls",
+			BccToAccount: true,
+		},
+	}
+	if err := store.Upsert(entry); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+
+	s := newSettingsView(a)
+	if len(s.smtpRows) != 2 {
+		t.Fatalf("rows = %d, want the sending account and the add row", len(s.smtpRows))
+	}
+	row := s.smtpRows[0]
+	if row.title != "Sender" {
+		t.Fatalf("title = %q, want the display name", row.title)
+	}
+	if !strings.Contains(row.subtitle, "smtp.example.com:465") || !strings.Contains(row.subtitle, "TLS") {
+		t.Fatalf("subtitle = %q, want the server and its encryption", row.subtitle)
+	}
+	if row.details != nil {
+		t.Fatal("the row starts expanded")
+	}
+
+	s.smtpRows[0].onTap()
+	details, ok := s.smtpRows[0].details.(*smtpAccountDetails)
+	if !ok {
+		t.Fatalf("expanded into %T, want *smtpAccountDetails", s.smtpRows[0].details)
+	}
+	if details.armed {
+		t.Fatal("delete is armed before the first click")
+	}
+	details.remove.onTap()
+	details, ok = s.smtpRows[0].details.(*smtpAccountDetails)
+	if !ok || !details.armed {
+		t.Fatal("delete was not armed by the first click")
+	}
+
+	details.confirm.onTap()
+	if got := store.SMTPEntries(); len(got) != 0 {
+		t.Fatalf("store still holds %+v", got)
+	}
+
+	add := s.smtpRows[len(s.smtpRows)-1]
+	add.onTap()
+	if _, ok := a.overlay.(*smtpDialog); !ok {
+		t.Fatalf("overlay = %T, want the sending account form", a.overlay)
 	}
 }
 
