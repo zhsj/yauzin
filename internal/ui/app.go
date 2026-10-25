@@ -180,6 +180,11 @@ type App struct {
 	startOnce sync.Once
 	loaded    bool
 
+	// check is the bookkeeping of the mailbox check and checkCooldown bounds
+	// how long an automatic refresh trusts its last answer. See app_check.go.
+	check         checkState
+	checkCooldown time.Duration
+
 	// openCh and quitCh wake the lifecycle loop while no window is open. Both
 	// are buffered so tray callbacks never block.
 	openCh   chan struct{}
@@ -385,25 +390,26 @@ func restoredAccount(id string, accounts []mail.Account, services map[string]mai
 func newAppWith(pref prefs.Settings, opts appOptions) *App {
 	opts = opts.withDefaults()
 	a := &App{
-		th:           newTheme(loadFonts()),
-		services:     map[string]mail.Service{},
-		accounts:     opts.accounts,
-		accountStore: opts.store,
-		newService:   opts.newService,
-		proxy:        opts.proxy,
-		factory:      opts.factory,
-		logLevel:     logging.Normalize(pref.LogLevel),
-		saveSettings: opts.saveSettings,
-		page:         1,
-		tokens:       []string{""},
-		expanded:     map[string]bool{},
-		decorated:    true,
-		csd:          pref.ClientDecorations,
-		status:       &statusBar{},
-		cursorThread: -1,
-		openCh:       make(chan struct{}, 1),
-		quitCh:       make(chan struct{}, 1),
-		wake:         make(chan struct{}, 1),
+		th:            newTheme(loadFonts()),
+		services:      map[string]mail.Service{},
+		accounts:      opts.accounts,
+		accountStore:  opts.store,
+		newService:    opts.newService,
+		proxy:         opts.proxy,
+		factory:       opts.factory,
+		logLevel:      logging.Normalize(pref.LogLevel),
+		saveSettings:  opts.saveSettings,
+		checkCooldown: defaultCheckCooldown,
+		page:          1,
+		tokens:        []string{""},
+		expanded:      map[string]bool{},
+		decorated:     true,
+		csd:           pref.ClientDecorations,
+		status:        &statusBar{},
+		cursorThread:  -1,
+		openCh:        make(chan struct{}, 1),
+		quitCh:        make(chan struct{}, 1),
+		wake:          make(chan struct{}, 1),
 	}
 
 	for _, acc := range a.accounts {
@@ -437,11 +443,16 @@ func newAppWith(pref prefs.Settings, opts appOptions) *App {
 // which used to leave the mail list empty until the next pointer event.
 func (a *App) startInitialLoad() {
 	a.startOnce.Do(func() {
-		a.reloadChecked()
-		// The baseline makes the first change notify about the new mail only,
-		// instead of treating everything unread at startup as new.
-		a.pollInboxUnread()
 		a.loaded = true
+		if a.service() == nil {
+			return
+		}
+		// Two intents, one check: the reload redraws the window and the poll
+		// seeds the tray baseline. The second intent joins the check the first
+		// one started, so startup still costs one users.getProfile.
+		a.toolbar.setLoading(true)
+		a.reloadChecked()
+		a.pollInboxUnread()
 	})
 }
 

@@ -75,15 +75,16 @@ func (w *Watcher) Reset(accountID string) {
 	w.marks = nil
 }
 
-// Poll reads the unread conversations of the account when the mailbox moved,
-// or when the watcher has no baseline yet. A nil service is a no-op.
-func (w *Watcher) Poll(ctx context.Context, accountID string, svc mail.Service) (Outcome, error) {
+// Poll reads the unread conversations of the account when the mailbox moved or
+// when the watcher has no baseline yet. A nil service is a no-op.
+//
+// changed is the answer of the caller's change check. Detecting the change is
+// deliberately not this package's job: the UI runs every check through one
+// single-flight channel, and a check here would be a second path that no
+// cooldown can see.
+func (w *Watcher) Poll(ctx context.Context, accountID string, svc mail.Service, changed bool) (Outcome, error) {
 	if svc == nil {
 		return Outcome{}, nil
-	}
-	changed, err := svc.CheckChanges(ctx)
-	if err != nil {
-		return Outcome{}, err
 	}
 	if !changed && w.knownFor(accountID) {
 		return Outcome{}, nil

@@ -66,7 +66,7 @@ func newListToolbar(a *App) *listToolbar {
 		}
 		a.list.clearSelection()
 	})
-	t.refresh = newListIcon(iconRefresh, 32, a.reloadChecked)
+	t.refresh = newListIcon(iconRefresh, 32, a.reloadCheckedNow)
 	// Refreshing has its own button just left of this one, so the menu only
 	// carries the actions that have no toolbar glyph.
 	t.more = newListIcon(iconMoreVert, 32, func() {

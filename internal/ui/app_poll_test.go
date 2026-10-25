@@ -80,7 +80,8 @@ func TestSwitchAccountChecksFirst(t *testing.T) {
 
 // TestPollIgnoresAnUnchangedMailbox keeps a quiet mailbox from costing anything
 // beyond the check itself. The first poll builds the baseline, which needs one
-// search even when the mailbox reports no change.
+// search even when the mailbox reports no change; the next tick inside the
+// cooldown reuses that answer instead of checking again.
 func TestPollIgnoresAnUnchangedMailbox(t *testing.T) {
 	a := testApp(t)
 	a.tray = &tray.Tray{}
@@ -89,13 +90,66 @@ func TestPollIgnoresAnUnchangedMailbox(t *testing.T) {
 
 	a.pollChanges()
 	waitFor(t, a, "the baseline", func() bool { return svc.countCalls("search") == 1 })
-	before := len(svc.callLog())
 
 	a.pollChanges()
-	waitFor(t, a, "the quiet check", func() bool { return svc.countCalls("check") == 2 })
+	a.drain()
 
-	if got := svc.callLog(); len(got) != before+1 {
-		t.Fatalf("calls = %v, want only one more check", got)
+	if got := svc.countCalls("check"); got != 1 {
+		t.Fatalf("checks = %d, want the recent answer reused", got)
+	}
+	if got := svc.countCalls("search"); got != 1 {
+		t.Fatalf("searches = %d, want the baseline only", got)
+	}
+}
+
+// TestPollJoinsTheCheckInFlight keeps the tray read from being lost when a
+// reload's check is already running: the two intents share the request but both
+// continuations run.
+func TestPollJoinsTheCheckInFlight(t *testing.T) {
+	a := testApp(t)
+	a.tray = &tray.Tray{}
+	gate := make(chan struct{})
+	svc := &fakeService{checkGate: gate}
+	useService(a, svc)
+
+	a.reloadChecked()
+	waitFor(t, a, "the check in flight", func() bool { return svc.countCalls("check") == 1 })
+
+	a.pollChanges()
+	close(gate)
+	waitFor(t, a, "the reload and the tray baseline", func() bool {
+		return svc.countCalls("list") == 1 && svc.countCalls("search") == 1
+	})
+
+	if got := svc.countCalls("check"); got != 1 {
+		t.Fatalf("checks = %d, want the in-flight one shared", got)
+	}
+	if got := svc.countCalls("list"); got != 1 {
+		t.Fatalf("threads loads = %d, want the reload to run too", got)
+	}
+}
+
+// TestRepeatedPollsShareOneCheck is the regression for the check storm: a burst
+// of poll intents used to send one users.getProfile each, because the poll
+// checked the mailbox itself instead of joining the single-flight channel.
+func TestRepeatedPollsShareOneCheck(t *testing.T) {
+	a := testApp(t)
+	a.tray = &tray.Tray{}
+	gate := make(chan struct{})
+	svc := &fakeService{checkGate: gate}
+	useService(a, svc)
+
+	for i := 0; i < 50; i++ {
+		a.pollChanges()
+	}
+	close(gate)
+	waitFor(t, a, "the tray baseline", func() bool { return svc.countCalls("search") == 1 })
+
+	if got := svc.countCalls("check"); got != 1 {
+		t.Fatalf("checks = %d, want one shared check", got)
+	}
+	if got := svc.countCalls("search"); got != 1 {
+		t.Fatalf("searches = %d, want one baseline read", got)
 	}
 }
 
@@ -137,6 +191,9 @@ func TestPollOnlyRefreshesTheTray(t *testing.T) {
 // one notification.
 func TestPollNotifiesANewConversation(t *testing.T) {
 	a := testApp(t)
+	// The test polls twice in a row, so it must not hide behind the cooldown an
+	// automatic tick honours.
+	a.checkCooldown = 0
 	a.tray = &tray.Tray{}
 	notifier := &fakeNotifier{}
 	a.notifier = notifier

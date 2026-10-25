@@ -21,9 +21,18 @@ type fakeService struct {
 
 	// checkChanged and checkErr answer CheckChanges; calls records the order of
 	// the backend calls the UI made, so a test can pin "check before load".
+	// checkGate, when set, holds the check until the test closes it, which is
+	// how a test observes a check that is still in flight.
 	checkChanged bool
 	checkErr     error
+	checkGate    chan struct{}
 	calls        []string
+
+	// foldersGate, when set, holds Folders until the test closes it.
+	// foldersCancelled counts the sidebar loads their context cut short, so a
+	// test can pin that a superseded refresh left the request alone.
+	foldersGate      chan struct{}
+	foldersCancelled int
 
 	// searchPage and searchErr answer the inbox poll's SearchThreads;
 	// searchCalls keeps the requests so a test can pin the query and limit.
@@ -67,12 +76,32 @@ type setFlagCall struct {
 	on   bool
 }
 
-func (f *fakeService) Folders(_ context.Context) ([]mail.Folder, error) {
+func (f *fakeService) Folders(ctx context.Context) ([]mail.Folder, error) {
 	f.record("folders")
-	if f.foldersErr != nil {
-		return nil, f.foldersErr
+	f.mu.Lock()
+	gate, err := f.foldersGate, f.foldersErr
+	f.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			f.mu.Lock()
+			f.foldersCancelled++
+			f.mu.Unlock()
+			return nil, ctx.Err()
+		}
+	}
+	if err != nil {
+		return nil, err
 	}
 	return []mail.Folder{{ID: "inbox", Kind: mail.FolderInbox}}, nil
+}
+
+// cancelledFolders returns how many sidebar loads were cancelled.
+func (f *fakeService) cancelledFolders() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.foldersCancelled
 }
 
 func (f *fakeService) FolderDetails(_ context.Context, folders []mail.Folder) ([]mail.Folder, error) {
@@ -85,11 +114,18 @@ func (f *fakeService) FolderDetails(_ context.Context, folders []mail.Folder) ([
 
 // CheckChanges answers what the test configured. The demo data of this fake
 // never moves on its own, so an unconfigured fake reports no change.
-func (f *fakeService) CheckChanges(context.Context) (bool, error) {
+func (f *fakeService) CheckChanges(ctx context.Context) (bool, error) {
 	f.record("check")
 	f.mu.Lock()
-	changed, err := f.checkChanged, f.checkErr
+	changed, err, gate := f.checkChanged, f.checkErr, f.checkGate
 	f.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
 	return changed, err
 }
 

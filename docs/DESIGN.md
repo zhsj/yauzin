@@ -29,7 +29,7 @@
 - **游标分页**：`ListThreads(ctx, ListRequest{FolderID, PageToken, Limit})` 浏览单个文件夹，`SearchThreads(ctx, SearchRequest{Query, PageToken, Limit})` 跨全部文件夹搜索；两者的 `FolderID` / `Query` 都是必填，空值返回 `ErrInvalidArgument`。`ThreadPage{Threads, Total, NextPageToken}`，`NextPageToken` 为空表示最后一页，`Total` 为负表示后端无法估算。UI 只在 `tokens []string` 里压栈游标，不向下传页码。
 - **搜索是独立的读路径**：query 原样交给后端（Gmail 支持 `from:` / `subject:` / `has:attachment` 等原生语法），不带 folder 过滤；Gmail 的 `includeSpamTrash` 取默认 false，因此天然排除垃圾邮件与垃圾箱，与 mock 的 `matchFolder("")` 语义一致。`Total` 取后端估算，无法估算时为 -1。
 - **读取缓存**：gmail 后端对 `Folders` / `FolderDetails` / `ListThreads` / `SearchThreads` 各做一份无过期 LRU（容量 4 / 4 / 64 / 32；键为固定键、标签 ID 集合、`(labelID, pageToken, limit)`、`(query, pageToken, limit)`），命中返回深拷贝，检查发现变化时整体清空。列表与搜索的缓存分开，互不挤占。
-- **缓存失效由检查驱动**：`CheckChanges(ctx) (bool, error)` 请求一次 `users.getProfile?fields=historyId` 与上次基线比较；首次调用只记基线、清掉之前缓存并返回 false，值不相等（回退也算）则清空该账号全部读缓存并返回 true。检查在途时**缓存缺失**的读取先等检查结束（尊重 ctx），命中则立即返回；每个 LRU 自带纪元，读取发出请求前取纪元、写回走 `setAt`，期间发生 clear（检查）就丢弃结果。全量加载入口统一「先检查再加载」（`reloadChecked`），因此基线总先于它所描述的数据。
+- **缓存失效由检查驱动**：`CheckChanges(ctx) (bool, error)` 请求一次 `users.getProfile?fields=historyId` 与上次基线比较；首次调用只记基线、清掉之前缓存并返回 false，值不相等（回退也算）则清空该账号全部读缓存并返回 true。检查在途时**缓存缺失**的读取先等检查结束（尊重 ctx），命中则立即返回；每个 LRU 自带纪元，读取发出请求前取纪元、写回走 `setAt`，期间发生 clear（检查）就丢弃结果。全量加载入口统一「先检查再加载」（`reloadChecked`），因此基线总先于它所描述的数据；轮询与界面刷新共用 UI 层同一条检查通道（见 §4.2），`internal/inboxwatch` 只接收结论、不再自查。
 - **错误是分类不是句子**：`ErrNotFound` / `ErrUnsupported` / `ErrInvalidArgument` / `ErrUnauthorized` 由 `internal/ui/errors.go` 用 `errors.Is` 映射到 i18n 键，未知错误才回退 `err.Error()`。`ErrUnauthorized` 只表示「账号需要重新授权」，不让传输层文案冒充原因。
 - **能力边界按方法表达**：只读后端（当前 Gmail）对 `SetFlag` / `Archive` / `Delete` / `Send` / `SaveAttachment` 统一返回 `ErrUnsupported`，UI 保留原入口并由既有错误映射提示「当前账号不支持该操作」；`RawMessage` 属于读操作，只读账号照常实现。打开未读会话触发的自动已读在只读后端上静默回滚徽标，不打断阅读。
 - 实现必须并发安全并尊重 `ctx`（UI 从多个 goroutine 并发调用、不串行化）。mock 的延迟存在的意义就是暴露加载态与竞态。
@@ -66,15 +66,16 @@
 ### 4.2 并发模型
 
 - 所有 `mail.Service` 调用在 goroutine + `context.WithTimeout` 中执行；结果只通过 `App.post(fn)` 进入**单一队列**，由 UI goroutine 在每帧开头 `drain()`。goroutine 内禁止改 UI 状态。
-- 所有 Service 调用走 `App.async`：它持有超时、`post` 回投与错误提示。需要被替代的请求（列表/文件夹/会话）把 `cancel` 存在 `App` 字段里，下一次同类请求先 cancel 旧请求，窗口销毁时 `cancelRequests` 全部停止。
+- 所有 Service 调用走 `App.async`：它持有超时、`post` 回投与错误提示。需要被替代的请求（列表/会话）把 `cancel` 存在 `App` 字段里，下一次同类请求先 cancel 旧请求，窗口销毁时 `cancelRequests` 全部停止。文件夹请求不在此列：新加载不取消在途的那一次，迟到的结果由 `folderGen` 丢弃——抢先取消会让下一次刷新杀掉「检查发现变化」刚发起的侧栏加载，导致 changed 结论落不了地。
 - 三阶段加载由 `onSuccess` 链式编排：`loadFolderNames` 成功后在其回调里发起 `loadThreadsKeepingScroll`，列表就绪后再发起 `loadFolderDetails`。每次调用各走一次 `async`，结果经 `post` 回投并套用同一代际/账号校验，迟到结果直接丢弃。列表在 detail 到达前保持加载态，页数据到达后一次性 `setThreads`（切页/切换，回顶）或 `mergeThreads`（同页刷新，保留滚动与仍存在的勾选）；成功回调只收尾页码/工具栏，不再重设行数据。
 - 过期响应靠**代际号**丢弃：`listGen`（列表/分页）、`folderGen`（文件夹未读数）、`msgGen`（阅读器）；回调里同时校验 `activeAcc`、页码或会话 ID。`context.Canceled` 是预期结果，不弹错误提示。
 - 切账号 / 切文件夹 / 搜索时先清空视图（`App.clearList` 清 `setThreads(nil)` 并抹掉工具栏范围文案，`resetSelection` 关阅读器）再发起加载，避免旧行、旧标签色块与旧页码闪现。
 - 列表请求按查询分流：`query` 非空走 `SearchThreads`，否则 `ListThreads`。两者共用同一个 `listGen` / `listCancel` / `tokens`，因此搜索、翻页、切文件夹互相取代；worker 启动前快照 `folder` 与 `query`，worker 内不读 `App` 字段。
-- **先检查再加载**：所有全量加载入口（首屏、窗口重建、切账号、工具栏刷新、代理/凭据变更后重建后端、新增或重登账号）都经 `reloadChecked` 或 `checkChanges` + 加载回调——`CheckChanges` 成功与否都继续加载，失败只记 DEBUG，真实的加载错误由加载自己报，界面因此离线也可用。检查阶段就开始转圈，所以手动刷新立刻有反馈。
-- **进程级轮询只维护托盘与通知**：`Run` 启动一次 1 分钟 ticker（`app_poll.go`），退出前停止，不随窗口开关起停。每次 tick 只做 `CheckChanges`（1 次 profile）；变化或尚无基线时才由 `internal/inboxwatch` 读取 `label:inbox is:unread`（`SearchThreads`，上限 3 条，threads.list + metadata batch）。轮询**不刷新侧栏、不刷新列表/阅读器**，也不取消用户请求；结果只更新托盘两态与未读快照。未读会话新建、未读数增加或同一会话最新 message 变化时，`internal/notify` 经 D-Bus 发桌面通知（最多 3 条单行截断主题 + 未读会话数）；首次读取只建基线，不因启动时已有未读而弹窗。窗口内容只在首屏、`attach`、手动刷新、切账号/账号变更与写操作后更新。
+- **先检查再加载**：所有全量加载入口（首屏、窗口重建、切账号、工具栏刷新、代理/凭据变更后重建后端、新增或重登账号）都经 `reloadChecked`（自动）或 `reloadCheckedNow`（用户发起）+ 加载回调——`CheckChanges` 成功与否都继续加载，失败只记 DEBUG，真实的加载错误由加载自己报，界面因此离线也可用。检查阶段就开始转圈，所以手动刷新立刻有反馈。
+- **检查单飞与冷却**：检查在 UI 层（`app_check.go`）是**唯一通道**，且单飞 + 冷却。所有检查（首屏、窗口重建、刷新、切账号、代理重建、分钟轮询）都经 `requestCheck`：同一后端同一时刻只发一次 `users.getProfile`，期间的重复意图按槽位合并——`slotReload`（重载当前视图）与 `slotPoll`（读未读、更新托盘）各留最新一个，两者共存，合并后依次执行，不会出现「后到的刷新把托盘更新吞掉」。自动入口在 `checkCooldown`（30s）内直接复用上一次结论，只有 `reloadCheckedNow` 强制检查。后端被替换（重登、代理重建）时旧基线描述的是已断开的连接，必须重新检查。
+- **进程级轮询只维护托盘与通知**：`Run` 启动一次 1 分钟 ticker（`app_poll.go`），退出前停止，不随窗口开关起停。每次 tick 经 `checkChangesForPoll` 走同一条检查通道（冷却内会复用结论，不会为了轮询再发一次 profile），拿到结论后才交给 `internal/inboxwatch`：变化或尚无基线时读取 `label:inbox is:unread`（`SearchThreads`，上限 3 条，threads.list + metadata batch）。`internal/inboxwatch.Poll` 因此只接受 `changed` 参数，不再自己调用 `CheckChanges`——包内自查会让轮询绕过单飞/冷却，正是检查风暴的来源。轮询**不刷新侧栏、不刷新列表/阅读器**，也不取消用户请求；结果只更新托盘两态与未读快照。未读会话新建、未读数增加或同一会话最新 message 变化时，`internal/notify` 经 D-Bus 发桌面通知（最多 3 条单行截断主题 + 未读会话数）；首次读取只建基线，不因启动时已有未读而弹窗。窗口内容只在首屏、`attach`、手动刷新、切账号/账号变更与写操作后更新。
 - **通知显示时长与合并**：`notify` 显式传 `expire_timeout = 30s`，不交给服务端默认（Plasma 默认约 5 秒，装不下 3 条主题 + 未读数）；服务端仍可按应用设置覆盖。`replaces_id` 只在上一条通知**还在屏幕上**时才使用，服务端发来 `NotificationClosed` 清掉该 ID 后下一条就是新通知——Plasma 6.4 起替换一条已超时收进托盘的通知只更新托盘条目、不再弹气泡，且替换复用同一条历史条目，只有新建才会重新弹出并在历史里另起一条。hints 只带一项 `desktop-entry = me.zhsj.yauzin`（与 Gio application ID、单实例总线名同一字符串）：Plasma 按它把通知归到某个应用，查不到对应 `.desktop` 时弹窗照常显示，但通知不进历史、也不出现在「系统设置 → 通知 → 应用程序」；仓库目前不安装 `.desktop`，这条链路是否成立以实测为准。
-- **轮询与通知分层**：`internal/inboxwatch` 是纯 Go 的轮询状态机（未读快照、主题截断、通知文案），`internal/notify` 封装 Linux D-Bus 通知（`ActionInvoked` 点击回调、`NotificationClosed` 复位通知 ID）；`internal/ui` 只保留 ticker、`async` 超时/回投、托盘落地与点击后打开收件箱，三者都不反向依赖 UI。
+- **轮询与通知分层**：`internal/inboxwatch` 是纯 Go 的未读快照状态机（未读快照、主题截断、通知文案），变化结论由调用方给出；`internal/notify` 封装 Linux D-Bus 通知（`ActionInvoked` 点击回调、`NotificationClosed` 复位通知 ID）；`internal/ui` 保留 ticker、检查通道、`async` 超时/回投、托盘落地与点击后打开收件箱，三者都不反向依赖 UI。
 - **托盘期间的回投**：`post` 在没有窗口时也向容量 1 的 `wake` 投递，生命周期循环的 `waitForWindow` 在 `openCh` / `quitCh` 之外 select `wake` 并 `drain()`，于是 App 字段仍只有一个 goroutine 写。`wake` **只执行回调、不建窗**：建窗的唯一入口是 `requestOpen` → `openCh`（托盘打开、通知点击、单实例激活都走它），否则一次轮询或状态条过期的回投就会把用户刚关掉的窗口重新弹出来。应用内状态条在无窗口（只有托盘能让进程无窗口存活）时早退，避免重开窗口看到几分钟前的提示。
 - 列表只渲染可见行（`layout.List`），行内控件状态按会话 ID 缓存在视图结构里。
 - **已知限制**：`loading` 是单一布尔，侧栏阶段失败的清除可能让仍在跑的列表请求提前停止转圈（影响仅为观感，由「新请求取代旧请求」兜底）；托盘期间打开着的阅读器不随后台刷新更新正文（`openThread` 对同一会话直接早退）；轮询不再刷新窗口内容，新邮件需手动刷新、重开窗口或点击通知才出现；未读总数来自 Gmail 的 `resultSizeEstimate`（会话数估算），且只跟踪最新 3 条未读会话，同一 tick 内「读掉一封 + 新到一封」可能互相抵消；桌面通知仅 Linux（D-Bus），无通知服务或其它平台时静默降级；通知的应用名随界面语言变化，而 Plasma 按应用名保存按应用设置（含「在历史中显示」），切换语言后这些设置会落到另一个条目上，应用也无法覆盖服务端关掉的历史记录开关；`desktop-entry` 指向的 `me.zhsj.yauzin.desktop` 尚未随仓库安装，Plasma 解析不到时通知可能不进历史，且弹窗里的应用名可能退化成该 ID——实测仍不入历史时，下一步是提供 `packaging/me.zhsj.yauzin.desktop` 并装到 `~/.local/share/applications/`。
@@ -103,7 +104,7 @@
 - `Run()` 掌管生命周期循环：`App` 实例**跨窗口复用**，`attach`/`detach` 维护 `win`，托盘通过容量 1 的 `openCh`/`quitCh` 唤醒。
 - 关闭窗口默认销毁窗口、进程留在托盘；无通知区时降级为「关闭即退出」。
 - `windowActions` 收集标题栏请求，**帧绘制结束后**统一 `w.Perform`，避免布局中途销毁窗口；Ctrl+W 与标题栏关闭按钮共用这条路径，Ctrl+Q 直接走 `requestQuit()`。
-- `startInitialLoad()` 由 `startOnce` 门禁，首帧经 `reloadChecked`（先检查再加载）只跑一次；后续窗口重建不重复，由 `attach` 的 `reloadChecked` 刷新。
+- `startInitialLoad()` 由 `startOnce` 门禁只跑一次：一次检查同时驱动全量加载与收件箱未读基线（`pollInboxUnreadKnown`）；后续窗口重建由 `attach` 的 `reloadChecked` 刷新，冷却窗口内复用上一次检查结论。
 - Gio 的 `app.Main()` 在 Linux 不返回，退出必须显式 `cleanupTemp()` + `os.Exit(0)`；不要调用 systray 返回的 `end()`。
 - 生命周期循环之外的结束方式也要收拾现场：`watchInterrupt()` 在 `newApp()` 之后就开始监听 `SIGINT`（`Ctrl+C`，`signal.Notify` 就地注册），收到后先 `cleanupTemp()` 再 `os.Exit(0)`，否则托盘驻留期间被 `Ctrl+C` 停止的运行都会留下临时目录。`SIGTERM`/`SIGHUP` 故意不接管，保留默认行为：桌面会话结束、`kill`、终端挂断都按系统语义立即结束进程，不等待清理。信号路径与 UI goroutine 会并发访问临时目录，`tmpMu` 保护 `tmpDir`，`tmpClosed` 保证清理后不会再建一个新目录。
 
@@ -206,7 +207,7 @@
 
 - `internal/tray` 是 `fyne.io/systray` 的薄封装：左键 `SetOnTapped` 直接开窗，右键菜单只有「打开 / 退出」；回调在库的 goroutine 上，必须经 `post` / channel 回 UI 线程。通知区预检失败时 `Start` 返回错误，应用降级。托盘只持有 PNG 字节：`Icons.Idle`/`Icons.Active` 分别对应灰点与红点两态，`SetActive` 在状态未变化时不重复调用 `SetIcon`。
 - 图标设计源为 `internal/ui/assets/icon-gray.svg`（灰封蜡，托盘 idle）与 `icon-red.svg`（红封蜡，托盘 unread 与顶栏 mark），由 `scripts/gen_app_icons.py` 用 rsvg-convert 派生 PNG 后提交；运行时不解析 SVG。顶栏 mark 用红点母版，cell 固定 36dp：内嵌 32–128px 多个尺寸，按设备像素取刚好覆盖的一张（`internal/ui/appicon.go`），1x / 1.25x / 1.5x / 2x / 3x 正好命中 36 / 45 / 54 / 72 / 108px（旧的 32/40/48/64/96/128px 变体保留，覆盖 1.1x、1.75x 这类零散比例），缩放比例为 1，不会被线性滤波插值而发糊。Gio v0.10.3 没有窗口图标 API，窗口/任务栏图标由桌面集成使用 `icon-red-512.png`（与顶栏 mark 同一母版）。
-- **轮询与徽标**：轮询属于进程而不是窗口——`Run` 在 `tray.Start` 之后 `startPolling()`，退出前 `stopPolling()`。托盘驻留期间每分钟检查一次，变化时只重载侧栏（标签名 + 未读数/颜色），不拉列表；徽标在 `loadFolderDetails` 的成功回调里统一刷新（收件箱未读 > 0 红、= 0 灰），因此启动、手动刷新、轮询、切账号、重建后端都会更新它。重开窗口时 `attach` 的「检查 + 全量加载」补齐列表。
+- **轮询与徽标**：轮询属于进程而不是窗口——`Run` 在 `tray.Start` 之后 `startPolling()`，退出前 `stopPolling()`。托盘驻留期间每分钟经同一检查通道（单飞 + 冷却，见 §4.2）检查一次，变化时只重载侧栏（标签名 + 未读数/颜色），不拉列表；徽标在 `loadFolderDetails` 的成功回调里统一刷新（收件箱未读 > 0 红、= 0 灰），因此启动、手动刷新、轮询、切账号、重建后端都会更新它。重开窗口时 `attach` 的「检查 + 全量加载」补齐列表。
 - `internal/singleinstance` 用会话总线名 `me.zhsj.yauzin`（同时是 Gio application ID）保证单实例：第一个进程持有名字并导出 `Open`，后续启动调用 `Open` 唤起窗口后 `os.Exit(0)`。Wayland 不允许强制前置已有窗口，这是已知限制。
 
 ## 12. 性能监视器
@@ -354,7 +355,7 @@ internal/accounts/             accounts.json：OAuth 凭据（provider）与每�
 internal/ui/app.go             状态与构造：App 字段、构造器、异步原语
 internal/ui/app_lifecycle.go   窗口生命周期、post 队列、临时目录与 Ctrl+C 清理
 internal/ui/app_data.go        账号、文件夹、分页与加载（含先检查再加载）
-internal/ui/app_poll.go        1 分钟变更检查轮询（进程生命周期，含托盘驻留）
+internal/ui/app_poll.go        1 分钟轮询入口（进程生命周期，检查走 app_check.go）
 internal/ui/app_thread.go      会话打开与批量动作
 internal/ui/app_overlay.go     帧骨架、指针区域与浮层编排
 internal/ui/app_settings.go    设置读写与语言/装饰/性能/日志级别/代理（全局与单账号）、账号删除

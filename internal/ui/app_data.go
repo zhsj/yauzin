@@ -33,7 +33,19 @@ func (a *App) reloadFolders() {
 // goes through it, so the history baseline the check records always precedes
 // the data it describes: a response cached before the baseline could already be
 // stale by the time the baseline was taken.
-func (a *App) reloadChecked() {
+//
+// It is the automatic entry (startup, window reattach): it reuses the answer of
+// a check that just ran instead of asking Gmail again. A request the user made
+// uses reloadCheckedNow.
+func (a *App) reloadChecked() { a.reloadCheckedWith(false) }
+
+// reloadCheckedNow is reloadChecked for a request the user made. It always
+// checks the mailbox, skipping the cooldown an automatic refresh honours.
+func (a *App) reloadCheckedNow() { a.reloadCheckedWith(true) }
+
+// reloadCheckedWith arms the spinner and starts the check; the full load runs
+// on its answer.
+func (a *App) reloadCheckedWith(force bool) {
 	if a.service() == nil {
 		return
 	}
@@ -41,33 +53,7 @@ func (a *App) reloadChecked() {
 	// it: a refresh that only started turning when the rows were requested
 	// would look slow to react.
 	a.toolbar.setLoading(true)
-	a.checkChanges(func(bool) { a.reloadAll() })
-}
-
-// checkChanges asks the backend whether the mailbox moved and runs then with
-// the answer. A failed check is not a failure the user needs to hear about: the
-// load that follows reports whatever is really wrong with the backend, and the
-// poll runs once a minute, where an error log per attempt would bury the log in
-// an offline session.
-func (a *App) checkChanges(then func(changed bool)) {
-	svc := a.service()
-	if svc == nil {
-		return
-	}
-	accID := a.activeAcc
-	guard := func() bool { return accID == a.activeAcc }
-	var changed bool
-	a.async("check changes", timeoutCheck, guard,
-		func(ctx context.Context) error {
-			var err error
-			changed, err = svc.CheckChanges(ctx)
-			return err
-		},
-		func() { then(changed) },
-		func(err error) {
-			slog.Debug("mailbox check failed", "err", err)
-			then(false)
-		})
+	a.checkChanges(func(bool) { a.reloadAll() }, force)
 }
 
 // loadFolderNames loads the sidebar names without the unread counters or label
@@ -77,7 +63,9 @@ func (a *App) loadFolderNames(next func()) {
 	if svc == nil {
 		return
 	}
-	cancelRequest(&a.folderCancel)
+	// A newer load leaves the request already in flight alone: the generation
+	// guard below drops its answer, and cancelling it here would let the next
+	// refresh kill the sidebar reload a completed check just started.
 	a.folderGen++
 	gen, accID := a.folderGen, a.activeAcc
 	guard := func() bool { return gen == a.folderGen && accID == a.activeAcc }
@@ -371,7 +359,7 @@ func (a *App) switchAccount(id string) {
 	a.checkChanges(func(bool) {
 		a.reloadFolders()
 		a.loadThreads()
-	})
+	}, true)
 	a.notify(i18n.T("toast.accountSwitched", map[string]string{"Name": a.accountName()}), false)
 	a.rememberActiveAccount(id)
 }

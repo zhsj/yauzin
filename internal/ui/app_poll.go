@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/zhsj/yauzin/internal/inboxwatch"
+	"github.com/zhsj/yauzin/internal/mail"
 )
 
 // pollInterval is how often the running process asks the backend whether the
@@ -61,6 +62,10 @@ func (a *App) pollChanges() {
 // and applies the result to the tray and the notification. Without a tray and
 // without a notification backend there is nothing to maintain, so the poll
 // costs nothing.
+//
+// The change check goes through checkChangesForPoll: the poll shares the
+// single-flight rule and the cooldown of the window refresh, so a burst of poll
+// intents can no longer turn into a burst of users.getProfile calls.
 func (a *App) pollInboxUnread() {
 	if a.tray == nil && a.notifier == nil {
 		return
@@ -70,11 +75,18 @@ func (a *App) pollInboxUnread() {
 		return
 	}
 	accID := a.activeAcc
+	a.checkChangesForPoll(func(changed bool) { a.pollInboxKnown(accID, svc, changed) })
+}
+
+// pollInboxKnown reads the unread inbox conversations with the change answer of
+// the check that just ran, and applies the result to the tray and the
+// notification.
+func (a *App) pollInboxKnown(accID string, svc mail.Service, changed bool) {
 	var out inboxwatch.Outcome
 	a.async("inbox unread", timeoutPoll, func() bool { return accID == a.activeAcc },
 		func(ctx context.Context) error {
 			var err error
-			out, err = a.watcher.Poll(ctx, accID, svc)
+			out, err = a.watcher.Poll(ctx, accID, svc, changed)
 			return err
 		},
 		func() { a.applyInboxOutcome(out) },

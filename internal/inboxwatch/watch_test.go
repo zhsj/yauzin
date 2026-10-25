@@ -11,17 +11,19 @@ import (
 	"github.com/zhsj/yauzin/internal/mail"
 )
 
-// fakeService answers the two reads the watcher makes and records the searches.
+// fakeService answers the read the watcher makes and records the searches.
 type fakeService struct {
-	changed   bool
-	checkErr  error
 	page      mail.ThreadPage
 	searchErr error
 	searches  []mail.SearchRequest
+	checks    int
 }
 
+// CheckChanges counts its calls: the watcher must never make them, because
+// detecting a change belongs to the UI's single-flight channel.
 func (f *fakeService) CheckChanges(context.Context) (bool, error) {
-	return f.changed, f.checkErr
+	f.checks++
+	return false, nil
 }
 
 func (f *fakeService) SearchThreads(_ context.Context, req mail.SearchRequest) (mail.ThreadPage, error) {
@@ -63,7 +65,7 @@ func thread(id, subject string, unread int, ids ...string) mail.ThreadSummary {
 func seed(t *testing.T, w *Watcher, svc *fakeService, page mail.ThreadPage) {
 	t.Helper()
 	svc.page = page
-	out, err := w.Poll(context.Background(), "acc", svc)
+	out, err := w.Poll(context.Background(), "acc", svc, false)
 	if err != nil {
 		t.Fatalf("seed poll: %v", err)
 	}
@@ -79,6 +81,31 @@ func english(t *testing.T) {
 	t.Cleanup(func() { i18n.SetLanguage("en") })
 }
 
+// TestPollDoesNotCheckTheMailbox pins the layering: the caller owns the change
+// check (one single-flight channel in the UI), so the watcher only reads the
+// inbox when told the mailbox moved or when it has no baseline yet.
+func TestPollDoesNotCheckTheMailbox(t *testing.T) {
+	english(t)
+	w := New()
+	svc := &fakeService{page: mail.ThreadPage{
+		Threads: []mail.ThreadSummary{thread("t1", "First", 1, "m1")},
+		Total:   1,
+	}}
+
+	if _, err := w.Poll(context.Background(), "acc", svc, false); err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	if _, err := w.Poll(context.Background(), "acc", svc, true); err != nil {
+		t.Fatalf("poll on a change: %v", err)
+	}
+	if svc.checks != 0 {
+		t.Fatalf("checks = %d, want the caller's answer used instead", svc.checks)
+	}
+	if got := len(svc.searches); got != 2 {
+		t.Fatalf("searches = %d, want the baseline and the changed read", got)
+	}
+}
+
 func TestPollSeedsBaselineWithoutNotifying(t *testing.T) {
 	english(t)
 	w := New()
@@ -86,7 +113,7 @@ func TestPollSeedsBaselineWithoutNotifying(t *testing.T) {
 		Threads: []mail.ThreadSummary{thread("t1", "First", 1, "m1")},
 		Total:   1,
 	}}
-	out, err := w.Poll(context.Background(), "acc", svc)
+	out, err := w.Poll(context.Background(), "acc", svc, false)
 	if err != nil {
 		t.Fatalf("poll: %v", err)
 	}
@@ -105,7 +132,7 @@ func TestPollSeedsBaselineWithoutNotifying(t *testing.T) {
 	}
 
 	// With a baseline and no mailbox change the next tick reads nothing.
-	out, err = w.Poll(context.Background(), "acc", svc)
+	out, err = w.Poll(context.Background(), "acc", svc, false)
 	if err != nil {
 		t.Fatalf("second poll: %v", err)
 	}
@@ -123,7 +150,6 @@ func TestPollNotifiesANewConversation(t *testing.T) {
 	svc := &fakeService{}
 	seed(t, w, svc, mail.ThreadPage{Threads: []mail.ThreadSummary{thread("t1", "First", 1, "m1")}, Total: 1})
 
-	svc.changed = true
 	svc.page = mail.ThreadPage{
 		Threads: []mail.ThreadSummary{
 			thread("t2", "Second subject", 1, "m2"),
@@ -131,7 +157,7 @@ func TestPollNotifiesANewConversation(t *testing.T) {
 		},
 		Total: 5,
 	}
-	out, err := w.Poll(context.Background(), "acc", svc)
+	out, err := w.Poll(context.Background(), "acc", svc, true)
 	if err != nil {
 		t.Fatalf("poll: %v", err)
 	}
@@ -153,9 +179,8 @@ func TestPollNotifiesMoreUnreadInAKnownConversation(t *testing.T) {
 	svc := &fakeService{}
 	seed(t, w, svc, mail.ThreadPage{Threads: []mail.ThreadSummary{thread("t1", "First", 1, "m1")}, Total: 1})
 
-	svc.changed = true
 	svc.page = mail.ThreadPage{Threads: []mail.ThreadSummary{thread("t1", "First", 2, "m1", "m2")}, Total: 2}
-	out, err := w.Poll(context.Background(), "acc", svc)
+	out, err := w.Poll(context.Background(), "acc", svc, true)
 	if err != nil {
 		t.Fatalf("poll: %v", err)
 	}
@@ -172,9 +197,8 @@ func TestPollNotifiesANewMessageInAKnownConversation(t *testing.T) {
 
 	// One message was read and one arrived: the unread count is unchanged but
 	// the newest message is not.
-	svc.changed = true
 	svc.page = mail.ThreadPage{Threads: []mail.ThreadSummary{thread("t1", "First", 1, "m1", "m2")}, Total: 1}
-	out, err := w.Poll(context.Background(), "acc", svc)
+	out, err := w.Poll(context.Background(), "acc", svc, true)
 	if err != nil {
 		t.Fatalf("poll: %v", err)
 	}
@@ -190,8 +214,7 @@ func TestPollDoesNotRepeatAnUnchangedPage(t *testing.T) {
 	page := mail.ThreadPage{Threads: []mail.ThreadSummary{thread("t1", "First", 1, "m1")}, Total: 1}
 	seed(t, w, svc, page)
 
-	svc.changed = true
-	out, err := w.Poll(context.Background(), "acc", svc)
+	out, err := w.Poll(context.Background(), "acc", svc, true)
 	if err != nil {
 		t.Fatalf("poll: %v", err)
 	}
@@ -209,9 +232,8 @@ func TestPollReportsAnEmptyInbox(t *testing.T) {
 	svc := &fakeService{}
 	seed(t, w, svc, mail.ThreadPage{Threads: []mail.ThreadSummary{thread("t1", "First", 1, "m1")}, Total: 1})
 
-	svc.changed = true
 	svc.page = mail.ThreadPage{}
-	out, err := w.Poll(context.Background(), "acc", svc)
+	out, err := w.Poll(context.Background(), "acc", svc, true)
 	if err != nil {
 		t.Fatalf("poll: %v", err)
 	}
@@ -227,8 +249,7 @@ func TestPollDropsAResultFromThePreviousAccount(t *testing.T) {
 	seed(t, w, svc, mail.ThreadPage{Threads: []mail.ThreadSummary{thread("t1", "First", 1, "m1")}, Total: 1})
 
 	w.Reset("other")
-	svc.changed = false
-	out, err := w.Poll(context.Background(), "acc", svc)
+	out, err := w.Poll(context.Background(), "acc", svc, false)
 	if err != nil {
 		t.Fatalf("poll: %v", err)
 	}
@@ -246,8 +267,7 @@ func TestResetToNoAccountDropsAResult(t *testing.T) {
 	// The last mailbox was removed: an in-flight result of the old account
 	// must not bind the watcher to it again.
 	w.Reset("")
-	svc.changed = false
-	out, err := w.Poll(context.Background(), "acc", svc)
+	out, err := w.Poll(context.Background(), "acc", svc, false)
 	if err != nil {
 		t.Fatalf("poll: %v", err)
 	}
@@ -258,20 +278,15 @@ func TestResetToNoAccountDropsAResult(t *testing.T) {
 
 func TestPollReportsReadErrors(t *testing.T) {
 	english(t)
-	w := New()
-	if _, err := w.Poll(context.Background(), "acc", &fakeService{checkErr: errors.New("offline")}); err == nil {
-		t.Fatal("a failed change check must be reported")
-	}
-
-	svc := &fakeService{changed: true, searchErr: errors.New("search failed")}
-	if _, err := w.Poll(context.Background(), "acc", svc); err == nil {
+	svc := &fakeService{searchErr: errors.New("search failed")}
+	if _, err := New().Poll(context.Background(), "acc", svc, true); err == nil {
 		t.Fatal("a failed search must be reported")
 	}
 }
 
 func TestPollWithoutAServiceIsANoOp(t *testing.T) {
 	english(t)
-	out, err := New().Poll(context.Background(), "acc", nil)
+	out, err := New().Poll(context.Background(), "acc", nil, true)
 	if err != nil || out.Updated || out.Notice != nil {
 		t.Fatalf("outcome = %+v err = %v, want a no-op", out, err)
 	}
@@ -309,7 +324,6 @@ func TestNotificationTotalFallsBackToThePage(t *testing.T) {
 	svc := &fakeService{}
 	seed(t, w, svc, mail.ThreadPage{Threads: []mail.ThreadSummary{thread("t1", "First", 1, "m1")}, Total: -1})
 
-	svc.changed = true
 	svc.page = mail.ThreadPage{
 		Threads: []mail.ThreadSummary{
 			thread("t2", "Second", 1, "m2"),
@@ -317,7 +331,7 @@ func TestNotificationTotalFallsBackToThePage(t *testing.T) {
 		},
 		Total: -1,
 	}
-	out, err := w.Poll(context.Background(), "acc", svc)
+	out, err := w.Poll(context.Background(), "acc", svc, true)
 	if err != nil {
 		t.Fatalf("poll: %v", err)
 	}
