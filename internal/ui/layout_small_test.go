@@ -124,7 +124,7 @@ func TestSidebarScrollsToTheLastLabel(t *testing.T) {
 func TestMenuCardStaysInsideSmallWindow(t *testing.T) {
 	a := testApp(t)
 	items := make([]menuItem, 40)
-	m := newMenuOverlay(a, image.Rect(500, 360, 540, 400), items)
+	m := newMenuOverlay(a, image.Rect(500, 360, 540, 400), menuAlignEnd, items)
 
 	size, origin := m.geometry(testGtx(new(op.Ops), smallWindow))
 	if size.X > smallWindow.X-16 || size.Y > smallWindow.Y-16 {
@@ -144,7 +144,7 @@ func TestMenuScrollsWhenTallerThanWindow(t *testing.T) {
 	for i := range items {
 		items[i] = menuItem{Label: "Item " + strconv.Itoa(i)}
 	}
-	m := newMenuOverlay(a, image.Rect(8, 8, 48, 40), items)
+	m := newMenuOverlay(a, image.Rect(8, 8, 48, 40), menuAlignStart, items)
 
 	m.Layout(testGtx(new(op.Ops), smallWindow), a)
 	if got := m.list.Position.First; got != 0 {

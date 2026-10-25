@@ -36,7 +36,7 @@ func (c *messageCard) actions(a *App) {
 	// click, because which ones apply depends on the message being shown.
 	c.more = newIconButton(iconMoreVert, 32, func() {
 		if m := c.message(a); m != nil {
-			a.showMenu(c.moreAnchor(a), c.menuItems(a, m))
+			a.showMenu(c.moreAnchor(a), menuAlignEnd, c.menuItems(a, m))
 		}
 	})
 	c.more.setGlyph(20)

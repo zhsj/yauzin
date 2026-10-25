@@ -18,13 +18,26 @@ type menuItem struct {
 	OnTap   func()
 }
 
-// menuOverlay is a small dropdown anchored under a widget. The anchor is
-// captured during layout of the owning view and clamped so the card always
+// menuAlign is the edge of the anchor the card lines up with: a control near
+// the left of the window opens its card rightwards, one near the right edge
+// opens it leftwards. Both directions are clamped into the window afterwards.
+type menuAlign int
+
+const (
+	// menuAlignStart puts the card's left edge on the anchor's left edge.
+	menuAlignStart menuAlign = iota
+	// menuAlignEnd puts the card's right edge on the anchor's right edge.
+	menuAlignEnd
+)
+
+// menuOverlay is a small dropdown anchored under a widget. The anchor and the
+// alignment are chosen by the owning view; the card is clamped so it always
 // stays inside the window.
 type menuOverlay struct {
 	items   []menuItem
 	rows    []*menuRow
 	anchor  image.Rectangle
+	align   menuAlign
 	blocker *tapBlocker
 	// card swallows clicks on the padding of the menu itself, so they neither
 	// reach the mailbox nor close the menu.
@@ -34,8 +47,8 @@ type menuOverlay struct {
 	list layout.List
 }
 
-func newMenuOverlay(a *App, anchor image.Rectangle, items []menuItem) *menuOverlay {
-	m := &menuOverlay{anchor: anchor, items: items}
+func newMenuOverlay(a *App, anchor image.Rectangle, align menuAlign, items []menuItem) *menuOverlay {
+	m := &menuOverlay{anchor: anchor, align: align, items: items}
 	// A dropdown is not modal: a click outside the card dismisses it and still
 	// reaches the widget underneath. The guard keeps a panel that the click
 	// opened from being closed again on the same frame.
@@ -67,9 +80,14 @@ func (m *menuOverlay) geometry(gtx layout.Context) (size, origin image.Point) {
 	// negative origin.
 	cardW := min(gtx.Dp(200), max(maxX-16, 1))
 	cardH := min(len(m.items)*gtx.Dp(40)+gtx.Dp(12), max(maxY-16, 1))
-	// Right-align the card to the anchor: the ⋮ button sits at the right edge
-	// of the message card, so opening leftwards keeps the menu inside it.
-	x := min(max(m.anchor.Max.X-cardW, 8), max(maxX-cardW-8, 8))
+	// Line the card up with the edge the caller picked, then clamp it: an
+	// anchor too close to the opposite edge (or a narrow window) still keeps
+	// the whole card on screen.
+	x := m.anchor.Min.X
+	if m.align == menuAlignEnd {
+		x = m.anchor.Max.X - cardW
+	}
+	x = min(max(x, 8), max(maxX-cardW-8, 8))
 	y := m.anchor.Max.Y + 4
 	if y+cardH > maxY-8 {
 		// No room below the anchor: open upwards.

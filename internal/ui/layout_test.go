@@ -95,7 +95,7 @@ func TestLayoutFrames(t *testing.T) {
 	a.layout(gtx)
 	ops.Reset()
 	a.status.clear()
-	a.overlay = newMenuOverlay(a, image.Rect(1100, 40, 1132, 72), []menuItem{
+	a.overlay = newMenuOverlay(a, image.Rect(1100, 40, 1132, 72), menuAlignEnd, []menuItem{
 		{Label: "One", Icon: iconMarkRead},
 		{Label: "Two", Avatar: "Ada Chen", Checked: true},
 	})

@@ -240,12 +240,12 @@ func (a *App) discardCompose(next overlay) {
 	a.compose.discard()
 }
 
-// showMenu opens a dropdown right-aligned under rect.
-func (a *App) showMenu(rect image.Rectangle, items []menuItem) {
+// showMenu opens a dropdown under rect, lined up with the edge named by align.
+func (a *App) showMenu(rect image.Rectangle, align menuAlign, items []menuItem) {
 	if len(items) == 0 {
 		return
 	}
-	a.showOverlay(newMenuOverlay(a, rect, items))
+	a.showOverlay(newMenuOverlay(a, rect, align, items))
 }
 
 // showSettings opens the panel on its first page, the way the gear button
@@ -313,7 +313,7 @@ func (a *App) showAccountMenu() {
 		Icon:  iconSettings,
 		OnTap: func() { a.showSettingsPage(settingsTabAccounts) },
 	})
-	a.showMenu(a.top.menuAnchor, items)
+	a.showMenu(a.top.menuAnchor, menuAlignEnd, items)
 }
 
 func (a *App) openCompose(mode composeMode, msg *mail.Message) {

@@ -70,7 +70,7 @@ func newListToolbar(a *App) *listToolbar {
 	// Refreshing has its own button just left of this one, so the menu only
 	// carries the actions that have no toolbar glyph.
 	t.more = newListIcon(iconMoreVert, 32, func() {
-		a.showMenu(t.moreRect, []menuItem{
+		a.showMenu(t.moreRect, menuAlignStart, []menuItem{
 			{Label: i18n.T("list.markAllRead"), Icon: iconMarkRead, OnTap: func() { a.markPageRead(true) }},
 		})
 	})
