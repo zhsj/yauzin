@@ -16,6 +16,13 @@
 - Gmail 只读接入：`internal/accounts` 保存 OAuth 凭据与令牌，`internal/mail/gmail` 实现文件夹/会话列表/会话全局搜索（独立缓存）/会话正文（PKCE 回环授权），其余方法返回 `ErrUnsupported`。
 - 通用代理设置：`settings.json` 的 `proxy`，账号条目只记 `useProxy`；保存后按新代理重建对应后端。
 - Gmail API 类型改由 Discovery 文档生成（`internal/cmd/gmailgen` + `//go:generate`），`api.go` 只剩领域映射辅助方法。
+- 托盘与单实例：`internal/tray` 的未读红点、关窗驻留，`internal/singleinstance` 经会话总线唤起已有窗口。
+- 进程级 1 分钟变更检查（`internal/ui/app_poll.go`）：`internal/inboxwatch` 维护未读快照，`internal/notify` 发送 D-Bus 桌面通知；只更新托盘与通知，不刷新窗口。
+- 顶栏跨全部文件夹搜索，与文件夹浏览共用游标分页、代际校验与同一个列表请求槽位。
+- Gmail 读缓存（LRU）与 historyId 基线，全量加载统一「先检查再加载」。
+- 阅读器「更多」菜单：安全 / 完整 HTML 预览与原始邮件页，均在系统浏览器打开。
+- 设置扩充：客户端标题栏、性能监视器、日志级别、代理（全局与按账号）、账号手风琴（重新登录 / 删除）与 `activeAccount` 记忆。
+- 系统字体 + emoji 回退、CSD 判定与系统光标主题解析（`internal/cursor`）。
 
 当前验证基线：`gofmt` 与 `goimports -local github.com/zhsj/yauzin` 均干净、纯 Go 包 `go test -vet=all` 通过、容器内 `go build ./cmd/yauzin` 与 `go test -vet=all ./...` 通过。
 
