@@ -116,3 +116,31 @@ func TestFormatFullTimeUsesLocalZone(t *testing.T) {
 		t.Fatalf("empty timestamp: full %q, list %q", got, listWant)
 	}
 }
+
+// TestQuotedBodyOnlyUsesPlainText pins the quoting rule: an HTML-only message
+// has no body at all. Its HTML must never be turned into quoted text.
+func TestQuotedBodyOnlyUsesPlainText(t *testing.T) {
+	useLanguage(t, "en")
+	noBody := i18n.T("compose.noBody")
+
+	for _, tc := range []struct {
+		name string
+		msg  *mail.Message
+		want string
+	}{
+		{"plain", &mail.Message{TextBody: "hello\n\nworld"}, "hello\n\nworld"},
+		{"plain wins over html", &mail.Message{TextBody: "plain", HTMLBody: "<p>html</p>"}, "plain"},
+		{"html only", &mail.Message{HTMLBody: "<p>html only</p>"}, noBody},
+		{"blank", &mail.Message{TextBody: " \n\t ", HTMLBody: "<p>html</p>"}, noBody},
+		{"empty", &mail.Message{}, noBody},
+	} {
+		if got := quotedBody(tc.msg); got != tc.want {
+			t.Errorf("%s: quotedBody = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+
+	useLanguage(t, "zh-Hans")
+	if got, want := quotedBody(&mail.Message{HTMLBody: "<p>html</p>"}), i18n.T("compose.noBody"); got != want {
+		t.Errorf("zh quotedBody = %q, want %q", got, want)
+	}
+}

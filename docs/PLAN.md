@@ -23,7 +23,6 @@
 
 | 项目 | 原主张 | 恢复条件 | 影响面 |
 | --- | --- | --- | --- |
-| HTML-only 正文纯文本降级 | 用现有 `internal/htmltext.ToText` 在阅读器内联显示可选中文本，保留「在浏览器打开」 | 重新确认阅读器呈现范围，并把结论写回 DESIGN §8 | `internal/ui/reader.go:396`、`internal/htmltext/` |
 | 附件大小上限 | 复制到暂存目录前按体积拦截（对齐主流邮箱上限），chip 显示大小 | 真实后端接入、明确单封上限后一并设计 | `internal/ui/filepicker.go:61`、`internal/mail` |
 | CI 与 `-race` | `.github/workflows` + Makefile + 容器内 `go test -race` | 需要稳定的 CI 运行环境时恢复 | 仓库根（当前无 `.github/`、无 Makefile）、`Dockerfile.build` |
 

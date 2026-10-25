@@ -8,6 +8,7 @@
 
 - Fyne 实现（已整体重写为 Gio，仅托盘经 `fyne.io/systray` 使用 Fyne 生态）。
 - 应用内 HTML 富文本渲染（含 `internal/htmlrich` + 自绘排版方案）；HTML 正文只交给系统浏览器。
+- HTML 正文的纯文本降级（`internal/htmltext`，以及正则剥标签、`x/net/html` 取文本等替代方案）：没有 `text/plain` 即视为无正文。
 - Fyne 内建图标、`page/perPage` 双模式分页、窗口装饰自动探测。
 - tooltip 跨帧重放、设置页胶囊分段控件。
 - 日志落文件（`YAUZIN_LOG` 环境变量 + 文件 handler）：日志继续只写 stderr，不引入文件轮转与路径配置。
@@ -171,7 +172,7 @@
 - HTML 落盘：文件名 = 净化后的消息 ID（`[A-Za-z0-9._-]`，截断 64）+ 内容 sha256 前 8 字节（防目录穿越、绕开 `file://` 缓存），模式后缀 `-unsafe` / `-source` 保证三种产物互不覆盖（安全预览沿用原命名）。
 - CSP 用 `x/net/html` 解析后插到**真实 `<head>` 的第一个子节点**（防注释/脚本里的假 `<head>`），`html.Render` 重新序列化是有意取舍；解析失败走 `wrapperDocument` 安全包裹。策略为 `default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; form-action 'none'; base-uri 'none'`，远程图片/追踪像素故意禁用。默认路径不被弱化：不点「完整预览」时策略照旧注入。
 - 临时目录惰性创建于 `$XDG_RUNTIME_DIR/yauzin`（0700；该变量缺失、非绝对路径或不可用时回退 `os.MkdirTemp` 到系统临时目录）：会话运行目录在登录会话结束时由系统回收，被 `SIGKILL` 的运行最多留下一个会自动过期的目录，不会在 `/tmp` 里逐次累积。会话内路径固定，首次创建前先删掉上次异常退出留下的同名目录；正常退出与 `Ctrl+C`（`SIGINT`）都会整体删除，删除后 `tempDir()` 返回错误而不再重建。
-- `internal/htmltext` 只服务写信时引用原文；输入上限 1MiB。
+- 正文只认 `text/plain`：没有纯文本的邮件就是没有正文，阅读器显示 `reader.noPlainText`，回复/转发的引用写 `compose.noBody`。HTML 正文不做任何文本化（正则剥标签、`x/net/html` 取文本都不做），只有浏览器预览会读到它。
 
 ## 9. 国际化
 
@@ -286,7 +287,7 @@ docker run --rm -v "$PWD":/app -w /app -v yauzin-gocache:/gocache \
 纯 Go 包可直接在本地运行（`internal/ui` 与 `cmd/*` 导入 Gio，必须进容器）：
 
 ```bash
-go test -vet=all ./internal/prefs ./internal/i18n ./internal/htmltext ./internal/mail/... ./internal/tray ./internal/cursor
+go test -vet=all ./internal/prefs ./internal/i18n ./internal/mail/... ./internal/tray ./internal/cursor
 ```
 
 格式化与 import 分组（沙箱直接执行，两条检查都无输出即合格）：
@@ -394,7 +395,6 @@ internal/ui/htmlsource.go      原始邮件页（元信息 + 转义源码）
 internal/prefs/                设置持久化
 internal/logging/              进程级 slog level var 与控制台 text handler（stderr）
 internal/cursor/               系统光标主题解析（门户 / kreadconfig6 / gsettings）
-internal/htmltext/             HTML → 纯文本
 internal/i18n/                 中英文翻译与系统 locale
 internal/tray/                 系统托盘封装（fyne.io/systray）
 internal/singleinstance/       D-Bus 单实例（会话总线名 me.zhsj.yauzin）

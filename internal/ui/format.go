@@ -4,7 +4,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zhsj/yauzin/internal/htmltext"
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
 )
@@ -57,15 +56,14 @@ func formatFullTime(t time.Time) string {
 	return t.In(time.Local).Format(i18n.T("date.full"))
 }
 
+// quotedBody returns the part of m that reply/forward quotes. Only text/plain
+// counts: an HTML-only message has no body, and its HTML is never parsed or
+// converted to text.
 func quotedBody(m *mail.Message) string {
-	text := m.TextBody
-	if strings.TrimSpace(text) == "" {
-		text = htmltext.ToText(m.HTMLBody)
-	}
-	if strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(m.TextBody) == "" {
 		return i18n.T("compose.noBody")
 	}
-	return text
+	return m.TextBody
 }
 
 func replySubject(subject string) string {
