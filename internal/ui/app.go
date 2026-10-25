@@ -321,6 +321,11 @@ func configuredAccounts(store *accounts.Store) []mail.Account {
 			slog.Warn("skip account without a kind", "account", e.ID)
 			continue
 		}
+		// Sending accounts have no mailbox behind them: they are offered as
+		// senders in the composer, never as a mailbox to switch to.
+		if e.Kind == mail.KindSMTP {
+			continue
+		}
 		if e.Token.RefreshToken == "" {
 			slog.Warn("skip account without a refresh token", "account", e.ID)
 			continue

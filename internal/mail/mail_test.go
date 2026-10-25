@@ -1,6 +1,9 @@
 package mail
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestAddressString(t *testing.T) {
 	tests := []struct {
@@ -148,6 +151,33 @@ func TestNormalizeSubject(t *testing.T) {
 		if got := NormalizeSubject(tt.in); got != tt.want {
 			t.Fatalf("NormalizeSubject(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestDraftRecipients(t *testing.T) {
+	draft := Draft{
+		To:  []Address{{Email: "to@example.com"}, {Email: "shared@example.com"}},
+		Cc:  []Address{{Email: "cc@example.com"}, {Email: "Shared@Example.com"}},
+		Bcc: []Address{{Email: "bcc@example.com"}, {Email: "to@example.com"}},
+	}
+	got := draft.Recipients()
+	want := []string{"to@example.com", "shared@example.com", "cc@example.com", "bcc@example.com"}
+	if len(got) != len(want) {
+		t.Fatalf("Recipients = %+v, want %d addresses", got, len(want))
+	}
+	for i, email := range want {
+		if got[i].Email != email {
+			t.Fatalf("address %d = %q, want %q", i, got[i].Email, email)
+		}
+	}
+}
+
+func TestDraftValidate(t *testing.T) {
+	if err := (Draft{}).Validate(); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("Validate(empty) = %v, want ErrInvalidArgument", err)
+	}
+	if err := (Draft{Bcc: []Address{{Email: "bcc@example.com"}}}).Validate(); err != nil {
+		t.Fatalf("Validate(bcc only) = %v, want nil", err)
 	}
 }
 

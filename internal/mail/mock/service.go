@@ -710,8 +710,8 @@ func (s *Service) Delete(ctx context.Context, ids []string) error {
 
 // Send implements mail.Service.
 func (s *Service) Send(ctx context.Context, draft mail.Draft) error {
-	if len(draft.To) == 0 {
-		return fmt.Errorf("%w: no recipients", mail.ErrInvalidArgument)
+	if err := draft.Validate(); err != nil {
+		return err
 	}
 	return s.withStore(ctx, func() { s.storeSent(draft) })
 }
@@ -723,11 +723,17 @@ func (s *Service) storeSent(draft mail.Draft) {
 	if len([]rune(snippet)) > 90 {
 		snippet = string([]rune(snippet)[:90]) + "…"
 	}
+	// The composer may send as another identity; the stored copy keeps it so
+	// the sent folder shows what the recipients saw.
+	from := draft.From
+	if from.Email == "" {
+		from = mail.Address{Name: s.acc.DisplayName(), Email: s.acc.Email}
+	}
 	m := &mail.Message{
 		MessageSummary: mail.MessageSummary{
 			ID:        fmt.Sprintf("%s-sent-%d", s.acc.ID, time.Now().UnixNano()),
 			AccountID: s.acc.ID,
-			From:      mail.Address{Name: s.acc.DisplayName(), Email: s.acc.Email},
+			From:      from,
 			// The draft belongs to the caller; the stored message must not share
 			// its backing arrays, since the composer may still edit them.
 			To:      append([]mail.Address{}, draft.To...),

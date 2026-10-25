@@ -129,6 +129,83 @@ func TestUpsertRejectsEmptyKind(t *testing.T) {
 	}
 }
 
+func TestSMTPEntryRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	entry := Entry{
+		ID:       "smtp:me@example.com",
+		Kind:     mail.KindSMTP,
+		Email:    "me@example.com",
+		Name:     "Me",
+		UseProxy: true,
+		SMTP: &SMTPConfig{
+			Host:         "smtp.example.com",
+			Port:         587,
+			Username:     "me@example.com",
+			Password:     "secret",
+			Security:     "starttls",
+			BccToAccount: true,
+		},
+	}
+	if err := s.Upsert(entry); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	got, ok := reopened.Entry(entry.ID)
+	if !ok {
+		t.Fatal("SMTP account missing after reopen")
+	}
+	if got.Kind != mail.KindSMTP || got.Email != entry.Email || got.Name != entry.Name || !got.UseProxy {
+		t.Fatalf("entry = %+v, want %+v", got, entry)
+	}
+	if got.SMTP == nil || *got.SMTP != *entry.SMTP {
+		t.Fatalf("smtp = %+v, want %+v", got.SMTP, entry.SMTP)
+	}
+	if got.Token != (Token{}) {
+		t.Fatalf("SMTP account carries a token: %+v", got.Token)
+	}
+	senders := reopened.SMTPEntries()
+	if len(senders) != 1 || senders[0].ID != entry.ID {
+		t.Fatalf("SMTPEntries = %+v, want only %q", senders, entry.ID)
+	}
+}
+
+func TestSMTPEntriesSkipsMailboxes(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := s.Upsert(Entry{ID: "gmail:a@example.com", Kind: mail.KindGmail, Email: "a@example.com"}); err != nil {
+		t.Fatalf("Upsert mailbox: %v", err)
+	}
+	if err := s.Upsert(Entry{ID: "smtp:b@example.com", Kind: mail.KindSMTP, Email: "b@example.com", SMTP: &SMTPConfig{Host: "h"}}); err != nil {
+		t.Fatalf("Upsert sender: %v", err)
+	}
+	if got := s.SMTPEntries(); len(got) != 1 || got[0].ID != "smtp:b@example.com" {
+		t.Fatalf("SMTPEntries = %+v, want only the sender", got)
+	}
+	if got := s.List(); len(got) != 2 {
+		t.Fatalf("List = %d entries, want both stores to keep every entry", len(got))
+	}
+}
+
+func TestUpsertRejectsSMTPWithoutServer(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := s.Upsert(Entry{ID: "smtp:a@example.com", Kind: mail.KindSMTP, Email: "a@example.com"}); err == nil {
+		t.Fatal("Upsert accepted an SMTP account without a server")
+	}
+}
+
 func TestCredentialsRejectOtherProvider(t *testing.T) {
 	s, err := Open(t.TempDir())
 	if err != nil {

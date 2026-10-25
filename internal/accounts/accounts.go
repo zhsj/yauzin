@@ -1,7 +1,7 @@
 // Package accounts stores the OAuth credentials and refresh tokens of the real
-// mail accounts. The file lives next to settings.json and is plain JSON so it
-// can be inspected when a sign-in goes wrong; it is written with owner-only
-// permissions and never logged.
+// mail accounts, and the servers of the outbound-only SMTP ones. The file lives
+// next to settings.json and is plain JSON so it can be inspected when a sign-in
+// goes wrong; it is written with owner-only permissions and never logged.
 //
 // One Store is shared by the UI and every backend, so a token refreshed by a
 // request is visible to the next one without a reload.
@@ -44,6 +44,23 @@ type OAuth struct {
 	ClientSecret string    `json:"clientSecret,omitempty"`
 }
 
+// SMTPConfig is the outbound server of a sending account. The password is
+// stored in the clear the way the OAuth client secret is: the file is
+// owner-only and nothing here is ever logged.
+type SMTPConfig struct {
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+	// Security is one of smtp.Security: implicit TLS, STARTTLS, or none. The
+	// transport validates it, so the file stays a plain string.
+	Security string `json:"security"`
+	// BccToAccount asks the composer to prefill the Bcc field with the address
+	// of the account the draft is written in. The address itself is not stored:
+	// one sending account can be used from any mailbox.
+	BccToAccount bool `json:"bccToAccount,omitempty"`
+}
+
 // Entry is one stored account.
 type Entry struct {
 	ID       string    `json:"id"`
@@ -52,6 +69,9 @@ type Entry struct {
 	Name     string    `json:"name,omitempty"`
 	UseProxy bool      `json:"useProxy,omitempty"`
 	Token    Token     `json:"token,omitempty"`
+	// SMTP is set for a mail.KindSMTP entry, the outbound-only accounts. They
+	// have no token and are never handed to a mailbox backend.
+	SMTP *SMTPConfig `json:"smtp,omitempty"`
 }
 
 // file is the on-disk document.
@@ -123,6 +143,21 @@ func (s *Store) List() []Entry {
 	return append([]Entry(nil), s.data.Accounts...)
 }
 
+// SMTPEntries returns the stored outbound-only accounts in file order. They
+// are not mailboxes: no backend reads through them, and the composer offers
+// them as senders of a draft written in another account.
+func (s *Store) SMTPEntries() []Entry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Entry
+	for _, e := range s.data.Accounts {
+		if e.Kind == mail.KindSMTP {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // Entry returns the stored account with the given ID.
 func (s *Store) Entry(id string) (Entry, bool) {
 	s.mu.Lock()
@@ -184,6 +219,9 @@ func (s *Store) Upsert(e Entry) error {
 	}
 	if e.Kind == "" {
 		return errors.New("accounts: empty account kind")
+	}
+	if e.Kind == mail.KindSMTP && e.SMTP == nil {
+		return errors.New("accounts: SMTP account without a server")
 	}
 	return s.update(func(f *file) error {
 		for i := range f.Accounts {

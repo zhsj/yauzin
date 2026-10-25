@@ -5,6 +5,7 @@ package mail
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -17,6 +18,10 @@ const (
 	KindGmail Kind = "gmail"
 	// KindIMAP talks to a generic IMAP/SMTP server.
 	KindIMAP Kind = "imap"
+	// KindSMTP is an outbound-only account: it has no mailbox behind it, so it
+	// never shows up in the account switcher. Composing in another account
+	// picks it as the sender of the draft.
+	KindSMTP Kind = "smtp"
 )
 
 // Address is a single mail address with an optional display name.
@@ -215,11 +220,40 @@ type DraftAttachment struct {
 
 // Draft is a message being composed.
 type Draft struct {
-	To          []Address
-	Cc          []Address
+	// From is the identity the draft is sent as. A backend that can only send
+	// as its own account ignores it; a plain SMTP session uses it verbatim.
+	From Address
+	To   []Address
+	Cc   []Address
+	// Bcc carries the blind recipients. They are always part of the envelope
+	// but belong in the headers only when the protocol needs them: Gmail's
+	// send takes a raw message, so it has to see them there, while a direct
+	// SMTP session delivers through RCPT TO and must not leak them to the
+	// other recipients.
+	Bcc         []Address
 	Subject     string
 	Body        string
 	Attachments []DraftAttachment
+}
+
+// Recipients returns every address the draft has to be delivered to: To, Cc
+// and Bcc, deduplicated by email. Backends that hand the envelope to a
+// protocol layer (SMTP's RCPT TO) use it; the header rendering of To and Cc
+// stays separate because the two lists are visible in the message.
+func (d Draft) Recipients() []Address {
+	out := make([]Address, 0, len(d.To)+len(d.Cc)+len(d.Bcc))
+	out = AppendUniqueAddresses(out, d.To...)
+	out = AppendUniqueAddresses(out, d.Cc...)
+	return AppendUniqueAddresses(out, d.Bcc...)
+}
+
+// Validate reports whether the draft can be sent at all. It reports
+// ErrInvalidArgument for a draft nobody would receive.
+func (d Draft) Validate() error {
+	if len(d.Recipients()) == 0 {
+		return fmt.Errorf("%w: no recipients", ErrInvalidArgument)
+	}
+	return nil
 }
 
 // Errors shared by all backends. They report a category, not a sentence: the UI
