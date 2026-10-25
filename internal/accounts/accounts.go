@@ -214,14 +214,8 @@ func (s *Store) Remove(id string) error {
 // ID and the backend kind are required: an entry without a kind could not be
 // handed to any backend on the next start.
 func (s *Store) Upsert(e Entry) error {
-	if e.ID == "" {
-		return errors.New("accounts: empty account ID")
-	}
-	if e.Kind == "" {
-		return errors.New("accounts: empty account kind")
-	}
-	if e.Kind == mail.KindSMTP && e.SMTP == nil {
-		return errors.New("accounts: SMTP account without a server")
+	if err := validateEntry(e); err != nil {
+		return err
 	}
 	return s.update(func(f *file) error {
 		for i := range f.Accounts {
@@ -233,6 +227,55 @@ func (s *Store) Upsert(e Entry) error {
 		f.Accounts = append(f.Accounts, e)
 		return nil
 	})
+}
+
+// Replace stores e and drops oldID in one write, keeping the position of the
+// entry it replaces. A sending account is filed under its sender address, so
+// editing that address renames the entry; doing both in one write keeps a
+// failed write from leaving either two copies or none.
+func (s *Store) Replace(oldID string, e Entry) error {
+	if err := validateEntry(e); err != nil {
+		return err
+	}
+	if oldID == "" || oldID == e.ID {
+		return s.Upsert(e)
+	}
+	return s.update(func(f *file) error {
+		next := make([]Entry, 0, len(f.Accounts)+1)
+		placed := false
+		for _, existing := range f.Accounts {
+			switch existing.ID {
+			case oldID:
+				if !placed {
+					next = append(next, e)
+					placed = true
+				}
+			case e.ID:
+				// A stale copy of the target ID cannot survive the rename.
+			default:
+				next = append(next, existing)
+			}
+		}
+		if !placed {
+			next = append(next, e)
+		}
+		f.Accounts = next
+		return nil
+	})
+}
+
+// validateEntry rejects an entry the next start could not hand to a backend.
+func validateEntry(e Entry) error {
+	if e.ID == "" {
+		return errors.New("accounts: empty account ID")
+	}
+	if e.Kind == "" {
+		return errors.New("accounts: empty account kind")
+	}
+	if e.Kind == mail.KindSMTP && e.SMTP == nil {
+		return errors.New("accounts: SMTP account without a server")
+	}
+	return nil
 }
 
 // update applies mutate to a copy of the document and writes it before the

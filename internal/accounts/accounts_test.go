@@ -109,6 +109,56 @@ func TestUpsertReplacesSameID(t *testing.T) {
 	}
 }
 
+func TestReplaceRenamesInPlace(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	first := Entry{ID: "smtp:first@example.com", Kind: mail.KindSMTP, Email: "first@example.com", SMTP: &SMTPConfig{Host: "a"}}
+	middle := Entry{ID: "smtp:old@example.com", Kind: mail.KindSMTP, Email: "old@example.com", SMTP: &SMTPConfig{Host: "b"}}
+	last := Entry{ID: "smtp:last@example.com", Kind: mail.KindSMTP, Email: "last@example.com", SMTP: &SMTPConfig{Host: "c"}}
+	for _, e := range []Entry{first, middle, last} {
+		if err := s.Upsert(e); err != nil {
+			t.Fatalf("Upsert %q: %v", e.ID, err)
+		}
+	}
+
+	renamed := Entry{ID: "smtp:new@example.com", Kind: mail.KindSMTP, Email: "new@example.com", SMTP: &SMTPConfig{Host: "b2"}}
+	if err := s.Replace(middle.ID, renamed); err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	list := reopened.List()
+	if len(list) != 3 {
+		t.Fatalf("List = %+v, want three entries", list)
+	}
+	if list[0].ID != first.ID || list[1].ID != renamed.ID || list[2].ID != last.ID {
+		t.Fatalf("order = %q, %q, %q; want the new entry where the old one was", list[0].ID, list[1].ID, list[2].ID)
+	}
+	if got, ok := reopened.Entry(middle.ID); ok {
+		t.Fatalf("old ID still stored: %+v", got)
+	}
+	if got, ok := reopened.Entry(renamed.ID); !ok || got.SMTP == nil || got.SMTP.Host != "b2" {
+		t.Fatalf("renamed entry = %+v/%v", got, ok)
+	}
+}
+
+func TestReplaceRejectsInvalidEntry(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	err = s.Replace("smtp:a@example.com", Entry{ID: "smtp:b@example.com", Kind: mail.KindSMTP})
+	if err == nil {
+		t.Fatal("Replace accepted an SMTP account without a server")
+	}
+}
+
 func TestUpsertRejectsEmptyID(t *testing.T) {
 	s, err := Open(t.TempDir())
 	if err != nil {

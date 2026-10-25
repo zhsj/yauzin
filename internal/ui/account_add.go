@@ -124,8 +124,9 @@ func newAccountDialog(a *App) *accountDialog {
 		d.err = ""
 		d.list.ScrollTo(0)
 	})
-	// IMAP/SMTP is on the roadmap but has no backend yet, so the row is listed
-	// disabled rather than hiding the option altogether.
+	// IMAP is on the roadmap but has no backend yet, so the row is listed
+	// disabled rather than hiding the option altogether. The SMTP row opens a
+	// form of its own: a sending account has no mailbox to sign in to.
 	d.typeRows = []*settingsRow{
 		{
 			icon:     glyphMail,
@@ -135,6 +136,14 @@ func newAccountDialog(a *App) *accountDialog {
 				d.step = accountStepGmail
 				d.err = ""
 				d.list.ScrollTo(0)
+			},
+		},
+		{
+			icon:     glyphSend,
+			title:    i18n.T("settings.accountTypeSMTP"),
+			subtitle: i18n.T("settings.accountTypeSMTPHint"),
+			onTap: func() {
+				a.showOverlay(newSMTPDialog(a, nil))
 			},
 		},
 		{
@@ -466,9 +475,9 @@ func (d *accountDialog) gmailContent(gtx layout.Context, th *theme) layout.Dimen
 					return th.wrappedText(gtx, i18n.T("settings.accountIntro"), 12, colMuted, font.Normal)
 				})
 			}),
-			layout.Rigid(d.field(th, i18n.T("settings.accountClientID"), &d.clientID, &d.clientIDBox, "1234.apps.googleusercontent.com")),
+			layout.Rigid(labelledField(th, i18n.T("settings.accountClientID"), &d.clientID, &d.clientIDBox, "1234.apps.googleusercontent.com")),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 10) }),
-			layout.Rigid(d.field(th, i18n.T("settings.accountClientSecret"), &d.clientSecret, &d.clientSecretBox, i18n.T("settings.accountClientSecretHint"))),
+			layout.Rigid(labelledField(th, i18n.T("settings.accountClientSecret"), &d.clientSecret, &d.clientSecretBox, i18n.T("settings.accountClientSecretHint"))),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 14) }),
 			layout.Rigid(d.proxyRow(th)),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 10) }),
@@ -557,26 +566,6 @@ func (d *accountDialog) authContent(gtx layout.Context, th *theme) layout.Dimens
 		}
 		return dims
 	})
-}
-
-// field is one labelled editor box.
-func (d *accountDialog) field(th *theme, label string, ed *widget.Editor, box *widget.Clickable, hint string) layout.Widget {
-	return func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Bottom: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return th.text(gtx, label, 12, colMuted, font.Medium, 1)
-				})
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				h := gtx.Dp(40)
-				if h > gtx.Constraints.Max.Y {
-					h = gtx.Constraints.Max.Y
-				}
-				return th.boxedField(gtx, ed, box, hint, 14, h)
-			}),
-		)
-	}
 }
 
 // proxyRow shows the per-account proxy switch, or explains that no proxy is

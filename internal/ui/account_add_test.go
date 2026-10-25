@@ -110,16 +110,19 @@ func TestAccountDialogWizardSteps(t *testing.T) {
 	if d.step != accountStepType {
 		t.Fatalf("step = %v, want the type list", d.step)
 	}
-	if len(d.typeRows) != 2 {
-		t.Fatalf("type rows = %d, want Gmail and IMAP/SMTP", len(d.typeRows))
+	if len(d.typeRows) != 3 {
+		t.Fatalf("type rows = %d, want Gmail, SMTP and IMAP", len(d.typeRows))
 	}
-	if !d.typeRows[1].disabled {
-		t.Fatal("the IMAP/SMTP row is not disabled")
+	if d.typeRows[1].disabled {
+		t.Fatal("the SMTP row is disabled")
+	}
+	if !d.typeRows[2].disabled {
+		t.Fatal("the IMAP row is not disabled")
 	}
 	d.Layout(gtx, a)
 	ops.Reset()
 
-	d.typeRows[1].click.Click()
+	d.typeRows[2].click.Click()
 	d.Layout(gtx, a)
 	if d.step != accountStepType {
 		t.Fatalf("step = %v after clicking a disabled type, want the type list", d.step)
@@ -137,6 +140,15 @@ func TestAccountDialogWizardSteps(t *testing.T) {
 	d.Layout(gtx, a)
 	if d.step != accountStepType {
 		t.Fatalf("step = %v after the back link, want the type list", d.step)
+	}
+	ops.Reset()
+
+	// The SMTP row leaves the wizard for a form of its own: a sending account
+	// has no mailbox to sign in to.
+	d.typeRows[1].click.Click()
+	d.Layout(gtx, a)
+	if _, ok := a.overlay.(*smtpDialog); !ok {
+		t.Fatalf("overlay = %T after clicking SMTP, want *smtpDialog", a.overlay)
 	}
 }
 
