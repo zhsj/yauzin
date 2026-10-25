@@ -22,9 +22,12 @@ import (
 )
 
 const (
-	// readonlyScope keeps the account readable but not modifiable, which
-	// matches the operations Service implements.
-	readonlyScope = "https://www.googleapis.com/auth/gmail.readonly"
+	// modifyScope covers everything Service does except permanent deletion:
+	// reading, and adding or removing labels, which is how the app stars,
+	// archives, marks read and moves a message to the trash. The wider
+	// https://mail.google.com/ is deliberately not requested: only permanent
+	// deletion needs it, and Delete moves mail to the trash instead.
+	modifyScope = "https://www.googleapis.com/auth/gmail.modify"
 	// profileScope is what makes the Google account name available. It is the
 	// only addition: no ID token is needed, so openid stays out of the grant and
 	// the OAuth 2.0 userinfo endpoint returns the name for this scope alone.
@@ -36,8 +39,10 @@ const defaultUserInfoURL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 // requestedScopes is the grant of a sign-in. Growing this list makes Google
 // show the consent screen again, so accounts authorized with an older list have
-// to sign in once more before their name is known.
-func requestedScopes() []string { return []string{readonlyScope, profileScope} }
+// to sign in once more: a token granted gmail.readonly alone can still read the
+// mailbox but every write answers 403 insufficientPermissions, which the client
+// reports as mail.ErrUnauthorized.
+func requestedScopes() []string { return []string{modifyScope, profileScope} }
 
 // googleEndpoint is Google's installed-application OAuth endpoint. The client
 // credentials travel in the request body (AuthStyleInParams), which is what

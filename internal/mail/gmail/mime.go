@@ -75,7 +75,7 @@ func collectParts(p *MessagePart, out *mimeBodies) {
 }
 
 // attachment converts one file part into its metadata. The content itself is
-// out of scope: the backend is read-only and does not download attachments.
+// out of scope: the backend does not download attachments yet.
 func attachment(p *MessagePart) mail.Attachment {
 	a := mail.Attachment{Filename: p.Filename, MIMEType: p.MIMEType}
 	if p.Body != nil {

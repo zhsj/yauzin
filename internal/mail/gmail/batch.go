@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 )
@@ -31,13 +30,26 @@ const batchLimit = 25
 // a separate call per label.
 const labelDetailFields = "messagesUnread,threadsTotal,color/backgroundColor"
 
-// batchTarget is one GET embedded in a batch request.
+// batchTarget is one call embedded in a batch request.
 type batchTarget struct {
 	// path is the API path of the call, such as "/users/me/threads/t1".
 	path string
 	// query is the query string of the call. Repeated keys are kept: the
 	// metadata calls send one metadataHeaders per header.
 	query url.Values
+	// method is the HTTP method of the call. Empty means GET, which is all a
+	// read batch uses; the write batches set POST.
+	method string
+	// body is the JSON body of a POST call, nil for a call without one.
+	body []byte
+}
+
+// methodName is the HTTP method of the embedded call.
+func (t batchTarget) methodName() string {
+	if t.method == "" {
+		return http.MethodGet
+	}
+	return t.method
 }
 
 // batchFetch sends every target as an embedded call of one batch request per
@@ -45,15 +57,19 @@ type batchTarget struct {
 // response of its embedded call. handle owns resp.Body for the call; the
 // framework closes it afterwards.
 //
+// endpoint names the calls for the log line, as the collection path they share
+// (such as "/users/me/messages"): the target paths carry IDs and must not be
+// logged.
+//
 // A fatal error (a request, envelope or part that failed as a whole) is
 // returned immediately and the remaining chunks are not sent. The first error
 // handle reports is returned after all chunks have run, without stopping the
 // remaining ones.
-func (c *client) batchFetch(ctx context.Context, op string, targets []batchTarget, handle func(i int, resp *http.Response) error) error {
+func (c *client) batchFetch(ctx context.Context, op, endpoint string, targets []batchTarget, handle func(i int, resp *http.Response) error) error {
 	var firstErr error
 	for start := 0; start < len(targets); start += batchLimit {
 		end := min(start+batchLimit, len(targets))
-		chunkErr, fatal := c.batchChunk(ctx, op, targets[start:end], func(i int, resp *http.Response) error {
+		chunkErr, fatal := c.batchChunk(ctx, op, endpoint, targets[start:end], func(i int, resp *http.Response) error {
 			return handle(start+i, resp)
 		})
 		if fatal != nil {
@@ -69,7 +85,7 @@ func (c *client) batchFetch(ctx context.Context, op string, targets []batchTarge
 // batchChunk performs one batch request for targets and drives handle with its
 // embedded responses. It returns the first error handle reported, which does
 // not stop the remaining chunks, and a fatal error, which does.
-func (c *client) batchChunk(ctx context.Context, op string, targets []batchTarget, handle func(i int, resp *http.Response) error) (firstErr error, fatal error) {
+func (c *client) batchChunk(ctx context.Context, op, endpoint string, targets []batchTarget, handle func(i int, resp *http.Response) error) (firstErr error, fatal error) {
 	body, boundary, err := batchBody(c.apiPath, targets)
 	if err != nil {
 		return nil, fmt.Errorf("gmail %s batch: %w", op, err)
@@ -78,7 +94,7 @@ func (c *client) batchChunk(ctx context.Context, op string, targets []batchTarge
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.sendBatch(ctx, op, targets, body, boundary, token)
+	resp, err := c.sendBatch(ctx, op, endpoint, targets, body, boundary, token)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +106,7 @@ func (c *client) batchChunk(ctx context.Context, op string, targets []batchTarge
 		if err != nil {
 			return nil, err
 		}
-		resp, err = c.sendBatch(ctx, op, targets, body, boundary, token)
+		resp, err = c.sendBatch(ctx, op, endpoint, targets, body, boundary, token)
 		if err != nil {
 			return nil, err
 		}
@@ -99,13 +115,16 @@ func (c *client) batchChunk(ctx context.Context, op string, targets []batchTarge
 	if resp.StatusCode != http.StatusOK {
 		return nil, apiError(op+" batch", resp)
 	}
-	return parseBatch(resp, len(targets), op, handle)
+	return parseBatch(resp, targets, op, handle)
 }
 
-// batchBody encodes one multipart/mixed request with one embedded GET per
+// batchBody encodes one multipart/mixed request with one embedded call per
 // target. The Content-ID carries the index in targets instead of an ID: an ID
 // would have to be escaped for a header, and the response index maps straight
 // back to the request slice.
+//
+// A call with a body declares its Content-Length, which is what tells the
+// server where the JSON ends; a POST without one sends Content-Length: 0.
 func batchBody(apiPath string, targets []batchTarget) (body []byte, boundary string, err error) {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -121,7 +140,18 @@ func batchBody(apiPath string, targets []batchTarget) (body []byte, boundary str
 		if len(t.query) > 0 {
 			target += "?" + t.query.Encode()
 		}
-		if _, err := fmt.Fprintf(part, "GET %s HTTP/1.1\r\n\r\n", target); err != nil {
+
+		var msg bytes.Buffer
+		fmt.Fprintf(&msg, "%s %s HTTP/1.1\r\n", t.methodName(), target)
+		if t.body != nil {
+			msg.WriteString("Content-Type: application/json\r\n")
+		}
+		if t.body != nil || t.methodName() != http.MethodGet {
+			fmt.Fprintf(&msg, "Content-Length: %d\r\n", len(t.body))
+		}
+		msg.WriteString("\r\n")
+		msg.Write(t.body)
+		if _, err := part.Write(msg.Bytes()); err != nil {
 			return nil, "", err
 		}
 	}
@@ -133,8 +163,9 @@ func batchBody(apiPath string, targets []batchTarget) (body []byte, boundary str
 
 // sendBatch performs one authorized batch POST. Like send, it holds the
 // account's request slot for the HTTP round trip. It logs one line naming the
-// calls inside: the POST URL alone says nothing about what the batch does.
-func (c *client) sendBatch(ctx context.Context, op string, targets []batchTarget, body []byte, boundary, token string) (*http.Response, error) {
+// calls inside: the POST URL alone says nothing about what the batch does, and
+// endpoint is the collection path they share, so no ID reaches the log.
+func (c *client) sendBatch(ctx context.Context, op, endpoint string, targets []batchTarget, body []byte, boundary, token string) (*http.Response, error) {
 	if err := c.acquireReq(ctx); err != nil {
 		return nil, err
 	}
@@ -150,24 +181,14 @@ func (c *client) sendBatch(ctx context.Context, op string, targets []batchTarget
 	resp, err := c.http.Do(req)
 	if err != nil {
 		slog.Debug("gmail batch",
-			"account", logAccount(c.accountID), "endpoint", batchEndpoint(c.apiPath, targets),
+			"account", logAccount(c.accountID), "endpoint", c.apiPath+endpoint,
 			"calls", len(targets), "err", err)
 		return nil, fmt.Errorf("gmail %s batch: %w", op, err)
 	}
 	slog.Debug("gmail batch",
-		"account", logAccount(c.accountID), "endpoint", batchEndpoint(c.apiPath, targets),
+		"account", logAccount(c.accountID), "endpoint", c.apiPath+endpoint,
 		"calls", len(targets), "status", resp.StatusCode)
 	return resp, nil
-}
-
-// batchEndpoint names the calls embedded in one batch. Every target of a batch
-// is a GET under the same parent (only labels.get and threads.get use batches),
-// so the parent path describes the whole batch and no IDs are logged.
-func batchEndpoint(apiPath string, targets []batchTarget) string {
-	if len(targets) == 0 {
-		return apiPath
-	}
-	return apiPath + path.Dir(targets[0].path)
 }
 
 // parseBatch decodes the embedded responses of a batch and drives handle with
@@ -175,7 +196,7 @@ func batchEndpoint(apiPath string, targets []batchTarget) string {
 // back in no guaranteed order. A broken envelope or part is fatal; the first
 // error handle reports is returned so batchFetch can record it without stopping
 // the remaining chunks.
-func parseBatch(resp *http.Response, n int, op string, handle func(i int, resp *http.Response) error) (firstErr error, fatal error) {
+func parseBatch(resp *http.Response, targets []batchTarget, op string, handle func(i int, resp *http.Response) error) (firstErr error, fatal error) {
 	mediaType, params, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if err != nil || mediaType != "multipart/mixed" || params["boundary"] == "" {
 		return nil, fmt.Errorf("gmail %s batch: response is %q, want multipart/mixed", op, resp.Header.Get("Content-Type"))
@@ -190,10 +211,12 @@ func parseBatch(resp *http.Response, n int, op string, handle func(i int, resp *
 			return nil, fmt.Errorf("gmail %s batch: read part: %w", op, err)
 		}
 		idx, ok := partIndex(part.Header.Get("Content-ID"))
-		if !ok || idx < 0 || idx >= n {
+		if !ok || idx < 0 || idx >= len(targets) {
 			return nil, fmt.Errorf("gmail %s batch: unexpected Content-ID %q", op, part.Header.Get("Content-ID"))
 		}
-		inner, err := http.ReadResponse(bufio.NewReader(part), &http.Request{Method: http.MethodGet})
+		// The request method decides how the body is read: a HEAD response has
+		// none, every other method carries what the server sent.
+		inner, err := http.ReadResponse(bufio.NewReader(part), &http.Request{Method: targets[idx].methodName()})
 		if err != nil {
 			return nil, fmt.Errorf("gmail %s %d: parse response: %w", op, idx, err)
 		}
@@ -250,7 +273,7 @@ func (c *client) labelDetails(ctx context.Context, ids []string) (map[string]*La
 	// silently showing zeros.
 	failed := 0
 	var firstErr error
-	err := c.batchFetch(ctx, "labels.get", targets, func(i int, resp *http.Response) error {
+	err := c.batchFetch(ctx, "labels.get", "/users/me/labels", targets, func(i int, resp *http.Response) error {
 		id := ids[i]
 		if resp.StatusCode != http.StatusOK {
 			detail, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))

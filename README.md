@@ -22,7 +22,7 @@ A desktop mail client built with Go + [Gio](https://gioui.org), its UI modelled 
 
 ## Known limitations
 
-- Gmail accounts are read-only (`gmail.readonly`): starring, archiving, deleting, marking read/unread, sending and saving attachments are rejected with "This account does not support that action." Only the demo account performs them, in memory.
+- Gmail accounts ask for the `gmail.modify` scope: starring, archiving, marking read/unread and deleting (which moves mail to the trash, never deletes it permanently) work there too. Accounts authorized before the scope was requested keep working for reading but have to sign in once more before they can change anything; sending and saving attachments are still rejected with "This account does not support that action."
 - The demo mailbox and anything sent from it are not persisted, so a restart returns to the demo data; drafts are not saved either.
 - Inbox polling only maintains the tray badge and notifications: the open window is refreshed manually (toolbar refresh), by reopening it or by clicking a notification.
 - Desktop notifications are Linux/D-Bus only. Without a notification area the tray is unavailable and closing the window quits the app.

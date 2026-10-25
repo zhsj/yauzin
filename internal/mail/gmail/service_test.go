@@ -1001,14 +1001,11 @@ func TestRefreshWithoutGmailCredentialsIsUnauthorized(t *testing.T) {
 	}
 }
 
-func TestMutatingOperationsAreUnsupported(t *testing.T) {
+func TestUnimplementedOperationsAreUnsupported(t *testing.T) {
 	svc, _ := newTestService(t, http.NotFoundHandler())
 	ctx := context.Background()
 	cases := map[string]error{
-		"SetFlag": func() error { return svc.SetFlag(ctx, []string{"t1"}, mail.FlagRead, true) }(),
-		"Archive": func() error { return svc.Archive(ctx, []string{"t1"}) }(),
-		"Delete":  func() error { return svc.Delete(ctx, []string{"t1"}) }(),
-		"Send":    func() error { return svc.Send(ctx, mail.Draft{}) }(),
+		"Send": func() error { return svc.Send(ctx, mail.Draft{}) }(),
 	}
 	if _, err := svc.SaveAttachment(ctx, "m1", "a1", "/tmp"); !errors.Is(err, mail.ErrUnsupported) {
 		cases["SaveAttachment"] = err

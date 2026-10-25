@@ -10,9 +10,11 @@ import (
 	"github.com/zhsj/yauzin/internal/mail"
 )
 
-// The cached read methods have no expiry: the account is read-only, so a
-// response stays valid until CheckChanges drops it because the mailbox moved.
-// The LRU capacities only bound how much memory the cache may hold.
+// The cached read methods have no expiry: a response stays valid until
+// something reports that the mailbox moved, which is CheckChanges (another
+// client changed it) or a write of this account, which clears the cache as soon
+// as it returns. The LRU capacities only bound how much memory the cache may
+// hold.
 const (
 	foldersCacheSize = 4
 	detailsCacheSize = 4

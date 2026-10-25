@@ -270,8 +270,15 @@ type Service interface {
 	SearchThreads(ctx context.Context, req SearchRequest) (ThreadPage, error)
 	// GetThread returns every message of a conversation, oldest first.
 	GetThread(ctx context.Context, threadID string) ([]*Message, error)
+	// SetFlag turns one flag on or off for every message in ids. The IDs are
+	// message IDs, not conversation IDs: a caller that wants a whole
+	// conversation changed passes all of its messages, as ThreadSummary
+	// reports them. Setting a flag a message already carries is not an error.
 	SetFlag(ctx context.Context, ids []string, flag Flag, on bool) error
+	// Archive takes the messages out of the inbox and leaves them in every
+	// other folder and label.
 	Archive(ctx context.Context, ids []string) error
+	// Delete moves the messages to the trash. It never deletes permanently.
 	Delete(ctx context.Context, ids []string) error
 	Send(ctx context.Context, draft Draft) error
 	SaveAttachment(ctx context.Context, messageID, attachmentID, dir string) (string, error)

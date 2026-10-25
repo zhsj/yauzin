@@ -1,10 +1,12 @@
-// Package gmail implements the read-only half of mail.Service on top of the
-// Gmail REST API. It never imports the UI or Gio, so it can be tested as a
-// plain Go package.
+// Package gmail implements mail.Service on top of the Gmail REST API: reading
+// folders, conversations and message sources, and the mailbox changes the list
+// and the reader make (flags, archive, trash). It never imports the UI or Gio,
+// so it can be tested as a plain Go package.
 //
 // The account is authorized with a user-supplied OAuth client (see SignIn) and
-// the readonly scope, so every mutating method reports mail.ErrUnsupported
-// instead of pretending to change the mailbox.
+// the gmail.modify scope, which covers the label changes behind those actions
+// but not permanent deletion. Sending and attachment download are not
+// implemented and report mail.ErrUnsupported.
 package gmail
 
 import (
@@ -65,9 +67,9 @@ type Service struct {
 	acc mail.Account
 	c   *client
 
-	// cache memoizes the read-only responses of this account. It has no
-	// expiry: an entry stays valid until CheckChanges drops it because the
-	// mailbox moved.
+	// cache memoizes the read responses of this account. It has no expiry: an
+	// entry stays valid until something says the mailbox moved, which is
+	// CheckChanges or a write of this account (see mutate.go).
 	cache *serviceCache
 
 	// checkMu guards the change-check state below. It is never held across a
@@ -433,7 +435,7 @@ func (s *Service) fetchThreadMetadata(ctx context.Context, refs []*Thread) ([]*T
 		return rows
 	}
 
-	err := s.c.batchFetch(ctx, "threads.get", targets, func(i int, resp *http.Response) error {
+	err := s.c.batchFetch(ctx, "threads.get", "/users/me/threads", targets, func(i int, resp *http.Response) error {
 		switch resp.StatusCode {
 		case http.StatusOK:
 		case http.StatusNotFound:
@@ -478,21 +480,11 @@ func (s *Service) GetThread(ctx context.Context, threadID string) ([]*mail.Messa
 	return out, nil
 }
 
-// SetFlag is not implemented: the account is authorized for reading only.
-func (s *Service) SetFlag(context.Context, []string, mail.Flag, bool) error {
-	return mail.ErrUnsupported
-}
-
-// Archive is not implemented: the account is authorized for reading only.
-func (s *Service) Archive(context.Context, []string) error { return mail.ErrUnsupported }
-
-// Delete is not implemented: the account is authorized for reading only.
-func (s *Service) Delete(context.Context, []string) error { return mail.ErrUnsupported }
-
-// Send is not implemented: the account is authorized for reading only.
+// Send is not implemented: sending is out of the backend's scope.
 func (s *Service) Send(context.Context, mail.Draft) error { return mail.ErrUnsupported }
 
-// SaveAttachment is not implemented: the account is authorized for reading only.
+// SaveAttachment is not implemented: attachment download is out of the
+// backend's scope.
 func (s *Service) SaveAttachment(context.Context, string, string, string) (string, error) {
 	return "", mail.ErrUnsupported
 }

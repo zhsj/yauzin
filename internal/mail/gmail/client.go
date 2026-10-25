@@ -1,6 +1,7 @@
 package gmail
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -163,14 +164,34 @@ func (c *client) acquireReq(ctx context.Context) error {
 // releaseReq gives the request slot back.
 func (c *client) releaseReq() { <-c.reqSem }
 
-// do performs one authorized JSON request. force is unused: the retry logic
-// below asks for it explicitly.
+// do performs one authorized JSON request without a body.
 func (c *client) do(ctx context.Context, op, method, path string, query url.Values, out any) error {
+	return c.doBody(ctx, op, method, path, query, nil, out)
+}
+
+// postJSON performs one authorized JSON POST with in as its body and decodes
+// the answer into out when out is not nil.
+func (c *client) postJSON(ctx context.Context, op, path string, in, out any) error {
+	var body []byte
+	if in != nil {
+		encoded, err := json.Marshal(in)
+		if err != nil {
+			return fmt.Errorf("gmail %s: encode request: %w", op, err)
+		}
+		body = encoded
+	}
+	return c.doBody(ctx, op, http.MethodPost, path, nil, body, out)
+}
+
+// doBody performs one authorized JSON request. A 204 No Content answer is a
+// success with no payload: Gmail answers a label-only messages.batchModify that
+// way instead of returning the touched messages.
+func (c *client) doBody(ctx context.Context, op, method, path string, query url.Values, body []byte, out any) error {
 	token, err := c.accessToken(ctx, false)
 	if err != nil {
 		return err
 	}
-	resp, err := c.send(ctx, method, path, query, token)
+	resp, err := c.send(ctx, method, path, query, body, token)
 	if err != nil {
 		return fmt.Errorf("gmail %s: %w", op, err)
 	}
@@ -182,17 +203,17 @@ func (c *client) do(ctx context.Context, op, method, path string, query url.Valu
 		if err != nil {
 			return err
 		}
-		resp, err = c.send(ctx, method, path, query, token)
+		resp, err = c.send(ctx, method, path, query, body, token)
 		if err != nil {
 			return fmt.Errorf("gmail %s: %w", op, err)
 		}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return apiError(op, resp)
 	}
-	if out == nil {
+	if out == nil || resp.StatusCode == http.StatusNoContent {
 		return nil
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
@@ -201,10 +222,10 @@ func (c *client) do(ctx context.Context, op, method, path string, query url.Valu
 	return nil
 }
 
-// send builds and performs one request with the given bearer token. It holds
-// the account's request slot for the HTTP round trip, so single and batch
-// requests never overlap.
-func (c *client) send(ctx context.Context, method, path string, query url.Values, token string) (*http.Response, error) {
+// send builds and performs one request with the given bearer token. A non-nil
+// body is sent as JSON. It holds the account's request slot for the HTTP round
+// trip, so single and batch requests never overlap.
+func (c *client) send(ctx context.Context, method, path string, query url.Values, body []byte, token string) (*http.Response, error) {
 	if err := c.acquireReq(ctx); err != nil {
 		return nil, err
 	}
@@ -214,12 +235,19 @@ func (c *client) send(ctx context.Context, method, path string, query url.Values
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, method, u, nil)
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, reader)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := c.http.Do(req)
 	logRequest(c.accountID, method, c.apiPath+path, resp, err)
 	return resp, err
@@ -308,6 +336,9 @@ func apiError(op string, resp *http.Response) error {
 			Code    int    `json:"code"`
 			Message string `json:"message"`
 			Status  string `json:"status"`
+			Errors  []struct {
+				Reason string `json:"reason"`
+			} `json:"errors"`
 		} `json:"error"`
 	}
 	_ = json.Unmarshal(body, &payload)
@@ -322,6 +353,17 @@ func apiError(op string, resp *http.Response) error {
 		return fmt.Errorf("%w: %s", mail.ErrInvalidArgument, detail)
 	case http.StatusUnauthorized:
 		return fmt.Errorf("%w: %s", mail.ErrUnauthorized, detail)
+	case http.StatusForbidden:
+		// A token granted before a scope was added answers
+		// 403 insufficientPermissions: the credential still works, the grant
+		// does not, and only a new sign-in widens it. Every other 403
+		// (rate limiting, a disabled account) stays uncategorised so the UI
+		// does not send the user through a pointless re-authorization.
+		for _, e := range payload.Error.Errors {
+			if e.Reason == "insufficientPermissions" {
+				return fmt.Errorf("%w: %s", mail.ErrUnauthorized, detail)
+			}
+		}
 	}
 	if detail == "" {
 		return fmt.Errorf("gmail %s: %s", op, resp.Status)

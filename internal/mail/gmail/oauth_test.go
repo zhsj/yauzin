@@ -77,8 +77,8 @@ func browse(t *testing.T, extra url.Values) func(string) error {
 			return nil
 		}
 		q := u.Query()
-		if got := strings.Fields(q.Get("scope")); len(got) != 2 || got[0] != readonlyScope || got[1] != profileScope {
-			t.Errorf("scope = %q, want %q and %q", q.Get("scope"), readonlyScope, profileScope)
+		if got := strings.Fields(q.Get("scope")); len(got) != 2 || got[0] != modifyScope || got[1] != profileScope {
+			t.Errorf("scope = %q, want %q and %q", q.Get("scope"), modifyScope, profileScope)
 		}
 		if got := q.Get("code_challenge_method"); got != "S256" {
 			t.Errorf("code_challenge_method = %q, want S256", got)
