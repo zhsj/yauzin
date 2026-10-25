@@ -56,10 +56,10 @@ type folderSpec struct {
 }
 
 var systemFolders = []folderSpec{
-	{id: "inbox", labelID: "INBOX", kind: mail.FolderInbox},
-	{id: "starred", labelID: "STARRED", kind: mail.FolderStarred},
+	{id: "inbox", labelID: labelInbox, kind: mail.FolderInbox},
+	{id: "starred", labelID: labelStarred, kind: mail.FolderStarred},
 	{id: "sent", labelID: "SENT", kind: mail.FolderSent},
-	{id: "trash", labelID: "TRASH", kind: mail.FolderTrash},
+	{id: "trash", labelID: labelTrash, kind: mail.FolderTrash},
 }
 
 // Service is one Gmail account.
@@ -367,12 +367,20 @@ func pageLimit(limit int) int {
 // listThreads performs one threads.list call and fills the rows of the page. An
 // empty labelID does not filter by folder, which is what a search needs; an
 // empty query browses the label instead.
+//
+// includeSpamTrash is raised for the trash folder alone: the API leaves TRASH
+// and SPAM out of the results by default, so labelIds=TRASH would come back
+// empty. A search keeps the default false, which is what limits it to mail that
+// is neither spam nor in the trash.
 func (s *Service) listThreads(ctx context.Context, labelID, query, pageToken string, limit int) (mail.ThreadPage, error) {
 	q := url.Values{}
 	q.Set("maxResults", strconv.Itoa(limit))
 	q.Set("fields", "nextPageToken,resultSizeEstimate,threads/id")
 	if labelID != "" {
 		q.Set("labelIds", labelID)
+	}
+	if labelID == labelTrash {
+		q.Set("includeSpamTrash", "true")
 	}
 	if query != "" {
 		q.Set("q", query)
@@ -529,13 +537,13 @@ func (s *Service) Close() error {
 func labelIDFor(folderID string) (string, error) {
 	switch folderID {
 	case "inbox":
-		return "INBOX", nil
+		return labelInbox, nil
 	case "starred":
-		return "STARRED", nil
+		return labelStarred, nil
 	case "sent":
 		return "SENT", nil
 	case "trash":
-		return "TRASH", nil
+		return labelTrash, nil
 	}
 	if strings.TrimSpace(folderID) == "" {
 		return "", mail.ErrInvalidArgument

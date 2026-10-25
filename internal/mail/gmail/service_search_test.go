@@ -25,6 +25,9 @@ func TestSearchThreadsQueriesEveryFolder(t *testing.T) {
 		if got := q.Get("labelIds"); got != "" {
 			t.Errorf("labelIds = %q, want none: a search spans every folder", got)
 		}
+		if got := q.Get("includeSpamTrash"); got != "" {
+			t.Errorf("includeSpamTrash = %q, want none: a search leaves out spam and trash", got)
+		}
 		if got := q.Get("maxResults"); got != "25" {
 			t.Errorf("maxResults = %q, want 25", got)
 		}

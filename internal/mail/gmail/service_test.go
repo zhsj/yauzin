@@ -543,6 +543,9 @@ func TestListThreadsAssemblesConversations(t *testing.T) {
 		if got := q.Get("fields"); !strings.Contains(got, "resultSizeEstimate") {
 			t.Errorf("fields = %q, want resultSizeEstimate", got)
 		}
+		if got := q.Get("includeSpamTrash"); got != "" {
+			t.Errorf("includeSpamTrash = %q, want none: only the trash folder asks for it", got)
+		}
 		writeJSON(t, w, listBody)
 	})
 
@@ -648,6 +651,28 @@ func TestListThreadsUsesUserLabelIDVerbatim(t *testing.T) {
 	}
 	if got != "Label_1" {
 		t.Fatalf("labelIds = %q, want Label_1", got)
+	}
+}
+
+// TestListThreadsAsksForTrashExplicitly pins the one folder that needs the
+// wider scope: the API drops TRASH from threads.list unless includeSpamTrash
+// is true, so asking by label alone came back empty.
+func TestListThreadsAsksForTrashExplicitly(t *testing.T) {
+	var labelID, includeSpamTrash string
+	batch := &threadBatchServer{}
+	svc := newThreadService(t, batch, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		labelID, includeSpamTrash = q.Get("labelIds"), q.Get("includeSpamTrash")
+		writeJSON(t, w, `{"threads":[]}`)
+	})
+	if _, err := svc.ListThreads(context.Background(), mail.ListRequest{FolderID: "trash"}); err != nil {
+		t.Fatalf("ListThreads: %v", err)
+	}
+	if labelID != "TRASH" {
+		t.Fatalf("labelIds = %q, want TRASH", labelID)
+	}
+	if includeSpamTrash != "true" {
+		t.Fatalf("includeSpamTrash = %q, want true", includeSpamTrash)
 	}
 }
 

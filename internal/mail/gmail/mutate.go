@@ -10,13 +10,15 @@ import (
 	"github.com/zhsj/yauzin/internal/mail"
 )
 
-// Gmail system label IDs the app toggles. The mailbox states the sidebar shows
+// Gmail system label IDs the app names. The mailbox states the sidebar shows
 // are these labels: INBOX is what archiving removes, UNREAD and STARRED are the
-// two flags the list and the reader turn on and off.
+// two flags the list and the reader turn on and off, and TRASH is the folder a
+// deletion moves mail into.
 const (
 	labelInbox   = "INBOX"
 	labelUnread  = "UNREAD"
 	labelStarred = "STARRED"
+	labelTrash   = "TRASH"
 )
 
 // modifyBatchSize is the largest messages.batchModify the API accepts. One call
