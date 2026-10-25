@@ -489,9 +489,6 @@ func (s *Service) GetThread(ctx context.Context, threadID string) ([]*mail.Messa
 	return out, nil
 }
 
-// Send is not implemented: sending is out of the backend's scope.
-func (s *Service) Send(context.Context, mail.Draft) error { return mail.ErrUnsupported }
-
 // SaveAttachment is not implemented: attachment download is out of the
 // backend's scope.
 func (s *Service) SaveAttachment(context.Context, string, string, string) (string, error) {

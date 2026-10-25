@@ -45,9 +45,13 @@ type client struct {
 	// the same API: Gmail accepts "origin/batch/apiPath" for multipart calls.
 	apiPath  string
 	batchURL string
-	tokenURL string
-	store    Store
-	http     *http.Client
+	// uploadURL is the media upload root of the same API. Google serves media
+	// uploads of every API under /upload, so a raw message goes there while the
+	// metadata calls stay on apiPath.
+	uploadURL string
+	tokenURL  string
+	store     Store
+	http      *http.Client
 	// ownTransport is the transport this client built for the account (the
 	// proxy one), nil when the client shares another one. The logging wrapper
 	// and the shared default transport must not be closed, so close works off
@@ -122,6 +126,7 @@ func newClient(accountID string, store Store, opts []Option) (*client, error) {
 		baseURL:   o.baseURL,
 		apiPath:   apiPath,
 		batchURL:  base.Scheme + "://" + base.Host + "/batch" + apiPath,
+		uploadURL: base.Scheme + "://" + base.Host + "/upload" + apiPath,
 		tokenURL:  o.tokenURL,
 		store:     store,
 		http:      o.client,
@@ -187,11 +192,26 @@ func (c *client) postJSON(ctx context.Context, op, path string, in, out any) err
 // success with no payload: Gmail answers a label-only messages.batchModify that
 // way instead of returning the touched messages.
 func (c *client) doBody(ctx context.Context, op, method, path string, query url.Values, body []byte, out any) error {
+	return c.doRequest(ctx, op, method, c.baseURL, path, query, "application/json", body, out)
+}
+
+// doMediaUpload performs one authorized request whose body is the resource
+// itself rather than JSON, such as the raw source of a message. The body goes to
+// the media upload service, which avoids the base64 field of the JSON form and
+// its size limit.
+func (c *client) doMediaUpload(ctx context.Context, op, path, contentType string, body []byte, out any) error {
+	return c.doRequest(ctx, op, http.MethodPost, c.uploadURL, path,
+		url.Values{"uploadType": {"media"}}, contentType, body, out)
+}
+
+// doRequest performs one authorized request against one of the API roots. It
+// refreshes the token once when the server rejects it.
+func (c *client) doRequest(ctx context.Context, op, method, base, path string, query url.Values, contentType string, body []byte, out any) error {
 	token, err := c.accessToken(ctx, false)
 	if err != nil {
 		return err
 	}
-	resp, err := c.send(ctx, method, path, query, body, token)
+	resp, err := c.send(ctx, method, base, path, query, contentType, body, token)
 	if err != nil {
 		return fmt.Errorf("gmail %s: %w", op, err)
 	}
@@ -203,7 +223,7 @@ func (c *client) doBody(ctx context.Context, op, method, path string, query url.
 		if err != nil {
 			return err
 		}
-		resp, err = c.send(ctx, method, path, query, body, token)
+		resp, err = c.send(ctx, method, base, path, query, contentType, body, token)
 		if err != nil {
 			return fmt.Errorf("gmail %s: %w", op, err)
 		}
@@ -223,15 +243,15 @@ func (c *client) doBody(ctx context.Context, op, method, path string, query url.
 }
 
 // send builds and performs one request with the given bearer token. A non-nil
-// body is sent as JSON. It holds the account's request slot for the HTTP round
-// trip, so single and batch requests never overlap.
-func (c *client) send(ctx context.Context, method, path string, query url.Values, body []byte, token string) (*http.Response, error) {
+// body is sent with contentType. It holds the account's request slot for the
+// HTTP round trip, so single and batch requests never overlap.
+func (c *client) send(ctx context.Context, method, base, path string, query url.Values, contentType string, body []byte, token string) (*http.Response, error) {
 	if err := c.acquireReq(ctx); err != nil {
 		return nil, err
 	}
 	defer c.releaseReq()
 
-	u := c.baseURL + path
+	u := base + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
@@ -246,10 +266,10 @@ func (c *client) send(ctx context.Context, method, path string, query url.Values
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", contentType)
 	}
 	resp, err := c.http.Do(req)
-	logRequest(c.accountID, method, c.apiPath+path, resp, err)
+	logRequest(c.accountID, method, req.URL.Path, resp, err)
 	return resp, err
 }
 
