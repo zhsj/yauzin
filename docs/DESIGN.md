@@ -18,7 +18,7 @@
 
 依赖方向单向：`cmd` → `internal/ui` → 领域包；`internal/ui` 只依赖 `mail.Service` 接口，不依赖任何具体后端。各文件职责见 [§15 目录结构](#15-目录结构)，契约与不变量见下文。
 
-- **后端装配点**：`internal/ui/app.go` 的 `appOptions{accounts, newService, store, proxy, factory}` 是唯一装配后端的地方。`newApp()` 读取 `settings.json` 与 `accounts.json`，账号列表 = 已存 Gmail 账号 + 始终保留的 demo 账号（`demo-gmail`，仍由 `internal/mail/mock` 服务）；`newAppWith(pref, opts)` 接受已解析的设置与注入的工厂，测试经它构造 `App`，不触碰磁盘。UI 其余部分继续只认 `mail.Service`。
+- **后端装配点**：`internal/ui/app.go` 的 `appOptions{accounts, newService, store, proxy, factory, sendSMTP}` 是唯一装配后端的地方（`sendSMTP` 是发信账号的出站 SMTP 发送函数，默认由 `smtp.New` + 代理组装，测试注入替身）。`newApp()` 读取 `settings.json` 与 `accounts.json`，账号列表 = 已存 Gmail 账号 + 始终保留的 demo 账号（`demo-gmail`，仍由 `internal/mail/mock` 服务）；`newAppWith(pref, opts)` 接受已解析的设置与注入的工厂，测试经它构造 `App`，不触碰磁盘。UI 其余部分继续只认 `mail.Service`。
 
 ## 3. 后端契约（`internal/mail`）
 
@@ -31,7 +31,7 @@
 - **读取缓存**：gmail 后端对 `Folders` / `FolderDetails` / `ListThreads` / `SearchThreads` 各做一份无过期 LRU（容量 4 / 4 / 64 / 32；键为固定键、标签 ID 集合、`(labelID, pageToken, limit)`、`(query, pageToken, limit)`），命中返回深拷贝，检查发现变化时整体清空。列表与搜索的缓存分开，互不挤占。
 - **缓存失效由检查驱动**：`CheckChanges(ctx) (bool, error)` 请求一次 `users.getProfile?fields=historyId` 与上次基线比较；首次调用只记基线、清掉之前缓存并返回 false，值不相等（回退也算）则清空该账号全部读缓存并返回 true。检查在途时**缓存缺失**的读取先等检查结束（尊重 ctx），命中则立即返回；每个 LRU 自带纪元，读取发出请求前取纪元、写回走 `setAt`，期间发生 clear（检查）就丢弃结果。全量加载入口统一「先检查再加载」（`reloadChecked`），因此基线总先于它所描述的数据；轮询与界面刷新共用 UI 层同一条检查通道（见 §4.2），`internal/inboxwatch` 只接收结论、不再自查。
 - **错误是分类不是句子**：`ErrNotFound` / `ErrUnsupported` / `ErrInvalidArgument` / `ErrUnauthorized` 由 `internal/ui/errors.go` 用 `errors.Is` 映射到 i18n 键，未知错误才回退 `err.Error()`。`ErrUnauthorized` 只表示「账号需要重新授权」，不让传输层文案冒充原因。
-- **能力边界按方法表达**：后端对做不到的方法统一返回 `ErrUnsupported`，UI 保留原入口并由既有错误映射提示「当前账号不支持该操作」。Gmail 已实现 `SetFlag` / `Archive` / `Delete`（见 §3.1「写操作」），`Send` / `SaveAttachment` 仍是 `ErrUnsupported`；`RawMessage` 属于读操作，照常实现。写操作上的 `ErrUnauthorized` 还表示「授权范围不足」：旧令牌只带 `gmail.readonly` 时 Gmail 回 403 `insufficientPermissions`，客户端把它归入该分类，界面提示重新授权。
+- **能力边界按方法表达**：后端对做不到的方法统一返回 `ErrUnsupported`，UI 保留原入口并由既有错误映射提示「当前账号不支持该操作」。Gmail 已实现 `SetFlag` / `Archive` / `Delete`（见 §3.1「写操作」）与 `Send`（见 §3.2），`SaveAttachment` 仍是 `ErrUnsupported`；`RawMessage` 属于读操作，照常实现。写操作上的 `ErrUnauthorized` 还表示「授权范围不足」：旧令牌只带 `gmail.readonly` 时 Gmail 回 403 `insufficientPermissions`，客户端把它归入该分类，界面提示重新授权。
 - 实现必须并发安全并尊重 `ctx`（UI 从多个 goroutine 并发调用、不串行化）。mock 的延迟存在的意义就是暴露加载态与竞态。
 - 跨层数据必须复制：mock 的 `cloneMessage` / 附件切片深拷贝，避免 UI 通过返回指针改到存储。
 
@@ -46,6 +46,15 @@
 - **变更检查（historyId）**：`CheckChanges` 是 `users.getProfile?fields=historyId`（1 次请求、1 配额、无消息数据），与上次基线比较后由后端自己清缓存，调用方不需要模式参数。`checkMu` 只在「登记检查状态」和「比较 + 清缓存」两处短持有，HTTP 往返不在锁内；检查在途时缓存缺失的读取在 `checkDone` 上等待（ctx 取消即返回），命中不等待。读取发请求前取 LRU 纪元，返回时 `setAt` 校验：clear 之后写入的只可能是在该次 clear 之后发起的请求。`GetThread` / `RawMessage` 不是缓存读取，不等检查。清空缓存有两条路径：`CheckChanges` 发现邮箱变化，以及本账号的写操作——`SetFlag` / `Archive` / `Delete` 完成后立即 `clear()`（部分失败也清，因为前面的子请求已经改动了邮箱），因为 UI 的成功回调直接重读列表与侧栏、不会先跑一次检查。没有对外的整体失效入口。变化时以 DEBUG 记一行 `gmail mailbox changed`（`account` / `from` / `to`，只有 historyId，不含邮件内容），首次检查另记 `gmail history baseline`；默认 `info` 级别下不输出。
 - **类型来源**：`discovery_types.go` 由 `internal/cmd/gmailgen` 从 Google 的 Discovery 文档生成（`//go:generate`，文件头记录文档 `revision`），字段名按 initialism 表保持 `ID` / `IDs` / `MIMEType` / `AttachmentID` 等写法；`api.go` 只留 `headers` / `hasFlag` / `date` / `hasAttachment` 这些把文档折算成领域模型的辅助方法。文档本身不入库，每次生成都取官方当前版本，schema 变化靠 `git diff` 审阅。
 - **已知取舍**：一页 25 个会话 = 1 次 list + 1 次 metadata batch（`1 + ceil(N/25)`），首屏延迟仍高于 mock；每批 25 是并发预算而非 Gmail 协议上限（协议仍允许 100），串行后 batch 子请求峰值固定为 25，若线上仍偶发 429 再下调 `batchLimit`；标签多时文件夹加载仍拆成多批（每次 `FolderDetails` 一次性返回，不再逐批渐进渲染），缓存未命中时仍是一次 `labels.list` 加 `ceil(L/25)` 个 `labels.get`；缓存本身无过期，邮箱变化靠每分钟一次 `users.getProfile` 检查（托盘驻留期间也在跑），检查只换来 historyId，内容仍要重新拉；变更检查的失败不打扰界面（后台只记 DEBUG），由随后的加载自己报错；Gmail 按子请求计配额，batch 只省往返与连接开销、不省配额，`metadataHeaders` 也仍是每会话一份；`resultSizeEstimate` 是估算值；列表中附件标记依赖 metadata 返回的 part 树，若某条消息未返回 parts 则该行可能漏标记；token 与代理凭据都是明文 0600 存储，没有系统密钥环集成。
+
+### 3.2 发信（`internal/mail/rfc822`、`mail/smtp`、`netproxy`）
+
+- **一份报文，两条传输**：`rfc822.Build(draft, from, opts)` 把 `mail.Draft` 渲染成完整 RFC 5322 报文（CRLF 行尾、`Date` / `Message-ID` / `MIME-Version`、RFC 2047 编码的主题与显示名、`text/plain` 正文 base64、有附件时 `multipart/mixed` + 流式 base64 附件），Gmail 与 SMTP 共用，避免两套 MIME 行为分叉。显示名、主题与附件名里的 CR/LF 一律替换成空格，防止用户输入注入报文头。
+- **Bcc 头是传输差异**：`Draft.Bcc` 始终属于信封（`Draft.Recipients()` = To + Cc + Bcc 去重）。Gmail API 只能看到 raw 报文，所以 `rfc822.Options{BccHeader: true}` 把密送地址写进 `Bcc` 头（Gmail 投递时剔除该头）；直连 SMTP 时密送地址只进 `RCPT TO`，报文头必须不含 `Bcc`，否则其他收件人都能看到密送对象。
+- **Gmail 发送**：`messages.send` 走 media 上传（`POST <host>/upload/gmail/v1/users/me/messages/send?uploadType=media`，`Content-Type: message/rfc822`），避开 `{"raw": base64}` 的 33% 体积膨胀与 JSON 请求上限。`From` 一律取账号自身地址，不采信 `Draft.From`：Gmail 只接受属于该账号的身份。发送成功的邮件由 Gmail 自己放进「已发送」。`client` 因此有两个 API 根：`apiPath`（普通 REST）与 `uploadURL`（`/upload` + `apiPath`），两者共用请求槽、401 重试与 `apiError` 分类。
+- **SMTP 发信**：`smtp.Sender` 每条发信条目一个实例、每次发送一条连接（`net/smtp`）。`Security` 三选一：`tls`（465 隐式 TLS，本包先包裹连接）、`starttls`（587，服务器不广告 STARTTLS 就报错而不是退回明文）、`none`（25，仅限自有网络的中继）。`Username` 为空跳过 AUTH；否则按服务器广告选 `PLAIN`（优先）或 `LOGIN`——两者都在本包实现，因为 `net/smtp` 的 `PlainAuth` 拒绝在未加密连接上发密码，而「不加密」是用户显式选择。认证被拒（501/504/530/534/535）包成 `smtp.ErrAuth`，由 `errors.go` 翻成「检查用户名和密码」，其余协议错误保留原文（用户要看到具体原因）。连接、TLS 与 AUTH 各阶段都受 `ctx` 的 deadline 与取消约束；DEBUG 只记 host/port/发件地址/收件人数，不记密码与报文。
+- **代理**：`internal/netproxy` 是裸 TCP 的代理拨号器——`net/http` 的代理支持在它的 internal bundle 里，给不了别的 dialer。`Parse` 规则（`http`/`https`/`socks5`，必须有 host 与端口，`socks5h` 不接受）由 `gmail.ParseProxy` 与 SMTP 共用；`Dial` 对 socks5 用 `golang.org/x/net/proxy`，对 `http`/`https` 手写 `CONNECT`（含 `Proxy-Authorization: Basic`，https 时先对代理做 TLS）。发信条目与 Gmail 账号一样有 `useProxy`，沿用 `settings.json` 的全局代理地址。
+- **不写 Gmail「已发送」**：通过 SMTP 发出的邮件不会出现在 Gmail 的已发送里（`messages.insert` 不接受未配置 `sendAs` 的伪造 From，配置 sendAs 需要额外验证流程）。留档靠 SMTP 条目上的「默认密送到当前 Gmail 账号」开关：选中该发件人时写信浮层把当前邮箱地址预填进密送字段，用户可清空或改填。
 
 ## 4. UI 架构（`internal/ui`）
 
@@ -86,7 +95,8 @@
 - `App.overlay` 是**单一槽位**：`menuOverlay` / `settingsView` / `composeView` 互相替换。
 - 吞点击层必须是 `Stack` 的第一个子对象，否则挡住卡片自身的交互。菜单用 pass-through blocker（点击外部只关菜单），设置保持模态阻塞；写信浮窗**不设全窗 blocker**，由卡片内 `Clickable` 自己消费空白点击。
 - Esc 优先级：状态条 / 菜单 → 写信 / 设置 → 阅读器返回列表。Esc 不清空查询、不在搜索时回退文件夹；搜索框胶囊的 ✕ 只清空输入框文字，列表保持当前搜索结果（`query` 与 `activeFolder` 都不变）。
-- 面板内的下拉**必须页内展开**，不能复用 `App.showMenu`：`showOverlay` 先 `closeOverlay()` 把 `a.settings` 置 nil，菜单关闭时 `hideOverlay()` 又直接清空 `a.overlay`，设置面板不会回来。设置页的语言选择即按此实现（`settingsView.langOpen`，候选行在同一张卡片内展开）。
+- 面板内的下拉**必须页内展开**，不能复用 `App.showMenu`：`showOverlay` 先 `closeOverlay()` 把 `a.settings` 置 nil，菜单关闭时 `hideOverlay()` 又直接清空 `a.overlay`，设置面板不会回来。设置页的语言选择即按此实现（`settingsView.langOpen`，候选行在同一张卡片内展开）；写信浮层的「发件人」同理（`composeView.fromOpen`），因为菜单会顺带把草稿丢掉。
+- 写信浮层的「发件人」行只在存在 SMTP 发信账号时出现（否则整行不占位）：候选在卡片内就地展开，当前身份带勾，选中即收起。身份决定传输——邮箱身份走它自己的后端（`services[mailboxID]`，写信开始时固定，中途切账号不会改投），发信账号走 `App.sendSMTP`（可注入，测试不碰网络）。「密送」行始终显示；自动预填的值记在 `composeView.bccAuto` 里，切走发件人时只清除仍是该自动值的文本，用户改过的内容不动。
 - 下拉菜单的水平位置由调用点声明的 `menuAlign` 决定：默认 `menuAlignStart` 与锚点左边缘对齐（从左往右展开），靠窗口右缘的锚点——阅读器消息卡的 ⋮ 与顶栏账号菜单——显式用 `menuAlignEnd` 与右边缘对齐（从右往左展开）。两种对齐最后都 clamp 进窗口，下方放不下时仍向上展开。
 - 写信浮窗的引用块由 `format.go` 的 `replyQuote` / `forwardQuote` 生成，文案固定英文、不走 i18n（它们属于邮件内容而非界面文案，中文界面下同样是英文）：回复是 Gmail 的 `On <时间> <发件人> wrote:` 抬头（本地时区的 `Mon, Jan 2, 2006 at 3:04 PM`）加逐行 `> ` 前缀的正文，转发是 `---------- Forwarded message ----------` 加 `From:` / `Date:` / `Subject:` 与完整正文。回复前阅读器里该封邮件正文若有选区，只引用选中片段（`messageCard.selectedText` → `readerView.replySelection` → `openCompose` 快照一次），选区为空或只有空白时回退完整正文；转发不使用选区。`replySubject` / `forwardSubject` 的 `Re: ` / `Fwd: ` 同理写死英文。
 
@@ -206,6 +216,8 @@
 
 账号凭据与令牌另存 `accounts.json`（`internal/accounts`，同为 0600 原子写，目录由 `prefs.Dir()` 统一解析，`YAUZIN_CONFIG_DIR` 对两者同时生效）。它不放进 `settings.json`：令牌刷新频繁且由后端在 worker goroutine 写回，与 UI 设置的读写节奏不同。
 
+同一个文件还存 SMTP 发信账号：`kind` 为 `smtp`，`smtp{host,port,username,password,security,bccToAccount}` 是它唯一的配置，没有令牌。它们**不是邮箱**——`configuredAccounts` 按 kind 跳过，顶栏账号菜单、侧栏与后端工厂都看不到它们，写信浮层与「设置 → 账号」的发信账号分组才读它们。`id` 为 `smtp:` + 小写发件地址，同地址再次保存即覆盖（与 Gmail 的 `gmail:` + 小写邮箱同一规则）；编辑时改了发件地址就用 `Store.Replace(oldID, entry)` 一次写入完成改名，避免写盘失败留下两份或零份。密码与 OAuth client secret 同策略：明文存 0600 文件、不写日志，没有系统密钥环集成。
+
 ## 11. 托盘与单实例
 
 - `internal/tray` 是 `fyne.io/systray` 的薄封装：左键 `SetOnTapped` 直接开窗，右键菜单只有「打开 / 退出」；回调在库的 goroutine 上，必须经 `post` / channel 回 UI 线程。通知区预检失败时 `Start` 返回错误，应用降级。托盘只持有 PNG 字节：`Icons.Idle`/`Icons.Active` 分别对应灰点与红点两态，`SetActive` 在状态未变化时不重复调用 `SetIcon`。
@@ -234,7 +246,7 @@
 
 ### 13.2 依赖与 vendor
 
-GUI 使用 Gio v0.10.3，文件选择使用 `gioui.org/x/explorer`，Gmail 授权使用 `golang.org/x/oauth2`。`vendor/` 已被 `.gitignore` 排除、不入库，但构建镜像使用 `-mod=vendor`，所以本地必须先生成。依赖变更后（沙箱无外网直连，走镜像代理）：
+GUI 使用 Gio v0.10.3，文件选择使用 `gioui.org/x/explorer`，Gmail 授权使用 `golang.org/x/oauth2`，SMTP 的 socks5 拨号用 `golang.org/x/net/proxy`（`golang.org/x/net` 本来就是直接依赖，只多 vendor 一个子包）。`vendor/` 已被 `.gitignore` 排除、不入库，但构建镜像使用 `-mod=vendor`，所以本地必须先生成。依赖变更后（沙箱无外网直连，走镜像代理）：
 
 ```bash
 GOFLAGS=-mod=mod CGO_ENABLED=1 \
@@ -352,9 +364,12 @@ python3 scripts/gen_app_icons.py            # 需要 rsvg-convert（librsvg2-bin
 cmd/yauzin/main.go             入口：app.Main + 窗口事件循环
 internal/mail/mail.go          领域模型（会话摘要 / 分页）与 Service 接口
 internal/mail/mock/            内存 mock 后端（140ms 模拟延迟，按会话聚合）
-internal/mail/gmail/           Gmail 后端：OAuth（PKCE 回环）、REST 客户端、请求日志 transport、MIME 解析、写操作（mutate.go：标记/归档/删除）、Discovery 生成的 API 类型
+internal/mail/gmail/           Gmail 后端：OAuth（PKCE 回环）、REST 客户端、请求日志 transport、MIME 解析、写操作（mutate.go：标记/归档/删除）、发信（send.go：messages.send 的 media 上传）、Discovery 生成的 API 类型
+internal/mail/rfc822/          Draft → RFC 5322 报文（头编码、折行、附件 multipart、可选 Bcc 头），Gmail 与 SMTP 共用
+internal/mail/smtp/            SMTP 发信：三种加密、PLAIN/LOGIN、信封收件人（含 Bcc）、代理拨号
+internal/netproxy/             裸 TCP 代理拨号：http/https CONNECT 与 socks5（与 Gmail 共用的地址校验）
 internal/cmd/gmailgen/         Gmail Discovery 文档 → Go 类型生成器（go generate 入口）
-internal/accounts/             accounts.json：OAuth 凭据（provider）与每账号 kind/令牌/useProxy
+internal/accounts/             accounts.json：OAuth 凭据（provider）、每账号 kind/令牌/useProxy、SMTP 发信条目（smtp 配置，无令牌）
 internal/ui/app.go             状态与构造：App 字段、构造器、异步原语
 internal/ui/app_lifecycle.go   窗口生命周期、post 队列、临时目录与 Ctrl+C 清理
 internal/ui/app_data.go        账号、文件夹、分页与加载（含先检查再加载）
@@ -379,10 +394,11 @@ internal/ui/messagelist_row.go    会话行布局与 hover 动作
 internal/ui/messagelist_text.go   发件人/主题/摘要格式化
 internal/ui/reader.go          阅读器容器与工具栏
 internal/ui/messagecard.go     可折叠消息卡片
-internal/ui/compose_view.go    写信浮层布局
-internal/ui/compose_actions.go 发送、附件暂存与丢弃
-internal/ui/settings.go        设置浮层（通用/账号/快捷键，含网络代理、日志级别与账号手风琴：展开后是浅灰子卡片——代理开关 + 描边按钮操作，删除在同一行原地确认）
-internal/ui/account_add.go     添加账号 / 重新登录浮层（类型选择、授权链接复制与打开）
+internal/ui/compose_view.go    写信浮层布局（含发件人就地展开与密送行）
+internal/ui/compose_actions.go 发送（按发件人分派到后端或 SMTP）、附件暂存与丢弃
+internal/ui/settings.go        设置浮层（通用/账号/快捷键，含网络代理、日志级别与账号手风琴：展开后是浅灰子卡片——代理开关 + 描边按钮操作，删除在同一行原地确认；账号卡下方是发信账号分组）
+internal/ui/smtp_account.go    SMTP 发信账号：新增/编辑表单浮层、设置页分组行与其展开块
+internal/ui/account_add.go     添加账号 / 重新登录浮层（类型选择含 SMTP 发信账号、授权链接复制与打开）
 internal/ui/menu.go            下拉菜单
 internal/ui/status.go          轻量状态条
 internal/ui/fonts.go           字体集合（系统字体 + Material Symbols）与 Shaper

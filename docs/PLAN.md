@@ -13,7 +13,7 @@
 - 状态条通知只保留最后一条（`show`/`clear` 停掉旧消退定时器）；`post` 的补帧重试共用单个槽位。
 - 后端装配点收敛到 `appOptions`，`newApp()` 的零配置默认仍是 demo + mock。
 - `mail.Service` 去掉未使用的单封 `Get`，正文只按会话读取。
-- Gmail 只读接入：`internal/accounts` 保存 OAuth 凭据与令牌，`internal/mail/gmail` 实现文件夹/会话列表/会话全局搜索（独立缓存）/会话正文（PKCE 回环授权），其余方法返回 `ErrUnsupported`。
+- Gmail 接入：`internal/accounts` 保存 OAuth 凭据与令牌，`internal/mail/gmail` 实现文件夹/会话列表/会话全局搜索（独立缓存）/会话正文（PKCE 回环授权）与写操作（标记/归档/删除/发信），只剩 `SaveAttachment` 返回 `ErrUnsupported`。
 - 通用代理设置：`settings.json` 的 `proxy`，账号条目只记 `useProxy`；保存后按新代理重建对应后端。
 - Gmail API 类型改由 Discovery 文档生成（`internal/cmd/gmailgen` + `//go:generate`），`api.go` 只剩领域映射辅助方法。
 - 托盘与单实例：`internal/tray` 的未读红点、关窗驻留，`internal/singleinstance` 经会话总线唤起已有窗口。
@@ -23,6 +23,7 @@
 - 阅读器「更多」菜单：安全 / 完整 HTML 预览与原始邮件页，均在系统浏览器打开。
 - 设置扩充：客户端标题栏、性能监视器、日志级别、代理（全局与按账号）、账号手风琴（重新登录 / 删除）与 `activeAccount` 记忆。
 - 系统字体 + emoji 回退、CSD 判定与系统光标主题解析（`internal/cursor`）。
+- 发信：Gmail `messages.send`（media 上传）与 SMTP 发信账号（`kind=smtp`，三种加密、代理、默认密送回 Gmail），写信浮层的发件人可在邮箱与各发信账号之间切换。
 
 当前验证基线：`gofmt` 与 `goimports -local github.com/zhsj/yauzin` 均干净、纯 Go 包 `go test -vet=all` 通过、容器内 `go build ./cmd/yauzin` 与 `go test -vet=all ./...` 通过。
 
