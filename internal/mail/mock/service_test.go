@@ -400,6 +400,81 @@ func TestSearchSpansEveryFolderExceptTrash(t *testing.T) {
 	}
 }
 
+// TestSpamIsAFolderOfItsOwn covers the spam semantics: the demo junk has its
+// own folder with a count, it is neither in the inbox nor reachable by search,
+// and moving it to the trash takes it out of spam the way Gmail does.
+func TestSpamIsAFolderOfItsOwn(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+
+	folders, err := s.Folders(ctx)
+	if err != nil {
+		t.Fatalf("folders: %v", err)
+	}
+	folders, err = s.FolderDetails(ctx, folders)
+	if err != nil {
+		t.Fatalf("folder details: %v", err)
+	}
+	var spamFolder mail.Folder
+	for _, f := range folders {
+		if f.Kind == mail.FolderSpam {
+			spamFolder = f
+		}
+	}
+	if spamFolder.ID != "spam" || spamFolder.Total == 0 || spamFolder.Unread == 0 {
+		t.Fatalf("spam folder = %+v, want conversations and unread mail", spamFolder)
+	}
+
+	spam, err := s.ListThreads(ctx, mail.ListRequest{FolderID: "spam", Limit: 200})
+	if err != nil {
+		t.Fatalf("list spam: %v", err)
+	}
+	target := spam.Threads[0]
+
+	inbox, err := s.ListThreads(ctx, mail.ListRequest{FolderID: "inbox", Limit: 200})
+	if err != nil {
+		t.Fatalf("list inbox: %v", err)
+	}
+	for _, th := range inbox.Threads {
+		if th.ID == target.ID {
+			t.Fatalf("spam conversation %s also shows in the inbox", target.ID)
+		}
+	}
+	found, err := s.SearchThreads(ctx, mail.SearchRequest{Query: target.Subject})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if found.Total != 0 {
+		t.Fatalf("search matched %d spam conversations, want none", found.Total)
+	}
+
+	if err := s.Delete(ctx, target.MessageIDs); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	spam, err = s.ListThreads(ctx, mail.ListRequest{FolderID: "spam", Limit: 200})
+	if err != nil {
+		t.Fatalf("list spam after delete: %v", err)
+	}
+	for _, th := range spam.Threads {
+		if th.ID == target.ID {
+			t.Fatalf("deleted conversation %s is still in Spam", target.ID)
+		}
+	}
+	trash, err := s.ListThreads(ctx, mail.ListRequest{FolderID: "trash", Limit: 200})
+	if err != nil {
+		t.Fatalf("list trash: %v", err)
+	}
+	inTrash := false
+	for _, th := range trash.Threads {
+		if th.ID == target.ID {
+			inTrash = true
+		}
+	}
+	if !inTrash {
+		t.Fatalf("deleted spam conversation %s is missing from Trash", target.ID)
+	}
+}
+
 func TestSearchThreadsRequiresAQuery(t *testing.T) {
 	s := newTestService(t)
 	for _, query := range []string{"", "   "} {
@@ -507,7 +582,7 @@ func TestKnownFoldersAndLabels(t *testing.T) {
 	s := newTestService(t)
 	ctx := context.Background()
 
-	for _, id := range []string{"inbox", "starred", "sent", "trash", "label:work"} {
+	for _, id := range []string{"inbox", "starred", "sent", "spam", "trash", "label:work"} {
 		if _, err := s.ListThreads(ctx, mail.ListRequest{FolderID: id, Limit: 10}); err != nil {
 			t.Fatalf("folder %q: %v", id, err)
 		}

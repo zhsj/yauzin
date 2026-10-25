@@ -112,6 +112,10 @@ var (
 	iconMarkRead   = mutedIcon(glyphMarkRead)
 	iconMarkUnread = mutedIcon(glyphMarkUnread)
 
+	// The spam folder reuses the warning triangle: Gmail's octagon glyph is not
+	// in the bundled subset, and regenerating the font costs more than it adds.
+	iconSpam = mutedIcon(glyphAlert)
+
 	iconPlus = mutedIcon(glyphPlus)
 	iconFile = mutedIcon(glyphFile)
 

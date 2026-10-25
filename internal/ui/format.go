@@ -18,6 +18,8 @@ func folderDisplayName(f mail.Folder) string {
 		return i18n.T("folder.starred")
 	case mail.FolderSent:
 		return i18n.T("folder.sent")
+	case mail.FolderSpam:
+		return i18n.T("folder.spam")
 	case mail.FolderTrash:
 		return i18n.T("folder.trash")
 	default:

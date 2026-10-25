@@ -97,6 +97,7 @@
   "folder.inbox": "Inbox",
   "folder.starred": "Starred",
   "folder.sent": "Sent",
+  "folder.spam": "Spam",
   "folder.trash": "Trash",
 
   "list.emptyTitle": "Nothing here",

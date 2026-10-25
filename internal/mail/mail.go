@@ -62,6 +62,7 @@ const (
 	FolderInbox   FolderKind = "inbox"
 	FolderStarred FolderKind = "starred"
 	FolderSent    FolderKind = "sent"
+	FolderSpam    FolderKind = "spam"
 	FolderTrash   FolderKind = "trash"
 	FolderLabel   FolderKind = "label"
 )

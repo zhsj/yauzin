@@ -218,6 +218,7 @@ func folderDetails() map[string]string {
 	return map[string]string{
 		"INBOX":   `{"messagesUnread":3,"threadsTotal":112}`,
 		"STARRED": `{"messagesUnread":1,"threadsTotal":7}`,
+		"SPAM":    `{"messagesUnread":2,"threadsTotal":9}`,
 		"Label_1": `{"messagesUnread":2,"threadsTotal":42,"color":{"backgroundColor":"#0b57d0"}}`,
 	}
 }
@@ -248,8 +249,8 @@ func TestFoldersReadsCountsFromBatchedLabelDetails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FolderDetails: %v", err)
 	}
-	if len(folders) != 6 {
-		t.Fatalf("folders = %+v, want 4 system + 2 labels", folders)
+	if len(folders) != 7 {
+		t.Fatalf("folders = %+v, want 5 system + 2 labels", folders)
 	}
 	want := []struct {
 		id     string
@@ -260,6 +261,7 @@ func TestFoldersReadsCountsFromBatchedLabelDetails(t *testing.T) {
 		{"inbox", mail.FolderInbox, 3, 112},
 		{"starred", mail.FolderStarred, 1, 7},
 		{"sent", mail.FolderSent, 0, 0},
+		{"spam", mail.FolderSpam, 2, 9},
 		{"trash", mail.FolderTrash, 0, 0},
 		{"Label_1", mail.FolderLabel, 2, 42},
 		{"Label_2", mail.FolderLabel, 0, 0},
@@ -270,14 +272,14 @@ func TestFoldersReadsCountsFromBatchedLabelDetails(t *testing.T) {
 			t.Fatalf("folder %d = %+v, want id=%q kind=%q unread=%d total=%d", i, got, w.id, w.kind, w.unread, w.total)
 		}
 	}
-	if got := folders[4]; got.Name != "Work" || got.Color != "#0b57d0" {
+	if got := folders[5]; got.Name != "Work" || got.Color != "#0b57d0" {
 		t.Fatalf("user label = %+v, want Work with its colour", got)
 	}
 	batches := batch.calls()
 	if len(batches) != 1 {
 		t.Fatalf("batch requests = %d, want 1", len(batches))
 	}
-	if len(batches[0]) != 6 {
+	if len(batches[0]) != 7 {
 		t.Fatalf("batch calls = %v, want one per displayed label", batches[0])
 	}
 }
@@ -297,22 +299,22 @@ func TestFoldersToleratesADeletedLabel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FolderDetails: %v", err)
 	}
-	if len(folders) != 6 {
+	if len(folders) != 7 {
 		t.Fatalf("folders = %+v, want the surviving labels", folders)
 	}
-	if got := folders[4]; got.ID != "Label_1" || got.Unread != 2 {
-		t.Fatalf("folder 4 = %+v, want the counted user label", got)
+	if got := folders[5]; got.ID != "Label_1" || got.Unread != 2 {
+		t.Fatalf("folder 5 = %+v, want the counted user label", got)
 	}
 	// A label deleted between the list and the batch keeps its row, without a
 	// count, instead of failing the whole folder list.
-	if got := folders[5]; got.ID != "Label_2" || got.Unread != 0 {
-		t.Fatalf("folder 5 = %+v, want Label_2 without a count", got)
+	if got := folders[6]; got.ID != "Label_2" || got.Unread != 0 {
+		t.Fatalf("folder 6 = %+v, want Label_2 without a count", got)
 	}
 }
 
 func TestFoldersFailsWhenNoLabelDetailSucceeds(t *testing.T) {
 	statuses := make(map[string]int, len(folderDetails())+2)
-	for _, id := range []string{"INBOX", "STARRED", "SENT", "TRASH", "Label_1", "Label_2"} {
+	for _, id := range []string{"INBOX", "STARRED", "SENT", "SPAM", "TRASH", "Label_1", "Label_2"} {
 		statuses[id] = http.StatusForbidden
 	}
 	batch := &batchServer{details: folderDetails(), statuses: statuses}
@@ -654,25 +656,32 @@ func TestListThreadsUsesUserLabelIDVerbatim(t *testing.T) {
 	}
 }
 
-// TestListThreadsAsksForTrashExplicitly pins the one folder that needs the
-// wider scope: the API drops TRASH from threads.list unless includeSpamTrash
-// is true, so asking by label alone came back empty.
-func TestListThreadsAsksForTrashExplicitly(t *testing.T) {
-	var labelID, includeSpamTrash string
-	batch := &threadBatchServer{}
-	svc := newThreadService(t, batch, func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		labelID, includeSpamTrash = q.Get("labelIds"), q.Get("includeSpamTrash")
-		writeJSON(t, w, `{"threads":[]}`)
-	})
-	if _, err := svc.ListThreads(context.Background(), mail.ListRequest{FolderID: "trash"}); err != nil {
-		t.Fatalf("ListThreads: %v", err)
-	}
-	if labelID != "TRASH" {
-		t.Fatalf("labelIds = %q, want TRASH", labelID)
-	}
-	if includeSpamTrash != "true" {
-		t.Fatalf("includeSpamTrash = %q, want true", includeSpamTrash)
+// TestListThreadsAsksForHiddenFoldersExplicitly pins the two folders that need
+// the wider scope: the API drops SPAM and TRASH from threads.list unless
+// includeSpamTrash is true, so asking by label alone came back empty.
+func TestListThreadsAsksForHiddenFoldersExplicitly(t *testing.T) {
+	for _, tc := range []struct{ folder, label string }{
+		{"trash", "TRASH"},
+		{"spam", "SPAM"},
+	} {
+		t.Run(tc.folder, func(t *testing.T) {
+			var labelID, includeSpamTrash string
+			batch := &threadBatchServer{}
+			svc := newThreadService(t, batch, func(w http.ResponseWriter, r *http.Request) {
+				q := r.URL.Query()
+				labelID, includeSpamTrash = q.Get("labelIds"), q.Get("includeSpamTrash")
+				writeJSON(t, w, `{"threads":[]}`)
+			})
+			if _, err := svc.ListThreads(context.Background(), mail.ListRequest{FolderID: tc.folder}); err != nil {
+				t.Fatalf("ListThreads: %v", err)
+			}
+			if labelID != tc.label {
+				t.Fatalf("labelIds = %q, want %q", labelID, tc.label)
+			}
+			if includeSpamTrash != "true" {
+				t.Fatalf("includeSpamTrash = %q, want true", includeSpamTrash)
+			}
+		})
 	}
 }
 

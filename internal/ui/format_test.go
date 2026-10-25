@@ -24,6 +24,7 @@ func TestFolderDisplayNameEnglish(t *testing.T) {
 		{mail.Folder{Kind: mail.FolderInbox, Name: "收件箱"}, "Inbox"},
 		{mail.Folder{Kind: mail.FolderStarred, Name: "已加星标"}, "Starred"},
 		{mail.Folder{Kind: mail.FolderSent, Name: "已发送"}, "Sent"},
+		{mail.Folder{Kind: mail.FolderSpam, Name: "垃圾邮件"}, "Spam"},
 		{mail.Folder{Kind: mail.FolderTrash, Name: "垃圾箱"}, "Trash"},
 		{mail.Folder{Kind: mail.FolderLabel, Name: "工作"}, "工作"},
 	} {
@@ -42,6 +43,7 @@ func TestFolderDisplayNameChinese(t *testing.T) {
 		{mail.Folder{Kind: mail.FolderInbox}, "收件箱"},
 		{mail.Folder{Kind: mail.FolderStarred}, "已加星标"},
 		{mail.Folder{Kind: mail.FolderSent}, "已发送"},
+		{mail.Folder{Kind: mail.FolderSpam}, "垃圾邮件"},
 		{mail.Folder{Kind: mail.FolderTrash}, "垃圾箱"},
 		{mail.Folder{Kind: mail.FolderLabel, Name: "账单"}, "账单"},
 	} {

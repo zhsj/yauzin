@@ -31,6 +31,7 @@ const (
 type stored struct {
 	msg      *mail.Message
 	sent     bool
+	spam     bool
 	trash    bool
 	archived bool
 }
@@ -76,6 +77,7 @@ func (s *Service) seed() {
 	}
 	s.seedInbox(now)
 	s.seedSent(now)
+	s.seedSpam(now)
 	s.seedTrash(now)
 	s.sortThreads()
 }
@@ -156,6 +158,43 @@ func (s *Service) seedSent(now time.Time) {
 		s.threads = append(s.threads, &thread{
 			id:   fmt.Sprintf("%s-sent-t%02d", s.acc.ID, i),
 			msgs: []*stored{{msg: m, sent: true}},
+		})
+	}
+}
+
+// seedSpam builds the junk the demo account's spam folder holds. The messages
+// are written here rather than taken from templates: the giveaway subjects are
+// the point of the folder.
+func (s *Service) seedSpam(now time.Time) {
+	junk := []struct{ from, email, subject, snippet, lead string }{
+		{"国际彩票中心", "winner@lottery.example", "恭喜：您已获得 8,800,000.00 元奖金",
+			"请于 48 小时内回复本邮件并提供银行账号，逾期视为放弃。",
+			"恭喜您在本季度国际抽奖中获得一等奖，奖金 8,800,000.00 元。"},
+		{"账户安全中心", "security@account-verify.example", "【紧急】您的账户将于今日被冻结",
+			"检测到异常登录，请在 24 小时内点击链接完成验证，否则账户将被停用。",
+			"我们检测到您的账户存在异常登录，为保障资金安全，需要您立即验证身份。"},
+		{"批发直供", "sales@cheap-watches.example", "工厂直供名表，一件代发",
+			"原厂机芯，支持验货，回复本邮件即可获取报价单。",
+			"我们是源头工厂，长期供应各类名牌手表，支持一件代发与贴牌。"},
+	}
+	for i, j := range junk {
+		m := &mail.Message{
+			MessageSummary: mail.MessageSummary{
+				ID:        fmt.Sprintf("%s-spam-%02d", s.acc.ID, i),
+				AccountID: s.acc.ID,
+				From:      mail.Address{Name: j.from, Email: j.email},
+				To:        []mail.Address{{Name: s.acc.DisplayName(), Email: s.acc.Email}},
+				Subject:   j.subject,
+				Snippet:   j.snippet,
+				Date:      now.Add(-time.Duration(i*311+17) * time.Minute),
+				Unread:    i != 1,
+			},
+			HTMLBody: htmlBody(j.subject, j.lead, nil, j.from),
+			TextBody: plainBody(j.lead, nil, j.from),
+		}
+		s.threads = append(s.threads, &thread{
+			id:   fmt.Sprintf("%s-spam-t%02d", s.acc.ID, i),
+			msgs: []*stored{{msg: m, spam: true}},
 		})
 	}
 }
@@ -248,6 +287,7 @@ func (s *Service) Folders(ctx context.Context) ([]mail.Folder, error) {
 		{ID: "inbox", Name: "收件箱", Kind: mail.FolderInbox},
 		{ID: "starred", Name: "已加星标", Kind: mail.FolderStarred},
 		{ID: "sent", Name: "已发送", Kind: mail.FolderSent},
+		{ID: "spam", Name: "垃圾邮件", Kind: mail.FolderSpam},
 		{ID: "trash", Name: "垃圾箱", Kind: mail.FolderTrash},
 	}
 	for _, l := range s.labels {
@@ -269,7 +309,7 @@ func (s *Service) FolderDetails(ctx context.Context, folders []mail.Folder) ([]m
 		return nil, err
 	}
 
-	inboxUnread, starredUnread := 0, 0
+	inboxUnread, starredUnread, spamUnread := 0, 0, 0
 	labelUnread := map[string]int{}
 	labelColor := map[string]string{}
 	for _, l := range s.labels {
@@ -281,6 +321,9 @@ func (s *Service) FolderDetails(ctx context.Context, folders []mail.Folder) ([]m
 		}
 		if slices.ContainsFunc(th.msgs, func(e *stored) bool { return e.msg.Unread && matchFolder(e, "starred") }) {
 			starredUnread++
+		}
+		if slices.ContainsFunc(th.msgs, func(e *stored) bool { return e.msg.Unread && matchFolder(e, "spam") }) {
+			spamUnread++
 		}
 		for _, l := range s.labels {
 			if slices.ContainsFunc(th.msgs, func(e *stored) bool { return e.msg.Unread && matchFolder(e, l.ID) }) {
@@ -298,6 +341,8 @@ func (s *Service) FolderDetails(ctx context.Context, folders []mail.Folder) ([]m
 			out[i].Unread = inboxUnread
 		case mail.FolderStarred:
 			out[i].Unread = starredUnread
+		case mail.FolderSpam:
+			out[i].Unread = spamUnread
 		case mail.FolderLabel:
 			out[i].Unread = labelUnread[f.ID]
 			out[i].Color = labelColor[f.ID]
@@ -433,14 +478,15 @@ func (s *Service) threadPool(folderID, query string) []mail.ThreadSummary {
 	q := strings.ToLower(strings.TrimSpace(query))
 	// The row always describes the whole conversation: the UI archives, deletes
 	// and marks read through ThreadSummary.MessageIDs, so a summary built from
-	// only the matching messages would act on part of a conversation. Trash is
-	// the one place where the conversation really is its trashed messages.
+	// only the matching messages would act on part of a conversation. Trash and
+	// spam are the two places where the conversation really is the messages
+	// sitting in that folder.
 	summaryScope := ""
-	if folderID == "trash" {
-		summaryScope = "trash"
+	if folderID == "trash" || folderID == "spam" {
+		summaryScope = folderID
 	}
-	// Searching spans every folder except trash, like Gmail's all mail search,
-	// while browsing stays inside the selected folder.
+	// Searching spans every folder except trash and spam, like Gmail's all mail
+	// search, while browsing stays inside the selected folder.
 	scope := folderID
 	if q != "" {
 		scope = ""
@@ -474,7 +520,7 @@ func (s *Service) threadPool(folderID, query string) []mail.ThreadSummary {
 // rejected too: browsing always names a folder, and search is SearchThreads.
 func (s *Service) validateFolder(folderID string) error {
 	switch folderID {
-	case "inbox", "starred", "sent", "trash":
+	case "inbox", "starred", "sent", "spam", "trash":
 		return nil
 	}
 	if strings.TrimSpace(folderID) == "" {
@@ -505,19 +551,22 @@ func visibleMessages(th *thread, folderID string) []*stored {
 func matchFolder(e *stored, folderID string) bool {
 	switch folderID {
 	case "":
-		return !e.trash
+		// Search: everything except the two folders Gmail leaves out of it.
+		return !e.trash && !e.spam
 	case "starred":
 		return e.msg.Starred && !e.trash
 	case "sent":
 		// Deleting a sent message has to take it out of Sent as well.
 		return e.sent && !e.trash
+	case "spam":
+		return e.spam && !e.trash
 	case "trash":
 		return e.trash
 	}
 	if strings.HasPrefix(folderID, "label:") {
-		return !e.trash && !e.sent && slices.Contains(e.msg.Labels, folderID)
+		return !e.trash && !e.spam && !e.sent && slices.Contains(e.msg.Labels, folderID)
 	}
-	return !e.trash && !e.sent && !e.archived
+	return !e.trash && !e.spam && !e.sent && !e.archived
 }
 
 // buildThreadSummary merges the messages of a conversation. msgs must be sorted
@@ -647,11 +696,13 @@ func (s *Service) Archive(ctx context.Context, ids []string) error {
 	})
 }
 
-// Delete implements mail.Service.
+// Delete implements mail.Service. Moving a message to the trash drops its spam
+// mark as well, the way Gmail's trash leaves the SPAM label behind.
 func (s *Service) Delete(ctx context.Context, ids []string) error {
 	return s.withStore(ctx, func() {
 		s.eachStored(ids, func(e *stored) {
 			e.trash = true
+			e.spam = false
 			e.archived = false
 		})
 	})

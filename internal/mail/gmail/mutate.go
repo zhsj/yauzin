@@ -12,12 +12,15 @@ import (
 
 // Gmail system label IDs the app names. The mailbox states the sidebar shows
 // are these labels: INBOX is what archiving removes, UNREAD and STARRED are the
-// two flags the list and the reader turn on and off, and TRASH is the folder a
-// deletion moves mail into.
+// two flags the list and the reader turn on and off, SENT holds what this
+// account sent, and SPAM and TRASH are the two folders Gmail keeps out of a
+// listing unless it is asked for them.
 const (
 	labelInbox   = "INBOX"
 	labelUnread  = "UNREAD"
 	labelStarred = "STARRED"
+	labelSent    = "SENT"
+	labelSpam    = "SPAM"
 	labelTrash   = "TRASH"
 )
 

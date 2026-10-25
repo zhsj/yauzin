@@ -96,6 +96,7 @@
   "folder.inbox": "收件箱",
   "folder.starred": "已加星标",
   "folder.sent": "已发送",
+  "folder.spam": "垃圾邮件",
   "folder.trash": "垃圾箱",
 
   "list.emptyTitle": "这里空空如也",

@@ -7,7 +7,7 @@ A desktop mail client built with Go + [Gio](https://gioui.org), its UI modelled 
 ## Features
 
 - Accounts: in Settings → Accounts, add several Gmail accounts with your own Google Cloud OAuth client (desktop app with the Gmail API enabled; authorization runs through PKCE with a one-off 127.0.0.1 callback), sign in again, delete an account, switch the active account from the top-bar menu and let the app reopen the last one next time. Each account can connect through the configured proxy or directly. The demo mailbox is always present.
-- Two-pane layout: a 256dp sidebar (Inbox, Starred, Sent, Trash and labels with Gmail-style hierarchy, colours and folding) beside one content card that switches between the list and the conversation view; the top bar holds the sidebar toggle, search, Settings and the account menu.
+- Two-pane layout: a 256dp sidebar (Inbox, Starred, Sent, Spam, Trash and labels with Gmail-style hierarchy, colours and folding) beside one content card that switches between the list and the conversation view; the top bar holds the sidebar toggle, search, Settings and the account menu.
 - Search: the top bar searches every folder at once (spam and trash excluded) with the query passed to the backend, so Gmail syntax such as `from:`, `subject:` or `has:attachment` works; results keep the paging toolbar.
 - Conversation list: one row per conversation (participants, subject, snippet, time, star, unread bolding, label chips), 25 per page with cursor-based paging; hover actions for Archive / Delete / Mark read or unread, a tri-state select-all box, and bulk archive / delete / mark read or unread plus "mark all as read" in the toolbar menu.
 - Reading: the thread ordered by time with collapsible messages; bodies are plain text, and a per-message More menu opens a safe HTML preview (strict CSP), an unrestricted preview or the original RFC 822 source — all three in the system browser. Star / Mark read / Archive / Delete act on the whole conversation.
@@ -27,7 +27,7 @@ A desktop mail client built with Go + [Gio](https://gioui.org), its UI modelled 
 - Inbox polling only maintains the tray badge and notifications: the open window is refreshed manually (toolbar refresh), by reopening it or by clicking a notification.
 - Desktop notifications are Linux/D-Bus only. Without a notification area the tray is unavailable and closing the window quits the app.
 - Bodies render as `text/plain` only; HTML is handed to the system browser, inline images are not shown and links inside plain text are not clickable.
-- System labels other than Inbox / Starred / Sent / Trash (drafts, spam, important, categories) are not shown; there is no unified inbox, label management, IMAP/SMTP support or offline cache.
+- System labels other than Inbox / Starred / Sent / Spam / Trash (drafts, important, categories) are not shown; spam is browse-only (read, star, delete to trash) with no "report spam" / "not spam" or "empty spam" action; there is no unified inbox, label management, IMAP/SMTP support or offline cache.
 - The client-side title bar works on Wayland only (X11 always uses server-side decorations); on KDE a "No titlebar and frame" window rule has to be added first, and while it is in use the window cannot be resized by dragging its edges.
 
 Architecture and build steps live in [docs/DESIGN.md](docs/DESIGN.md); pending work is tracked in [docs/PLAN.md](docs/PLAN.md).

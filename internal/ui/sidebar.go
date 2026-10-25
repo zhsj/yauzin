@@ -141,6 +141,8 @@ func folderIcon(kind mail.FolderKind) icon {
 		return iconStarFilled
 	case mail.FolderSent:
 		return iconSent
+	case mail.FolderSpam:
+		return iconSpam
 	case mail.FolderTrash:
 		return iconTrash
 	default:

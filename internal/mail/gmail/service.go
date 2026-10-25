@@ -58,7 +58,8 @@ type folderSpec struct {
 var systemFolders = []folderSpec{
 	{id: "inbox", labelID: labelInbox, kind: mail.FolderInbox},
 	{id: "starred", labelID: labelStarred, kind: mail.FolderStarred},
-	{id: "sent", labelID: "SENT", kind: mail.FolderSent},
+	{id: "sent", labelID: labelSent, kind: mail.FolderSent},
+	{id: "spam", labelID: labelSpam, kind: mail.FolderSpam},
 	{id: "trash", labelID: labelTrash, kind: mail.FolderTrash},
 }
 
@@ -368,8 +369,8 @@ func pageLimit(limit int) int {
 // empty labelID does not filter by folder, which is what a search needs; an
 // empty query browses the label instead.
 //
-// includeSpamTrash is raised for the trash folder alone: the API leaves TRASH
-// and SPAM out of the results by default, so labelIds=TRASH would come back
+// includeSpamTrash is raised for the spam and trash folders: the API leaves
+// both out of the results by default, so labelIds=SPAM or TRASH would come back
 // empty. A search keeps the default false, which is what limits it to mail that
 // is neither spam nor in the trash.
 func (s *Service) listThreads(ctx context.Context, labelID, query, pageToken string, limit int) (mail.ThreadPage, error) {
@@ -379,7 +380,7 @@ func (s *Service) listThreads(ctx context.Context, labelID, query, pageToken str
 	if labelID != "" {
 		q.Set("labelIds", labelID)
 	}
-	if labelID == labelTrash {
+	if hidesByDefault(labelID) {
 		q.Set("includeSpamTrash", "true")
 	}
 	if query != "" {
@@ -541,7 +542,9 @@ func labelIDFor(folderID string) (string, error) {
 	case "starred":
 		return labelStarred, nil
 	case "sent":
-		return "SENT", nil
+		return labelSent, nil
+	case "spam":
+		return labelSpam, nil
 	case "trash":
 		return labelTrash, nil
 	}
@@ -549,6 +552,14 @@ func labelIDFor(folderID string) (string, error) {
 		return "", mail.ErrInvalidArgument
 	}
 	return folderID, nil
+}
+
+// hidesByDefault reports whether the label is one the API leaves out of a
+// threads.list unless includeSpamTrash is true. Those two folders can only be
+// browsed by asking for them explicitly; a search does not, which is how it
+// stays limited to ordinary mail.
+func hidesByDefault(labelID string) bool {
+	return labelID == labelSpam || labelID == labelTrash
 }
 
 // summarize folds the messages of a conversation into one list row.
