@@ -41,6 +41,10 @@ type fakeService struct {
 	searchCalls []mail.SearchRequest
 
 	setFlagCalls []setFlagCall
+
+	// sent keeps the drafts Send received, so a composer test can assert on
+	// the identity and recipients the UI handed to the backend.
+	sent []mail.Draft
 }
 
 // record appends name to the call log.
@@ -166,7 +170,19 @@ func (f *fakeService) Archive(context.Context, []string) error { return nil }
 
 func (f *fakeService) Delete(context.Context, []string) error { return nil }
 
-func (f *fakeService) Send(context.Context, mail.Draft) error { return nil }
+func (f *fakeService) Send(_ context.Context, draft mail.Draft) error {
+	f.mu.Lock()
+	f.sent = append(f.sent, draft)
+	f.mu.Unlock()
+	return nil
+}
+
+// sentDrafts returns the drafts Send received.
+func (f *fakeService) sentDrafts() []mail.Draft {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]mail.Draft{}, f.sent...)
+}
 
 func (f *fakeService) SaveAttachment(context.Context, string, string, string) (string, error) {
 	return "", mail.ErrUnsupported

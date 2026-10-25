@@ -20,20 +20,36 @@ func (c *composeView) send() {
 		c.errMsg = i18n.T("compose.needRecipient")
 		return
 	}
-	svc := c.app.service()
-	if svc == nil {
+	sender := c.currentSender()
+	if sender == nil {
 		c.errMsg = i18n.T("compose.accountUnavailable")
 		return
 	}
-
 	// Snapshot the draft: the fields and the attachment list stay editable while
 	// the send runs, and the backend must not see those edits.
 	draft := mail.Draft{
+		From:        mail.Address{Name: sender.name, Email: sender.email},
 		To:          append([]mail.Address{}, to...),
 		Cc:          append([]mail.Address{}, mail.ParseAddressList(c.cc.Text())...),
+		Bcc:         append([]mail.Address{}, mail.ParseAddressList(c.bcc.Text())...),
 		Subject:     c.subject.Text(),
 		Body:        c.body.Text(),
 		Attachments: append([]mail.DraftAttachment{}, c.attachments...),
+	}
+
+	// The identity decides the transport: the mailbox sends through its own
+	// backend, a sending account through its SMTP server.
+	var deliver func(ctx context.Context) error
+	if sender.entry == nil {
+		svc := c.app.services[c.mailboxID]
+		if svc == nil {
+			c.errMsg = i18n.T("compose.accountUnavailable")
+			return
+		}
+		deliver = func(ctx context.Context) error { return svc.Send(ctx, draft) }
+	} else {
+		entry := *sender.entry
+		deliver = func(ctx context.Context) error { return c.app.sendSMTP(ctx, entry, draft) }
 	}
 
 	c.sending = true
@@ -50,7 +66,7 @@ func (c *composeView) send() {
 		}
 	}
 	c.app.async("send", timeoutSend, nil,
-		func(ctx context.Context) error { return svc.Send(ctx, draft) },
+		deliver,
 		func() {
 			finish()
 			// Only close the layer this window owns: the user may have opened

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image"
+	"strings"
 
 	"gioui.org/font"
 	"gioui.org/io/key"
@@ -11,6 +12,7 @@ import (
 	"gioui.org/op/paint"
 	"gioui.org/widget"
 
+	"github.com/zhsj/yauzin/internal/accounts"
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
 )
@@ -23,8 +25,25 @@ type composeView struct {
 
 	to      widget.Editor
 	cc      widget.Editor
+	bcc     widget.Editor
 	subject widget.Editor
 	body    widget.Editor
+
+	// fromID is the identity the draft goes out as: the mailbox the composer
+	// belongs to, or one of the stored sending accounts. senders and fromRows
+	// are snapshotted when the composer opens, because the clickables behind
+	// them must stay stable while the layer is laid out.
+	fromID    string
+	senders   []composeSender
+	fromRows  []*settingsRow
+	fromOpen  bool
+	fromClick widget.Clickable
+	// mailboxID is the account the draft belongs to, fixed when the composer
+	// opens: switching mailboxes mid-draft must not redirect the send.
+	mailboxID string
+	// bccAuto is the address the From switch put into the Bcc field, so
+	// switching back clears only what the switch itself wrote.
+	bccAuto string
 
 	attachBtn *iconButton
 	minBtn    *iconButton
@@ -54,7 +73,26 @@ func newComposeView(a *App, mode composeMode, msg *mail.Message, replySelection 
 
 	c.to.SingleLine = true
 	c.cc.SingleLine = true
+	c.bcc.SingleLine = true
 	c.subject.SingleLine = true
+
+	c.mailboxID = a.activeAcc
+	c.fromID = a.activeAcc
+	c.senders = a.composeSenders()
+	for _, sender := range c.senders {
+		item := sender
+		row := &settingsRow{
+			title:    item.name,
+			subtitle: item.email,
+			active:   item.id == c.fromID,
+			indent:   true,
+			onTap:    func() { c.setSender(item.id) },
+		}
+		if row.title == "" {
+			row.title = item.email
+		}
+		c.fromRows = append(c.fromRows, row)
+	}
 
 	if msg != nil && mode == composeReply {
 		c.to.SetText(msg.From.String())
@@ -128,9 +166,12 @@ func (c *composeView) Layout(gtx layout.Context, a *App) layout.Dimensions {
 	}
 	if !c.minimized {
 		rows = append(rows,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.senderRow(gtx) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.fieldRow(gtx, &c.to, i18n.T("compose.to")) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.separator(gtx) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.fieldRow(gtx, &c.cc, i18n.T("compose.cc")) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.separator(gtx) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.fieldRow(gtx, &c.bcc, i18n.T("compose.bcc")) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.separator(gtx) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return c.fieldRow(gtx, &c.subject, i18n.T("compose.subject"))
@@ -144,6 +185,157 @@ func (c *composeView) Layout(gtx layout.Context, a *App) layout.Dimensions {
 	}
 	layout.Flex{Axis: layout.Vertical}.Layout(cardGtx, rows...)
 	return layout.Dimensions{Size: gtx.Constraints.Max}
+}
+
+// composeSender is one candidate of the From row: the mailbox the draft belongs
+// to, or a stored sending account.
+type composeSender struct {
+	id    string
+	name  string
+	email string
+	// entry is the stored sending account, nil for the mailbox itself.
+	entry *accounts.Entry
+	// bccCopy asks for the mailbox address in the Bcc field when this sender is
+	// picked, so a message sent through another server still leaves a copy
+	// behind.
+	bccCopy bool
+}
+
+// composeSenders returns the identities a draft can go out as: the mailbox that
+// owns it first, then every stored sending account.
+func (a *App) composeSenders() []composeSender {
+	var out []composeSender
+	if acc, ok := a.accountByID(a.activeAcc); ok {
+		out = append(out, composeSender{id: acc.ID, name: acc.DisplayName(), email: acc.Email})
+	}
+	for _, entry := range a.smtpEntries() {
+		item := entry
+		out = append(out, composeSender{
+			id:      item.ID,
+			name:    item.Name,
+			email:   item.Email,
+			entry:   &item,
+			bccCopy: item.SMTP != nil && item.SMTP.BccToAccount,
+		})
+	}
+	return out
+}
+
+// accountByID looks up a mailbox by its ID.
+func (a *App) accountByID(id string) (mail.Account, bool) {
+	for _, acc := range a.accounts {
+		if acc.ID == id {
+			return acc, true
+		}
+	}
+	return mail.Account{}, false
+}
+
+// currentSender returns the identity the draft is set to go out as.
+func (c *composeView) currentSender() *composeSender {
+	for i := range c.senders {
+		if c.senders[i].id == c.fromID {
+			return &c.senders[i]
+		}
+	}
+	return nil
+}
+
+// senderLabel is the collapsed From line: the name next to the address, or just
+// the address when there is no name to add.
+func (c *composeView) senderLabel() string {
+	sender := c.currentSender()
+	if sender == nil {
+		return ""
+	}
+	if sender.name == "" || sender.name == sender.email {
+		return sender.email
+	}
+	return sender.name + " <" + sender.email + ">"
+}
+
+// mailboxEmail is the address of the mailbox the draft belongs to: the default
+// blind-copy target of a sending account.
+func (c *composeView) mailboxEmail() string {
+	if acc, ok := c.app.accountByID(c.mailboxID); ok {
+		return acc.Email
+	}
+	return ""
+}
+
+// setSender switches the identity and keeps the blind copy in step: a sending
+// account that asks for a copy fills the Bcc field with the mailbox address,
+// and switching away clears only what was filled in automatically.
+func (c *composeView) setSender(id string) {
+	c.fromOpen = false
+	if id == c.fromID {
+		return
+	}
+	c.fromID = id
+	for i, sender := range c.senders {
+		if i < len(c.fromRows) {
+			c.fromRows[i].active = sender.id == id
+		}
+	}
+
+	want := ""
+	if sender := c.currentSender(); sender != nil && sender.bccCopy {
+		want = c.mailboxEmail()
+	}
+	current := strings.TrimSpace(c.bcc.Text())
+	switch {
+	case want != "" && (current == "" || current == c.bccAuto):
+		c.bcc.SetText(want)
+		c.bccAuto = want
+	case want == "" && c.bccAuto != "" && current == c.bccAuto:
+		c.bcc.SetText("")
+		c.bccAuto = ""
+	}
+}
+
+// senderRow draws the From line, the one header field that is a choice instead
+// of an editor. It stays hidden until a sending account exists, so a plain
+// single-account setup keeps its familiar shape. The candidates expand inside
+// the window: a menu would replace this layer and throw the draft away.
+func (c *composeView) senderRow(gtx layout.Context) layout.Dimensions {
+	if len(c.senders) < 2 {
+		return layout.Dimensions{}
+	}
+	th := c.app.th
+	if c.fromClick.Clicked(gtx) {
+		c.fromOpen = !c.fromOpen
+		invalidateAfterTap(gtx)
+	}
+	return column(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return c.fromClick.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Left: 16, Right: 10, Top: 4, Bottom: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return th.text(gtx, i18n.T("compose.from"), 14, colMuted, font.Normal, 1)
+						}),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 12) }),
+						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+							return th.text(gtx, c.senderLabel(), 14, colText, font.Normal, 1)
+						}),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							if c.fromOpen {
+								return th.glyph(gtx, iconExpandLess, 16)
+							}
+							return th.glyph(gtx, iconExpandMore, 16)
+						}),
+					)
+				})
+			})
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if !c.fromOpen {
+				return layout.Dimensions{}
+			}
+			return layout.Inset{Left: 8, Right: 8, Bottom: 4}.Layout(gtx, rows(c.fromRows, th))
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.separator(gtx) }),
+	)
 }
 
 // fieldRow lays out one single-line header field (to, cc or subject).

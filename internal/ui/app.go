@@ -9,6 +9,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"log/slog"
 	"os"
@@ -30,6 +31,7 @@ import (
 	"github.com/zhsj/yauzin/internal/mail"
 	"github.com/zhsj/yauzin/internal/mail/gmail"
 	"github.com/zhsj/yauzin/internal/mail/mock"
+	"github.com/zhsj/yauzin/internal/mail/smtp"
 	"github.com/zhsj/yauzin/internal/notify"
 	"github.com/zhsj/yauzin/internal/prefs"
 	"github.com/zhsj/yauzin/internal/tray"
@@ -76,6 +78,9 @@ type App struct {
 	// proxy is the shared outbound proxy, empty for a direct connection. Only
 	// the accounts whose stored entry opts in use it.
 	proxy string
+	// sendSMTP delivers a draft through one stored sending account. It is a
+	// field so the composer can be exercised without a server.
+	sendSMTP func(ctx context.Context, entry accounts.Entry, draft mail.Draft) error
 	// factory reflects the proxy setting into the backends it builds; nil when
 	// the app was assembled without real accounts.
 	factory *serviceFactory
@@ -257,6 +262,10 @@ type appOptions struct {
 	// The zero value disables persistence, which keeps the tests that switch
 	// accounts away from the real configuration directory.
 	saveSettings func(prefs.Settings) error
+
+	// sendSMTP replaces the outbound SMTP sender, which is how the composer
+	// tests run without a server. The zero value builds the real one.
+	sendSMTP func(ctx context.Context, entry accounts.Entry, draft mail.Draft) error
 }
 
 // demoAccountID identifies the shipped demo mailbox, which is always served by
@@ -368,6 +377,39 @@ func (f *serviceFactory) newService(acc mail.Account) mail.Service {
 	return svc
 }
 
+// smtpEntries returns the stored sending accounts in file order.
+func (a *App) smtpEntries() []accounts.Entry {
+	if a.accountStore == nil {
+		return nil
+	}
+	return a.accountStore.SMTPEntries()
+}
+
+// sendViaSMTP delivers a draft through one stored sending account: a fresh
+// connection per send, through the shared proxy when the entry opted into it.
+func (a *App) sendViaSMTP(ctx context.Context, entry accounts.Entry, draft mail.Draft) error {
+	if entry.SMTP == nil {
+		return fmt.Errorf("%w: sending account %q has no server", mail.ErrInvalidArgument, entry.ID)
+	}
+	cfg := entry.SMTP
+	var opts []smtp.Option
+	if entry.UseProxy && strings.TrimSpace(a.proxy) != "" {
+		opts = append(opts, smtp.WithProxyURL(a.proxy))
+	}
+	sender, err := smtp.New(smtp.Config{
+		Host:     cfg.Host,
+		Port:     cfg.Port,
+		Username: cfg.Username,
+		Password: cfg.Password,
+		Security: smtp.Security(cfg.Security),
+		From:     mail.Address{Name: entry.Name, Email: entry.Email},
+	}, opts...)
+	if err != nil {
+		return err
+	}
+	return sender.Send(ctx, draft)
+}
+
 // restoredAccount returns the mailbox to open at start: the one stored by the
 // previous run when it is still listed and has a backend, the first account
 // otherwise. A removed account keeps its ID in the settings file on purpose, so
@@ -415,6 +457,11 @@ func newAppWith(pref prefs.Settings, opts appOptions) *App {
 		openCh:        make(chan struct{}, 1),
 		quitCh:        make(chan struct{}, 1),
 		wake:          make(chan struct{}, 1),
+	}
+
+	a.sendSMTP = opts.sendSMTP
+	if a.sendSMTP == nil {
+		a.sendSMTP = a.sendViaSMTP
 	}
 
 	for _, acc := range a.accounts {
