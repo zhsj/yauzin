@@ -243,6 +243,7 @@
 - 开发沙箱 `CGO_ENABLED=0` 且缺少上述开发库：任何（直接或间接）import `gioui.org/app` 的目标（`internal/ui`、`cmd/yauzin`）只能在 Docker 内编译，典型报错 `build constraints exclude all Go files in .../gioui.org/internal/vk`。
 - 沙箱内访问外网走本地代理，命令前置 `https_proxy=http://127.0.0.1:1081`；`internal/cmd/gmailgen` 只在下载 Discovery 文档时需要它，代码本身不读代理配置。
 - 格式化使用 `gofmt`（沙箱 `PATH` 内，go1.27.2）；import 增删与分组使用 Go 扩展安装的 `goimports`（`~/go/bin/goimports`，**不在沙箱 `PATH`**），命令见 §13.5。
+- 静态检查用 `golangci-lint`（`staticcheck` + `gofumpt`/`goimports`），它随构建镜像提供，只在容器内运行（Gio 的包需要 cgo 与 C 头文件），命令见 §13.5。
 
 ### 13.2 依赖与 vendor
 
@@ -278,7 +279,10 @@ go build -o yauzin ./cmd/yauzin
 
 ### 13.4 Docker 构建
 
-本机缺少 C 依赖时使用仓库内的构建镜像 `Dockerfile.build`：基于 `debian:unstable`，apt 源为 USTC 镜像，Go 工具链（`golang-go`）与 Gio 需要的 X11 / Wayland / EGL / Vulkan 开发库全部从 Debian 源安装（不下载官方 Go tarball，也不需要 `zig cc`）。镜像内已固化 `CGO_ENABLED=1`、`GOFLAGS=-mod=vendor`、`GOTOOLCHAIN=local`、`GOCACHE=/gocache`，运行时不必再传 `-e`。
+本机缺少 C 依赖时使用仓库内的构建镜像 `Dockerfile.build`：基于 `debian:unstable`，apt 源为 USTC 镜像，Go 工具链（`golang-go`）与 Gio 需要的 X11 / Wayland / EGL / Vulkan 开发库全部从 Debian 源安装（不下载官方 Go tarball，也不需要 `zig cc`）。镜像内已固化 `CGO_ENABLED=1`、`GOFLAGS=-mod=vendor`、`GOTOOLCHAIN=local`、`GOCACHE=/gocache`、`GOLANGCI_LINT_CACHE=/gocache/golangci-lint`，运行时不必再传 `-e`。
+
+镜像还内置 golangci-lint：Debian 源里的版本太旧，因此用
+`GOPROXY=https://goproxy.cn go install` 从模块代理装到 `/usr/local/bin`，版本由 `ARG GOLANGCI_LINT_VERSION` 钉住（当前 `v2.15.0`），这是整个镜像构建里唯一需要联网的一步（因此 apt 层补装了 `ca-certificates`）；改版本即重建该层，其余层命中缓存。
 
 ```bash
 docker build -t yauzin-gio-builder -f Dockerfile.build .
@@ -304,13 +308,32 @@ docker run --rm -v "$PWD":/app -w /app -v yauzin-gocache:/gocache \
   yauzin-gio-builder sh -c 'go test -vet=all ./...'
 ```
 
+golangci-lint 同样跑在镜像里（`internal/ui`、`cmd/*` 需要 cgo 与 C 头文件），配置是仓库根的 `.golangci.yml`：
+
+```bash
+# 检查：linters 用默认集（errcheck / govet / ineffassign / staticcheck / unused）
+docker run --rm -v "$PWD":/app -w /app -v yauzin-gocache:/gocache \
+  yauzin-gio-builder golangci-lint run --timeout=15m ./...
+
+# 修格式：只跑 formatters（gofumpt + goimports），就地改写挂载的源文件
+docker run --rm --user $(id -u):$(id -g) -v "$PWD":/app -w /app \
+  -v yauzin-gocache:/gocache \
+  yauzin-gio-builder golangci-lint fmt ./...
+```
+
+- 合格标准是输出 `0 issues.`；`issues.max-issues-per-linter` 与 `max-same-issues` 都是 0，报告不会被截断。
+- v2 里 `gosimple` / `stylecheck` 已经并入 `staticcheck`，配置只写 `staticcheck`；`gofumpt` / `goimports` 属于 `formatters` 段，`run` 仍会以 “File is not properly formatted” 报出来。
+- `goimports` 的 `local-prefixes: [github.com/zhsj/yauzin]` 与下面手工检查的三段分组一致；`--user $(id -u):$(id -g)` 让容器写回的源文件仍属当前用户，避免仓库出现 root 属主文件。
+- 生成代码（`discovery_types.go`）靠文件头的 `Code generated ... DO NOT EDIT.` 由 `exclusions.generated: lax` 自动跳过。
+- `GOLANGCI_LINT_CACHE=/gocache/golangci-lint` 与 Go 编译缓存同一个命名卷，重复运行明显更快。
+
 纯 Go 包可直接在本地运行（`internal/ui` 与 `cmd/*` 导入 Gio，必须进容器）：
 
 ```bash
 go test -vet=all ./internal/prefs ./internal/i18n ./internal/mail/... ./internal/tray ./internal/cursor
 ```
 
-格式化与 import 分组（沙箱直接执行，两条检查都无输出即合格）：
+格式化与 import 分组（沙箱可直接执行，两条检查都无输出即合格；`gofumpt` 只在镜像里，需要它时用上面的 `golangci-lint fmt`）：
 
 ```bash
 gofmt -l internal/ cmd/
