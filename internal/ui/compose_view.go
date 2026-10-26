@@ -6,10 +6,12 @@ import (
 
 	"gioui.org/font"
 	"gioui.org/io/key"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
+	"gioui.org/unit"
 	"gioui.org/widget"
 
 	"github.com/zhsj/yauzin/internal/accounts"
@@ -46,6 +48,7 @@ type composeView struct {
 	bccAuto string
 
 	attachBtn *iconButton
+	maxBtn    *iconButton
 	minBtn    *iconButton
 	closeBtn  *iconButton
 	sendBtn   *pillButton
@@ -53,6 +56,9 @@ type composeView struct {
 	attachments []mail.DraftAttachment
 	chips       []*attachmentChip
 
+	// maximized fills the window up to composeMargin; it and minimized are
+	// mutually exclusive, so the header never offers a state it cannot leave.
+	maximized bool
 	minimized bool
 	sending   bool
 	errMsg    string
@@ -107,11 +113,31 @@ func newComposeView(a *App, mode composeMode, msg *mail.Message, replySelection 
 	}
 
 	c.attachBtn = newIconButton(iconAttach, 36, func() { a.pickAttachment(c) })
-	c.minBtn = newIconButton(iconMinimize, 32, func() { c.minimized = !c.minimized })
+	c.maxBtn = newIconButton(iconOpenInFull, 32, c.toggleMaximized)
+	c.minBtn = newIconButton(iconMinimize, 32, c.toggleMinimized)
 	c.closeBtn = newIconButton(iconClose, 32, a.hideOverlay)
 	c.sendBtn = newPillButton(i18n.T("compose.send"), iconSendWhite, true, c.send)
 	c.sendBtn.minW = 96
 	return c
+}
+
+// toggleMaximized expands the composer over the window, or drops back to the
+// floating window. Expanding and minimizing are opposite ends of one axis, so
+// leaving the collapsed state clears it.
+func (c *composeView) toggleMaximized() {
+	c.maximized = !c.maximized
+	if c.maximized {
+		c.minimized = false
+	}
+}
+
+// toggleMinimized collapses the composer to its header row, or restores the
+// previous size; it wins over the maximized state in the same way.
+func (c *composeView) toggleMinimized() {
+	c.minimized = !c.minimized
+	if c.minimized {
+		c.maximized = false
+	}
 }
 
 func (c *composeView) title() string {
@@ -125,6 +151,46 @@ func (c *composeView) title() string {
 	}
 }
 
+const (
+	// composeMargin is the gap between the composer and the window edge, in
+	// both the floating and the maximized state.
+	composeMargin = unit.Dp(24)
+	// composeLabelWidth is the width of the fixed label column of the header
+	// fields; it fits the longest translated label at 14sp.
+	composeLabelWidth = unit.Dp(56)
+)
+
+// panel reports the size and origin of the composer card for the current
+// state. A maximized composer asks for exactly the size panelSize clamps to,
+// so the same margin leaves it touching every window edge while the floating
+// one keeps that gap at the bottom right.
+func (c *composeView) panel(gtx layout.Context) (size, origin image.Point) {
+	margin := gtx.Dp(composeMargin)
+	var want, least image.Point
+	switch {
+	case c.minimized:
+		// A minimized window keeps its width but shrinks to the header row, so
+		// the minimum collapses with it.
+		want = image.Pt(gtx.Dp(480), gtx.Dp(48))
+		least = image.Pt(gtx.Dp(320), gtx.Dp(48))
+	case c.maximized:
+		want = image.Pt(
+			max(gtx.Constraints.Max.X-2*margin, 1),
+			max(gtx.Constraints.Max.Y-2*margin, 1),
+		)
+		least = want
+	default:
+		want = image.Pt(gtx.Dp(480), gtx.Dp(540))
+		least = image.Pt(gtx.Dp(320), gtx.Dp(160))
+	}
+	size = panelSize(gtx, want, least)
+	origin = image.Pt(
+		max(gtx.Constraints.Max.X-size.X-margin, 0),
+		max(gtx.Constraints.Max.Y-size.Y-margin, 0),
+	)
+	return size, origin
+}
+
 func (c *composeView) Layout(gtx layout.Context, a *App) layout.Dimensions {
 	if !c.focusInit {
 		c.focusInit = true
@@ -136,22 +202,7 @@ func (c *composeView) Layout(gtx layout.Context, a *App) layout.Dimensions {
 		c.send()
 	}
 
-	// The minimum is applied inside the viewport, not after clamping to it:
-	// otherwise a window smaller than the minimum produced a panel wider than
-	// its constraints and a negative offset.
-	want := image.Pt(gtx.Dp(480), gtx.Dp(540))
-	least := image.Pt(320, 160)
-	if c.minimized {
-		// A minimized window keeps its width but shrinks to the header row, so
-		// the minimum collapses with it.
-		want.Y = gtx.Dp(48)
-		least.Y = gtx.Dp(48)
-	}
-	size := panelSize(gtx, want, least)
-	origin := image.Pt(
-		max(gtx.Constraints.Max.X-size.X-24, 0),
-		max(gtx.Constraints.Max.Y-size.Y-24, 0),
-	)
+	size, origin := c.panel(gtx)
 
 	cardGtx, pop := placeCard(gtx, size, origin)
 	defer pop()
@@ -169,14 +220,20 @@ func (c *composeView) Layout(gtx layout.Context, a *App) layout.Dimensions {
 	if !c.minimized {
 		rows = append(rows,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.senderRow(gtx) }),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.fieldRow(gtx, &c.to, i18n.T("compose.to")) }),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.separator(gtx) }),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.fieldRow(gtx, &c.cc, i18n.T("compose.cc")) }),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.separator(gtx) }),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.fieldRow(gtx, &c.bcc, i18n.T("compose.bcc")) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return c.fieldRow(gtx, &c.to, i18n.T("compose.to"), "")
+			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.separator(gtx) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return c.fieldRow(gtx, &c.subject, i18n.T("compose.subject"))
+				return c.fieldRow(gtx, &c.cc, i18n.T("compose.cc"), "")
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.separator(gtx) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return c.fieldRow(gtx, &c.bcc, i18n.T("compose.bcc"), "")
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.separator(gtx) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return c.fieldRow(gtx, &c.subject, i18n.T("compose.subject"), "")
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.separator(gtx) }),
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions { return c.bodyRow(gtx) }),
@@ -311,40 +368,117 @@ func (c *composeView) senderRow(gtx layout.Context) layout.Dimensions {
 	return column(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return c.fromClick.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Left: 16, Right: 10, Top: 4, Bottom: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return th.text(gtx, i18n.T("compose.from"), 14, colMuted, font.Normal, 1)
-						}),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 12) }),
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return th.text(gtx, c.senderLabel(), 14, colText, font.Normal, 1)
-						}),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							if c.fromOpen {
-								return th.glyph(gtx, iconExpandLess, 16)
-							}
-							return th.glyph(gtx, iconExpandMore, 16)
-						}),
-					)
-				})
+				// The whole line is a control, so it has to take the hand
+				// cursor. Its height is only known once the label and the
+				// address are shaped, hence the record.
+				measure := gtx
+				measure.Constraints.Min.Y = 0
+				measure.Constraints.Max.Y = 1 << 16
+				macro := op.Record(gtx.Ops)
+				content := c.fromLine(measure, th)
+				call := macro.Stop()
+				size := image.Pt(max(gtx.Constraints.Max.X, content.Size.X), content.Size.Y)
+				th.cursor(gtx, pointer.CursorPointer, size)
+				call.Add(gtx.Ops)
+				return layout.Dimensions{Size: size}
 			})
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			if !c.fromOpen {
 				return layout.Dimensions{}
 			}
-			return layout.Inset{Left: 8, Right: 8, Bottom: 4}.Layout(gtx, rows(c.fromRows, th))
+			return layout.Inset{Left: 8, Right: 8, Bottom: 6}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return c.senderList(gtx, c.fromRows, th)
+			})
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.separator(gtx) }),
 	)
 }
 
-// fieldRow lays out one single-line header field (to, cc or subject).
-func (c *composeView) fieldRow(gtx layout.Context, ed *widget.Editor, placeholder string) layout.Dimensions {
-	return layout.Inset{Left: 16, Right: 10, Top: 2, Bottom: 2}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return c.app.th.textField(gtx, ed, placeholder, 14)
+// fromLine is the collapsed From line: its label, the chosen identity and the
+// arrow that opens the candidate list.
+func (c *composeView) fromLine(gtx layout.Context, th *theme) layout.Dimensions {
+	return layout.Inset{Left: 16, Right: 10, Top: 4, Bottom: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return c.fieldLabel(gtx, i18n.T("compose.from"))
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return th.text(gtx, c.senderLabel(), 14, colText, font.Normal, 1)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if c.fromOpen {
+					return th.glyph(gtx, iconExpandLess, 16)
+				}
+				return th.glyph(gtx, iconExpandMore, 16)
+			}),
+		)
 	})
+}
+
+// senderList lays out the From candidates in a tinted, rounded panel with a
+// hairline between entries. The list expands inside the composer rather than in
+// a menu, so the panel is drawn by hand: the rows are recorded first because
+// the background has to be painted behind them.
+func (c *composeView) senderList(gtx layout.Context, list []*settingsRow, th *theme) layout.Dimensions {
+	const pad = unit.Dp(4)
+	measure := gtx
+	measure.Constraints.Min.Y = 0
+	measure.Constraints.Max.Y = 1 << 16
+	macro := op.Record(gtx.Ops)
+	content := layout.Inset{Top: pad, Bottom: pad}.Layout(measure, func(gtx layout.Context) layout.Dimensions {
+		children := make([]layout.FlexChild, 0, len(list)*2)
+		for i, row := range list {
+			item := row
+			if i > 0 {
+				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{Left: 12, Right: 12}.Layout(gtx, hline)
+				}))
+			}
+			children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Left: 4, Right: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return item.Layout(gtx, th)
+				})
+			}))
+		}
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+	})
+	call := macro.Stop()
+
+	size := content.Size
+	r := gtx.Dp(8)
+	rr := clip.RRect{Rect: image.Rectangle{Max: size}, NW: r, NE: r, SE: r, SW: r}
+	stack := rr.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, colSurface2)
+	stack.Pop()
+	call.Add(gtx.Ops)
+	return layout.Dimensions{Size: size}
+}
+
+// fieldRow lays out one header field as a fixed label column and the editor
+// beside it. The label stays visible once the field has text, which is how a
+// filled To or Cc line stays readable; hint is the placeholder inside the
+// editor and is empty whenever the label already names the field.
+func (c *composeView) fieldRow(gtx layout.Context, ed *widget.Editor, label, hint string) layout.Dimensions {
+	return layout.Inset{Left: 16, Right: 10, Top: 2, Bottom: 2}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.fieldLabel(gtx, label) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return c.app.th.textField(gtx, ed, hint, 14)
+			}),
+		)
+	})
+}
+
+// fieldLabel draws one cell of the label column. The column has a fixed width
+// so From, To, Cc, Bcc and Subject line up, and a long translation truncates
+// instead of pushing its editor off a narrow window.
+func (c *composeView) fieldLabel(gtx layout.Context, label string) layout.Dimensions {
+	w := gtx.Dp(composeLabelWidth)
+	gtx.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, 1<<16)}
+	return c.app.th.text(gtx, label, 14, colMuted, font.Normal, 1)
 }
 
 // separator draws the hairline between two header fields.
@@ -362,6 +496,15 @@ func (c *composeView) bodyRow(gtx layout.Context) layout.Dimensions {
 func (c *composeView) header(gtx layout.Context) layout.Dimensions {
 	a := c.app
 	th := a.th
+	// The button shows where a click leads: out of the corner while floating,
+	// back into it while expanded.
+	if c.maximized {
+		c.maxBtn.setIcon(iconCloseFull)
+		c.maxBtn.setTip(i18n.T("compose.collapse"))
+	} else {
+		c.maxBtn.setIcon(iconOpenInFull)
+		c.maxBtn.setTip(i18n.T("compose.expand"))
+	}
 	return layout.Inset{Left: 16, Right: 8, Top: 4, Bottom: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
@@ -369,6 +512,7 @@ func (c *composeView) header(gtx layout.Context) layout.Dimensions {
 					return th.text(gtx, c.title(), 14, colText, font.Medium, 1)
 				})
 			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.maxBtn.Layout(gtx, th) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.minBtn.Layout(gtx, th) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.closeBtn.Layout(gtx, th) }),
 		)

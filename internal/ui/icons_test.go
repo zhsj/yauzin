@@ -13,8 +13,8 @@ func allGlyphs() []iconGlyph {
 		glyphClose, glyphChevronLeft, glyphChevronRight, glyphBack,
 		glyphExpandMore, glyphExpandLess, glyphInbox, glyphMail,
 		glyphMarkUnread, glyphMarkRead, glyphPlus, glyphFile, glyphCheck,
-		glyphAlert, glyphSettings, glyphOpenInNew, glyphMoreVert,
-		glyphMinimize, glyphStar,
+		glyphAlert, glyphSettings, glyphOpenInNew, glyphOpenInFull,
+		glyphCloseFull, glyphMoreVert, glyphMinimize, glyphStar,
 	}
 }
 

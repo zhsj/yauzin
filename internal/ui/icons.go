@@ -66,6 +66,8 @@ const (
 	glyphAlert        iconGlyph = 0xf083 // warning
 	glyphSettings     iconGlyph = 0xe8b8
 	glyphOpenInNew    iconGlyph = 0xe89e
+	glyphOpenInFull   iconGlyph = 0xf1ce
+	glyphCloseFull    iconGlyph = 0xf1cf // close_fullscreen
 	glyphMoreVert     iconGlyph = 0xe5d4
 	glyphMinimize     iconGlyph = 0xe15b // remove
 	glyphStar         iconGlyph = 0xf09a
@@ -125,8 +127,12 @@ var (
 
 	iconSettings  = mutedIcon(glyphSettings)
 	iconOpenInNew = mutedIcon(glyphOpenInNew)
-	iconMoreVert  = mutedIcon(glyphMoreVert)
-	iconMinimize  = mutedIcon(glyphMinimize)
+	// The composer's expand control and its way back: the arrows point out of
+	// the corner and back into it.
+	iconOpenInFull = mutedIcon(glyphOpenInFull)
+	iconCloseFull  = mutedIcon(glyphCloseFull)
+	iconMoreVert   = mutedIcon(glyphMoreVert)
+	iconMinimize   = mutedIcon(glyphMinimize)
 
 	// iconWarning marks an action that gives up a protection, and iconSource
 	// the view of the unstyled message source.
