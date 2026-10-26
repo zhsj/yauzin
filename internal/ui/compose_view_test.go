@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"gioui.org/io/key"
 	"gioui.org/op"
 
 	"github.com/zhsj/yauzin/internal/mail"
@@ -207,5 +208,64 @@ func TestComposeFocusFollowsTheWritingPosition(t *testing.T) {
 	frame()
 	if !gtx.Focused(&fwd.to) {
 		t.Fatal("the forward opened without the keyboard in the recipient")
+	}
+}
+
+// TestComposeKeepsTheKeyboardAfterOpening pins the ordering at the panel
+// boundary: the composer focuses a field while it is first laid out, so the
+// blur of the search field must not be left queued for the next frame, where it
+// would take that focus straight back. The composer is opened from the keyboard
+// here because that is where the ordering of the real click path shows: the
+// panel opens during a frame and only focuses its field at the end of it.
+func TestComposeKeepsTheKeyboardAfterOpening(t *testing.T) {
+	a := testApp(t)
+	a.thread = mail.ThreadSummary{ID: "m1", Subject: "subject"}
+	a.selectedThread = "m1"
+	a.msgs = []*mail.Message{{
+		MessageSummary: mail.MessageSummary{
+			ID:      "m1",
+			From:    mail.Address{Name: "Bob", Email: "bob@example.com"},
+			Subject: "subject",
+		},
+		TextBody: "hello",
+	}}
+	a.expanded["m1"] = true
+
+	router, ops, gtx := newRouterFrame(testWindow)
+	frame := func() { runFrame(a, router, ops, gtx) }
+	// The first frame registers the key filter and lets the reader pick up the
+	// message the reply shortcut quotes.
+	frame()
+
+	router.Queue(key.Event{Name: "R", State: key.Press})
+	frame() // the composer opens and hands the body the keyboard
+	frame() // the frame a deferred blur would have stolen it in
+	frame()
+
+	if a.compose == nil {
+		t.Fatal("R opened no composer")
+	}
+	if !gtx.Focused(&a.compose.body) {
+		t.Fatal("the reply lost the keyboard after opening")
+	}
+	if gtx.Focused(&a.compose.to) {
+		t.Fatal("the recipient field took the keyboard from the reply body")
+	}
+
+	// A forward still starts in the recipient, and keeps it the same way. The
+	// shortcut filters are registered once more after the panel closes: while
+	// it was open only Esc was read, so a key queued for that frame is dropped.
+	router.Queue(key.Event{Name: key.NameEscape, State: key.Press})
+	frame()
+	frame()
+	router.Queue(key.Event{Name: "F", State: key.Press})
+	frame()
+	frame()
+	frame()
+	if a.compose == nil || a.compose.mode != composeForward {
+		t.Fatalf("F opened %v, want a forward", a.compose)
+	}
+	if !gtx.Focused(&a.compose.to) {
+		t.Fatal("the forward lost the keyboard after opening")
 	}
 }

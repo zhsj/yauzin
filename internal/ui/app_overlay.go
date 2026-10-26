@@ -191,8 +191,12 @@ func (a *App) drawTooltips(gtx layout.Context) {
 
 func (a *App) showOverlay(o overlay) {
 	// The panel owns the keyboard: leave the search field before its editors
-	// take over the focus.
-	a.blurRequested = true
+	// take over the focus. The composer is the exception: it hands the keyboard
+	// to one of its fields while this same frame is laid out, so a blur queued
+	// for the next frame would only take it back.
+	if _, ok := o.(*composeView); !ok {
+		a.blurRequested = true
+	}
 	a.discardCompose(o)
 	a.closeOverlay()
 	a.overlay = o
