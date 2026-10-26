@@ -51,6 +51,8 @@
 
 - **一份报文，两条传输**：`rfc822.Build(draft, from, opts)` 把 `mail.Draft` 渲染成完整 RFC 5322 报文（CRLF 行尾、`Date` / `Message-ID` / `MIME-Version`、RFC 2047 编码的主题与显示名、`text/plain` 正文 base64、有附件时 `multipart/mixed` + 流式 base64 附件），Gmail 与 SMTP 共用，避免两套 MIME 行为分叉。显示名、主题与附件名里的 CR/LF 一律替换成空格，防止用户输入注入报文头。
 - **Bcc 头是传输差异**：`Draft.Bcc` 始终属于信封（`Draft.Recipients()` = To + Cc + Bcc 去重）。Gmail API 只能看到 raw 报文，所以 `rfc822.Options{BccHeader: true}` 把密送地址写进 `Bcc` 头（Gmail 投递时剔除该头）；直连 SMTP 时密送地址只进 `RCPT TO`，报文头必须不含 `Bcc`，否则其他收件人都能看到密送对象。
+- **线程头只在回复里写**：回复把被回复邮件的 Message-ID 写进 `In-Reply-To`，`References` 保留原文祖链（去重）并追加该 Message-ID；转发与新邮件都不写，避免把转发硬塞进原会话。`mail.ReplyReferences` 是唯一的拼接点，`mail.NormalizeMessageID` 校验尖括号形态并丢弃畸形值（同时挡住头注入）。读取侧没有新增请求：Gmail `GetThread` 已是 `format=full`，`payload.headers` 里直接取 `message-id` / `references`；mock 的种子数据按 `<id@yauzin.invalid>` 补齐，`RawMessage` 也写出这些头，便于对照检查。
+- **Date 与 Message-ID 由写信浮层决定**：两者在打开写信时确定（切换发件人只重算 Message-ID 的域名），随 `Draft` 交给渲染器，取值顺序是 `Draft > Options > 现场生成`。这样写信浮层的表头详情显示的就是报文里真正写出的值；`Options` 仍只作测试注入点。
 - **Gmail 发送**：`messages.send` 走 media 上传（`POST <host>/upload/gmail/v1/users/me/messages/send?uploadType=media`，`Content-Type: message/rfc822`），避开 `{"raw": base64}` 的 33% 体积膨胀与 JSON 请求上限。`From` 一律取账号自身地址，不采信 `Draft.From`：Gmail 只接受属于该账号的身份。发送成功的邮件由 Gmail 自己放进「已发送」。`client` 因此有两个 API 根：`apiPath`（普通 REST）与 `uploadURL`（`/upload` + `apiPath`），两者共用请求槽、401 重试与 `apiError` 分类。
 - **SMTP 发信**：`smtp.Sender` 每条发信条目一个实例、每次发送一条连接（`net/smtp`）。`Security` 三选一：`tls`（465 隐式 TLS，本包先包裹连接）、`starttls`（587，服务器不广告 STARTTLS 就报错而不是退回明文）、`none`（25，仅限自有网络的中继）。`Username` 为空跳过 AUTH；否则按服务器广告选 `PLAIN`（优先）或 `LOGIN`——两者都在本包实现，因为 `net/smtp` 的 `PlainAuth` 拒绝在未加密连接上发密码，而「不加密」是用户显式选择。认证被拒（501/504/530/534/535）包成 `smtp.ErrAuth`，由 `errors.go` 翻成「检查用户名和密码」，其余协议错误保留原文（用户要看到具体原因）。连接、TLS 与 AUTH 各阶段都受 `ctx` 的 deadline 与取消约束；DEBUG 只记 host/port/发件地址/收件人数，不记密码与报文。
 - **代理**：`internal/netproxy` 是裸 TCP 的代理拨号器——`net/http` 的代理支持在它的 internal bundle 里，给不了别的 dialer。`Parse` 规则（`http`/`https`/`socks5`，必须有 host 与端口，`socks5h` 不接受）由 `gmail.ParseProxy` 与 SMTP 共用；`Dial` 对 socks5 用 `golang.org/x/net/proxy`，对 `http`/`https` 手写 `CONNECT`（含 `Proxy-Authorization: Basic`，https 时先对代理做 TLS）。发信条目与 Gmail 账号一样有 `useProxy`，沿用 `settings.json` 的全局代理地址。
@@ -97,6 +99,7 @@
 - Esc 优先级：状态条 / 菜单 → 写信 / 设置 → 阅读器返回列表。Esc 不清空查询、不在搜索时回退文件夹；搜索框胶囊的 ✕ 只清空输入框文字，列表保持当前搜索结果（`query` 与 `activeFolder` 都不变）。
 - 面板内的下拉**必须页内展开**，不能复用 `App.showMenu`：`showOverlay` 先 `closeOverlay()` 把 `a.settings` 置 nil，菜单关闭时 `hideOverlay()` 又直接清空 `a.overlay`，设置面板不会回来。设置页的语言选择即按此实现（`settingsView.langOpen`，候选行在同一张卡片内展开）；写信浮层的「发件人」同理（`composeView.fromOpen`），因为菜单会顺带把草稿丢掉。
 - 写信浮层的「发件人」行只在存在 SMTP 发信账号时出现（否则整行不占位）：候选在卡片内就地展开，当前身份带勾，选中即收起。身份决定传输——邮箱身份走它自己的后端（`services[mailboxID]`，写信开始时固定，中途切账号不会改投），发信账号走 `App.sendSMTP`（可注入，测试不碰网络）。「密送」行始终显示；自动预填的值记在 `composeView.bccAuto` 里，切走发件人时只清除仍是该自动值的文本，用户改过的内容不动。
+- 主题下方的「邮件头」折叠行是本层唯一的表头可见入口：展开后只读列出 `Date` / `Message-ID` / `In-Reply-To` / `References`，空值不显示（新邮件与转发因此只有前两行）。回复打开时由 `mail.ReplyReferences` 预置线程头，被回复邮件没有 Message-ID 就整条链留空，不伪造 ID。长引用链在界面上只显示最后 8 条（前置 `… `），`Draft.References` 仍是完整链。标签列宽 `headersLabelWidth`（96dp）比通用 `composeLabelWidth` 宽，头部名称不会截断；只用现有 chevron 字形，避免为一个折叠箭头重建图标字体子集。
 - 下拉菜单的水平位置由调用点声明的 `menuAlign` 决定：默认 `menuAlignStart` 与锚点左边缘对齐（从左往右展开），靠窗口右缘的锚点——阅读器消息卡的 ⋮ 与顶栏账号菜单——显式用 `menuAlignEnd` 与右边缘对齐（从右往左展开）。两种对齐最后都 clamp 进窗口，下方放不下时仍向上展开。
 - 写信浮窗的引用块由 `format.go` 的 `replyQuote` / `forwardQuote` 生成，文案固定英文、不走 i18n（它们属于邮件内容而非界面文案，中文界面下同样是英文）：回复是 Gmail 的 `On <时间> <发件人> wrote:` 抬头（本地时区的 `Mon, Jan 2, 2006 at 3:04 PM`）加逐行 `> ` 前缀的正文，转发是 `---------- Forwarded message ----------` 加 `From:` / `Date:` / `Subject:` 与完整正文。回复前阅读器里该封邮件正文若有选区，只引用选中片段（`messageCard.selectedText` → `readerView.replySelection` → `openCompose` 快照一次），选区为空或只有空白时回退完整正文；转发不使用选区。回复把引用块放在正文最前、其后留一个空行，打开写信浮窗时光标与键盘焦点就落在引用末尾（`SetText` 会把光标置为开头，因此回复分支在写入后显式 `SetCaret` 到末尾，按 rune 计数）；转发仍是顶部两行空行之后书写，光标在开头、首帧焦点在「收件人」。`replySubject` / `forwardSubject` 的 `Re: ` / `Fwd: ` 同理写死英文。
 
@@ -408,7 +411,7 @@ internal/ui/messagelist_row.go    会话行布局与 hover 动作
 internal/ui/messagelist_text.go   发件人/主题/摘要格式化
 internal/ui/reader.go          阅读器容器与工具栏
 internal/ui/messagecard.go     可折叠消息卡片
-internal/ui/compose_view.go    写信浮层布局（含发件人就地展开与密送行）
+internal/ui/compose_view.go    写信浮层布局（含发件人就地展开、密送行与只读表头详情）
 internal/ui/compose_actions.go 发送（按发件人分派到后端或 SMTP）、附件暂存与丢弃
 internal/ui/settings.go        设置浮层（通用/账号/快捷键，含网络代理、日志级别与账号手风琴：展开后是浅灰子卡片——代理开关 + 描边按钮操作，删除在同一行原地确认；账号卡下方是发信账号分组）
 internal/ui/smtp_account.go    SMTP 发信账号：新增/编辑表单浮层、设置页分组行与其展开块
