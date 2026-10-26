@@ -287,63 +287,54 @@ go build -o yauzin ./cmd/yauzin
 ```bash
 docker build -t yauzin-gio-builder -f Dockerfile.build .
 
-docker run --rm \
+docker run --rm --user $(id -u):$(id -g) \
   -v "$PWD":/app -w /app \
   -v yauzin-gocache:/gocache \
   yauzin-gio-builder \
   go build -o /tmp/yauzin ./cmd/yauzin
 ```
 
+- 容器一律以 `--user $(id -u):$(id -g)` 运行：写回的源文件与缓存都属当前用户，仓库不会出现 root 属主文件。
 - `yauzin-gocache` 是命名卷，挂到容器内 `/gocache`，编译缓存跨容器保留：热缓存一次编译约 1–2 秒，冷缓存或强制全量（`go build -a`）约 10–15 秒；清空用 `docker volume rm yauzin-gocache`。漏掉这个卷等于每次冷编译。
+- 缓存卷若曾被不带 `--user` 的 root 运行写过，里面的子目录不属当前用户，Go 会因此加载不到包（`no go files to analyze`）；`docker volume rm yauzin-gocache` 清一次即可，里面只有缓存。
 - 改动 `Dockerfile.build` 后必须重建 `yauzin-gio-builder`（layer cache 命中通常几秒），否则仍在用旧工具链/旧依赖。
 - 只做编译验证时产物写容器内 `/tmp`，避免仓库根出现 root 属主的二进制；确实要交付二进制时用 `docker cp` 取出后再 `chown $USER: yauzin`。
 - 运行 GUI 需在宿主桌面会话中进行，不要在容器或沙箱里启动。
 
 ### 13.5 静态检查与测试
 
-全量检查（编译 Gio 的部分必须在容器内执行）：
+容器内跑测试与 lint（`internal/ui`、`cmd/*` 导入 Gio，必须有 cgo 与 C 头文件）：
 
 ```bash
-docker run --rm -v "$PWD":/app -w /app -v yauzin-gocache:/gocache \
-  yauzin-gio-builder sh -c 'go test -vet=all ./...'
+docker run --rm --user $(id -u):$(id -g) \
+  -v "$PWD":/app -w /app -v yauzin-gocache:/gocache \
+  yauzin-gio-builder go test -vet=all ./...
+
+docker run --rm --user $(id -u):$(id -g) \
+  -v "$PWD":/app -w /app -v yauzin-gocache:/gocache \
+  yauzin-gio-builder golangci-lint run --fix --timeout=15m ./...
 ```
 
-golangci-lint 同样跑在镜像里（`internal/ui`、`cmd/*` 需要 cgo 与 C 头文件），配置是仓库根的 `.golangci.yml`：
-
-```bash
-# 检查：linters 用默认集（errcheck / govet / ineffassign / staticcheck / unused）
-docker run --rm -v "$PWD":/app -w /app -v yauzin-gocache:/gocache \
-  yauzin-gio-builder golangci-lint run --timeout=15m ./...
-
-# 修格式：只跑 formatters（gofumpt + goimports），就地改写挂载的源文件
-docker run --rm --user $(id -u):$(id -g) -v "$PWD":/app -w /app \
-  -v yauzin-gocache:/gocache \
-  yauzin-gio-builder golangci-lint fmt ./...
-```
-
+- 终端在 Flatpak 沙箱内时，这两条前面加 `flatpak-spawn --host`（工作目录用 `--directory=<仓库>`），命令本身不变。
+- 配置是仓库根的 `.golangci.yml`：linters 用默认集（errcheck / govet / ineffassign / staticcheck / unused），formatters 是 `gofumpt` + `goimports`。
+- `run --fix` 一步完成格式化与可自动修的 lint 修复，修不了的仍会列出来并以非零码退出，所以它同时是“修”和“查”；只想检查、不动工作区时去掉 `--fix`。
+- `--fix` 会就地改写源文件；两条命令都带 `--user $(id -u):$(id -g)`（理由见 §13.4），写回的文件仍属当前用户。
 - 合格标准是输出 `0 issues.`；`issues.max-issues-per-linter` 与 `max-same-issues` 都是 0，报告不会被截断。
-- v2 里 `gosimple` / `stylecheck` 已经并入 `staticcheck`，配置只写 `staticcheck`；`gofumpt` / `goimports` 属于 `formatters` 段，`run` 仍会以 “File is not properly formatted” 报出来。
-- `goimports` 的 `local-prefixes: [github.com/zhsj/yauzin]` 与下面手工检查的三段分组一致；`--user $(id -u):$(id -g)` 让容器写回的源文件仍属当前用户，避免仓库出现 root 属主文件。
-- 生成代码（`discovery_types.go`）靠文件头的 `Code generated ... DO NOT EDIT.` 由 `exclusions.generated: lax` 自动跳过。
+- v2 里 `gosimple` / `stylecheck` 已经并入 `staticcheck`；`gofumpt` / `goimports` 属于 `formatters` 段，`run` 会以 “File is not properly formatted” 报出来。
+- 生成代码（`discovery_types.go`）靠文件头的 `Code generated ... DO NOT EDIT.` 被默认的 `exclusions.generated: strict` 跳过。
 - `GOLANGCI_LINT_CACHE=/gocache/golangci-lint` 与 Go 编译缓存同一个命名卷，重复运行明显更快。
 
-纯 Go 包可直接在本地运行（`internal/ui` 与 `cmd/*` 导入 Gio，必须进容器）：
+纯 Go 包测试与格式化检查不需要容器，直接在本地（沙箱）跑：
 
 ```bash
 go test -vet=all ./internal/prefs ./internal/i18n ./internal/mail/... ./internal/tray ./internal/cursor
-```
 
-格式化与 import 分组（沙箱可直接执行，两条检查都无输出即合格；`gofumpt` 只在镜像里，需要它时用上面的 `golangci-lint fmt`）：
-
-```bash
 gofmt -l internal/ cmd/
-gofmt -w internal/ui
-
 ~/go/bin/goimports -local github.com/zhsj/yauzin -l internal/ cmd/
-~/go/bin/goimports -local github.com/zhsj/yauzin -w internal/ cmd/
 ```
 
-- import 块固定三段：标准库 / 第三方 / `github.com/zhsj/yauzin/...`。分组由 `-local` 决定，不要手工插空行。
+- 两条格式检查都无输出即合格；写回分别用 `gofmt -w` 与 `goimports -w`，`gofumpt` 只在镜像里，需要它时用上面的 `golangci-lint run --fix`。
+- import 块固定三段：标准库 / 第三方 / `github.com/zhsj/yauzin/...`，由 `.golangci.yml` 的 `goimports.local-prefixes` 与命令行的 `-local` 共同保证，不要手工插空行。
 - `goimports` 接受目录与多个路径，不需要 `git ls-files` 展开；它顺带做 gofmt 等价格式化，所以 `-w` 之后 `gofmt -l` 仍为空，两条检查都保留。
 - `goimports` 只处理磁盘文件，编辑器里未保存的改动需先保存。
 - 不用 `gopls` 做格式化或分组：`gopls format` 等价 gofmt、只排序不分组（`local` 设置只在 Organize Imports 或插入新 import 时生效，格式化请求 "merely sorts the existing imports"），命令行 `gopls imports` 也没有 `-local` 参数，只能分出两组。
