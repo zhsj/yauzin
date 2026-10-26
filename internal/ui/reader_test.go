@@ -4,6 +4,7 @@ import (
 	"image"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
@@ -92,6 +93,11 @@ func TestReplyQuotesTheSelectedBody(t *testing.T) {
 	}
 	if strings.Contains(got, "> third") {
 		t.Fatalf("reply quoted text outside the selection: %q", got)
+	}
+	// The reply is written below the quote, so the caret has to wait there.
+	if start, end := a.compose.body.Selection(); start != end || start != utf8.RuneCountInString(got) {
+		t.Fatalf("reply caret = %d..%d of %d runes, want it at the end of the quote",
+			start, end, utf8.RuneCountInString(got))
 	}
 
 	card.fwd.onTap()

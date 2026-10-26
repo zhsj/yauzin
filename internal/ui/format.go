@@ -137,9 +137,11 @@ func quotedBody(m *mail.Message) string {
 	return m.TextBody
 }
 
-// replyQuote builds the quoted block a reply starts with. A selection quoted
-// from the reader replaces the body, but only when there is a plain-text body
-// to select from: the placeholder shown for an HTML-only message is not mail.
+// replyQuote builds the quoted block a reply starts with. It leads the body and
+// ends with a blank line, so the reply goes below the quote instead of above
+// it; a forward keeps the opposite order. A selection quoted from the reader
+// replaces the body, but only when there is a plain-text body to select from:
+// the placeholder shown for an HTML-only message is not mail.
 func replyQuote(m *mail.Message, selection string) string {
 	var quoted string
 	switch body := plainText(m); {
@@ -150,7 +152,7 @@ func replyQuote(m *mail.Message, selection string) string {
 	default:
 		quoted = quoteLines(body)
 	}
-	return "\n\n" + replyHeader(m) + "\n" + quoted
+	return replyHeader(m) + "\n" + quoted + "\n\n"
 }
 
 // forwardQuote builds the block a forward starts with. Like the reply header it

@@ -98,7 +98,7 @@
 - 面板内的下拉**必须页内展开**，不能复用 `App.showMenu`：`showOverlay` 先 `closeOverlay()` 把 `a.settings` 置 nil，菜单关闭时 `hideOverlay()` 又直接清空 `a.overlay`，设置面板不会回来。设置页的语言选择即按此实现（`settingsView.langOpen`，候选行在同一张卡片内展开）；写信浮层的「发件人」同理（`composeView.fromOpen`），因为菜单会顺带把草稿丢掉。
 - 写信浮层的「发件人」行只在存在 SMTP 发信账号时出现（否则整行不占位）：候选在卡片内就地展开，当前身份带勾，选中即收起。身份决定传输——邮箱身份走它自己的后端（`services[mailboxID]`，写信开始时固定，中途切账号不会改投），发信账号走 `App.sendSMTP`（可注入，测试不碰网络）。「密送」行始终显示；自动预填的值记在 `composeView.bccAuto` 里，切走发件人时只清除仍是该自动值的文本，用户改过的内容不动。
 - 下拉菜单的水平位置由调用点声明的 `menuAlign` 决定：默认 `menuAlignStart` 与锚点左边缘对齐（从左往右展开），靠窗口右缘的锚点——阅读器消息卡的 ⋮ 与顶栏账号菜单——显式用 `menuAlignEnd` 与右边缘对齐（从右往左展开）。两种对齐最后都 clamp 进窗口，下方放不下时仍向上展开。
-- 写信浮窗的引用块由 `format.go` 的 `replyQuote` / `forwardQuote` 生成，文案固定英文、不走 i18n（它们属于邮件内容而非界面文案，中文界面下同样是英文）：回复是 Gmail 的 `On <时间> <发件人> wrote:` 抬头（本地时区的 `Mon, Jan 2, 2006 at 3:04 PM`）加逐行 `> ` 前缀的正文，转发是 `---------- Forwarded message ----------` 加 `From:` / `Date:` / `Subject:` 与完整正文。回复前阅读器里该封邮件正文若有选区，只引用选中片段（`messageCard.selectedText` → `readerView.replySelection` → `openCompose` 快照一次），选区为空或只有空白时回退完整正文；转发不使用选区。`replySubject` / `forwardSubject` 的 `Re: ` / `Fwd: ` 同理写死英文。
+- 写信浮窗的引用块由 `format.go` 的 `replyQuote` / `forwardQuote` 生成，文案固定英文、不走 i18n（它们属于邮件内容而非界面文案，中文界面下同样是英文）：回复是 Gmail 的 `On <时间> <发件人> wrote:` 抬头（本地时区的 `Mon, Jan 2, 2006 at 3:04 PM`）加逐行 `> ` 前缀的正文，转发是 `---------- Forwarded message ----------` 加 `From:` / `Date:` / `Subject:` 与完整正文。回复前阅读器里该封邮件正文若有选区，只引用选中片段（`messageCard.selectedText` → `readerView.replySelection` → `openCompose` 快照一次），选区为空或只有空白时回退完整正文；转发不使用选区。回复把引用块放在正文最前、其后留一个空行，打开写信浮窗时光标与键盘焦点就落在引用末尾（`SetText` 会把光标置为开头，因此回复分支在写入后显式 `SetCaret` 到末尾，按 rune 计数）；转发仍是顶部两行空行之后书写，光标在开头、首帧焦点在「收件人」。`replySubject` / `forwardSubject` 的 `Re: ` / `Fwd: ` 同理写死英文。
 
 ### 4.5 键盘
 
@@ -109,7 +109,8 @@
 - 读快捷键是破坏性的，因此裸键只在没有编辑器持有键盘时才读：搜索框聚焦时只读 Esc（其余字符、退格、回车全部留给编辑器，回车才能触发 `Editor.Submit`），浮层打开时同样只处理 Esc。未读取的事件在帧末由 `Router.Frame` 直接丢弃，不会残留到编辑器失焦后才触发。全局层是例外：它只要修饰键组合，而 `widget.Editor` 只绑定 Ctrl+Z/C/V/X/A、Ctrl+Backspace/Delete、Home/End 与方向键，Ctrl+W / Ctrl+Q 不会被编辑器消费。
 - 字母键名是 Gio 的大写形式（`J`/`K`/`C`…），普通字母过滤不带修饰键，所以 `Ctrl+C` 不会被当成「写信」；反过来 `key.Filter.Required` 的匹配要求事件修饰键是该集合的子集，`Ctrl+Shift+W` 也不会触发「关闭窗口」。
 - 列表有一个键盘光标（`cursorThread`，页/文件夹切换时清空），行高亮复用选中色；移出视口时通过设置 `layout.List.Position.First` 拉回可见区域。动作快捷键复用与鼠标相同的 `App` 方法，不另开一条数据通路。
-- 焦点归属由 App 自己声明：打开会话、切文件夹、开关浮层都会请求把焦点交还窗口根，避免搜索框在别处继续吃字符；`/` 主动把焦点交给搜索框。
+- 焦点归属由 App 自己声明：打开会话、切文件夹、开关浮层都会请求把焦点交还窗口根，避免搜索框在别处继续吃字符；`/` 主动把焦点交给搜索框。写信浮窗没有发送快捷键（Ctrl+Enter 不发送），打开后按模式分派首帧焦点：回复给正文，新邮件与转发给「收件人」。
+
 
 ### 4.4 窗口生命周期
 

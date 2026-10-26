@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"gioui.org/op"
+
+	"github.com/zhsj/yauzin/internal/mail"
 )
 
 // TestComposePanelStates pins the card geometry of the three sizes the header
@@ -166,5 +168,44 @@ func TestComposeLayoutFrames(t *testing.T) {
 				t.Fatalf("frame = %v, want the window %v", dims.Size, testWindow)
 			}
 		})
+	}
+}
+
+// TestComposeFocusFollowsTheWritingPosition pins where the keyboard lands: a
+// reply is written below the quote, so the body owns it; a forward still starts
+// with the recipient and leaves the caret on the blank line above the quote.
+func TestComposeFocusFollowsTheWritingPosition(t *testing.T) {
+	a, _, _ := composeTestApp(t)
+	msg := &mail.Message{
+		MessageSummary: mail.MessageSummary{
+			From:    mail.Address{Name: "Bob", Email: "bob@example.com"},
+			Subject: "subject",
+		},
+		TextBody: "hello",
+	}
+
+	router, ops, gtx := newRouterFrame(testWindow)
+	frame := func() { runFrame(a, router, ops, gtx) }
+
+	a.openCompose(composeReply, msg)
+	reply := a.compose
+	frame()
+	frame()
+	if !gtx.Focused(&reply.body) {
+		t.Fatal("the reply opened without the keyboard in the body")
+	}
+	if gtx.Focused(&reply.to) {
+		t.Fatal("the recipient field kept the keyboard in a reply")
+	}
+
+	a.openCompose(composeForward, msg)
+	fwd := a.compose
+	if start, end := fwd.body.Selection(); start != 0 || end != 0 {
+		t.Fatalf("forward caret = %d..%d, want the top of the body", start, end)
+	}
+	frame()
+	frame()
+	if !gtx.Focused(&fwd.to) {
+		t.Fatal("the forward opened without the keyboard in the recipient")
 	}
 }

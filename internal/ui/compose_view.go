@@ -3,6 +3,7 @@ package ui
 import (
 	"image"
 	"strings"
+	"unicode/utf8"
 
 	"gioui.org/font"
 	"gioui.org/io/key"
@@ -105,7 +106,12 @@ func newComposeView(a *App, mode composeMode, msg *mail.Message, replySelection 
 	if msg != nil && mode == composeReply {
 		c.to.SetText(msg.From.String())
 		c.subject.SetText(replySubject(msg.Subject))
-		c.body.SetText(replyQuote(msg, replySelection))
+		quote := replyQuote(msg, replySelection)
+		c.body.SetText(quote)
+		// SetText leaves the caret at the beginning; a reply is written below
+		// the quote, so move it past the trailing blank line.
+		end := utf8.RuneCountInString(quote)
+		c.body.SetCaret(end, end)
 	}
 	if msg != nil && mode == composeForward {
 		c.subject.SetText(forwardSubject(msg.Subject))
@@ -212,12 +218,16 @@ func (c *composeView) panel(gtx layout.Context, a *App) (size, origin image.Poin
 func (c *composeView) Layout(gtx layout.Context, a *App) layout.Dimensions {
 	if !c.focusInit {
 		c.focusInit = true
-		gtx.Execute(key.FocusCmd{Tag: &c.to})
-	}
-	// Ctrl+Enter sends from any field. The filter requires the modifier, so a
-	// plain Enter still inserts a newline in the body.
-	if pressedWith(gtx, key.NameEnter, key.ModShortcut) || pressedWith(gtx, key.NameReturn, key.ModShortcut) {
-		c.send()
+		// A reply is written below the quote, so the body takes the keyboard
+		// right away; a new message and a forward start with the recipient.
+		target := &c.to
+		if c.mode == composeReply && c.msg != nil {
+			target = &c.body
+			// The focus command lands after this frame, so the caret only shows
+			// once one more frame draws the now focused body.
+			gtx.Execute(op.InvalidateCmd{})
+		}
+		gtx.Execute(key.FocusCmd{Tag: target})
 	}
 
 	size, origin := c.panel(gtx, a)

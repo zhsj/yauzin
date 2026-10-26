@@ -142,7 +142,8 @@ func TestQuotedBodyOnlyUsesPlainText(t *testing.T) {
 	}
 }
 
-// TestReplyQuoteLayout pins Gmail's reply header: the time comes first, the
+// TestReplyQuoteLayout pins Gmail's reply header and the blank line the reply is
+// written on: the quote leads the body, the time comes first in the header, the
 // sender follows, and the body is marked line by line.
 func TestReplyQuoteLayout(t *testing.T) {
 	useLanguage(t, "en")
@@ -155,7 +156,7 @@ func TestReplyQuoteLayout(t *testing.T) {
 		TextBody: "hello\n   \nworld\n",
 	}
 
-	want := "\n\nOn Thu, Mar 5, 2026 at 8:07 AM Alice <alice@example.com> wrote:\n> hello\n>\n> world"
+	want := "On Thu, Mar 5, 2026 at 8:07 AM Alice <alice@example.com> wrote:\n> hello\n>\n> world\n\n"
 	if got := replyQuote(msg, ""); got != want {
 		t.Fatalf("replyQuote = %q, want %q", got, want)
 	}
@@ -169,11 +170,11 @@ func TestReplyQuoteLayout(t *testing.T) {
 
 	// Missing pieces drop out of the header instead of leaving a gap.
 	msg.Date = time.Time{}
-	if got, want := replyQuote(msg, ""), "\n\nAlice <alice@example.com> wrote:\n> hello"; !strings.HasPrefix(got, want) {
+	if got, want := replyQuote(msg, ""), "Alice <alice@example.com> wrote:\n> hello"; !strings.HasPrefix(got, want) {
 		t.Fatalf("dateless replyQuote = %q, want the prefix %q", got, want)
 	}
 	msg.From = mail.Address{Email: "bob@example.com"}
-	if got, want := replyQuote(msg, ""), "\n\nbob@example.com wrote:\n> hello"; !strings.HasPrefix(got, want) {
+	if got, want := replyQuote(msg, ""), "bob@example.com wrote:\n> hello"; !strings.HasPrefix(got, want) {
 		t.Fatalf("nameless replyQuote = %q, want the prefix %q", got, want)
 	}
 }
@@ -200,8 +201,8 @@ func TestReplyQuoteSelection(t *testing.T) {
 		{"blank selection", " \n\t ", header + "\n> one\n> two\n> three"},
 		{"no selection", "", header + "\n> one\n> two\n> three"},
 	} {
-		if got := replyQuote(msg, tc.selection); got != "\n\n"+tc.want {
-			t.Errorf("%s: replyQuote = %q, want %q", tc.name, got, "\n\n"+tc.want)
+		if got := replyQuote(msg, tc.selection); got != tc.want+"\n\n" {
+			t.Errorf("%s: replyQuote = %q, want %q", tc.name, got, tc.want+"\n\n")
 		}
 	}
 
@@ -211,7 +212,7 @@ func TestReplyQuoteSelection(t *testing.T) {
 		MessageSummary: mail.MessageSummary{From: msg.From},
 		HTMLBody:       "<p>html</p>",
 	}
-	want := "\n\n" + replyHeader(html) + "\n" + quoteNoBody
+	want := replyHeader(html) + "\n" + quoteNoBody + "\n\n"
 	if got := replyQuote(html, "some placeholder"); got != want {
 		t.Fatalf("html replyQuote = %q, want %q", got, want)
 	}
