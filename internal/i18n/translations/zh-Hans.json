@@ -102,7 +102,6 @@
   "settings.smtpSaveFailed": "无法保存发信账号。",
   "settings.smtpAdd": "添加",
   "settings.smtpEdit": "编辑",
-  "settings.smtpServer": "{{.Host}}:{{.Port}}",
 
   "shortcut.groupGlobal": "全局",
   "shortcut.groupList": "会话列表",

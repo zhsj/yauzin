@@ -103,7 +103,6 @@
   "settings.smtpSaveFailed": "Could not save the sending account.",
   "settings.smtpAdd": "Add",
   "settings.smtpEdit": "Edit",
-  "settings.smtpServer": "{{.Host}}:{{.Port}}",
 
   "shortcut.groupGlobal": "Global",
   "shortcut.groupList": "Conversation list",

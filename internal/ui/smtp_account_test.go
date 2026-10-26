@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/zhsj/yauzin/internal/accounts"
@@ -235,8 +234,8 @@ func TestSettingsSendingAccountRows(t *testing.T) {
 	if row.title != "Sender" {
 		t.Fatalf("title = %q, want the display name", row.title)
 	}
-	if !strings.Contains(row.subtitle, "smtp.example.com:465") || !strings.Contains(row.subtitle, "TLS") {
-		t.Fatalf("subtitle = %q, want the server and its encryption", row.subtitle)
+	if row.subtitle != "me@example.com" {
+		t.Fatalf("subtitle = %q, want the sender address", row.subtitle)
 	}
 	if row.details != nil {
 		t.Fatal("the row starts expanded")
@@ -265,6 +264,38 @@ func TestSettingsSendingAccountRows(t *testing.T) {
 	add.onTap()
 	if _, ok := a.overlay.(*smtpDialog); !ok {
 		t.Fatalf("overlay = %T, want the sending account form", a.overlay)
+	}
+}
+
+// TestSettingsSendingAccountRowWithoutName covers the row of an entry that has
+// no display name: the title becomes the address, so the subtitle stays empty
+// instead of repeating it.
+func TestSettingsSendingAccountRowWithoutName(t *testing.T) {
+	a, store := smtpTestApp(t)
+	entry := accounts.Entry{
+		ID:    "smtp:me@example.com",
+		Kind:  mail.KindSMTP,
+		Email: "me@example.com",
+		SMTP: &accounts.SMTPConfig{
+			Host:     "smtp.example.com",
+			Port:     465,
+			Security: "tls",
+		},
+	}
+	if err := store.Upsert(entry); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+
+	s := newSettingsView(a)
+	if len(s.smtpRows) != 2 {
+		t.Fatalf("rows = %d, want the sending account and the add row", len(s.smtpRows))
+	}
+	row := s.smtpRows[0]
+	if row.title != "me@example.com" {
+		t.Fatalf("title = %q, want the address", row.title)
+	}
+	if row.subtitle != "" {
+		t.Fatalf("subtitle = %q, want it empty when the title is the address", row.subtitle)
 	}
 }
 

@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	"gioui.org/font"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
+	"gioui.org/op"
 	"gioui.org/widget"
 
 	"github.com/zhsj/yauzin/internal/accounts"
@@ -394,7 +396,7 @@ func (s *settingsView) buildSMTPRows(a *App) {
 			row := &settingsRow{
 				icon:      glyphSend,
 				title:     smtpEntryName(item),
-				subtitle:  smtpEntrySummary(item),
+				subtitle:  smtpEntrySubtitle(item),
 				valueIcon: glyphExpandMore,
 			}
 			if open {
@@ -429,31 +431,20 @@ func smtpEntryName(entry accounts.Entry) string {
 	return entry.Email
 }
 
-// smtpEntrySummary says which server the account goes through, in one line.
-func smtpEntrySummary(entry accounts.Entry) string {
-	if entry.SMTP == nil {
+// smtpEntrySubtitle is the address a sending account sends as, the way a
+// mailbox row shows its address. It is skipped when the title already shows the
+// address, so the row never repeats itself.
+func smtpEntrySubtitle(entry accounts.Entry) string {
+	if entry.Email == "" || entry.Email == smtpEntryName(entry) {
 		return ""
 	}
-	cfg := entry.SMTP
-	summary := i18n.T("settings.smtpServer", map[string]string{
-		"Host": cfg.Host,
-		"Port": strconv.Itoa(cfg.Port),
-	})
-	if label := securityLabel(cfg.Security); label != "" {
-		summary += " · " + label
-	}
-	if entry.UseProxy {
-		summary += " · " + i18n.T("settings.accountUseProxy")
-	}
-	return summary
+	return entry.Email
 }
 
-// smtpAccountDetails is the expandable block of one sending account: the
-// server it goes through and the two actions. It mirrors accountDetails, which
-// cannot be reused because a sending account has neither a proxy switch of its
-// own nor a sign-in to repeat.
+// smtpAccountDetails is the expandable block of one sending account: the two
+// actions. It mirrors accountDetails, which cannot be reused because a sending
+// account has neither a proxy switch of its own nor a sign-in to repeat.
 type smtpAccountDetails struct {
-	entry   accounts.Entry
 	edit    *outlineButton
 	remove  *outlineButton
 	cancel  *outlineButton
@@ -463,7 +454,6 @@ type smtpAccountDetails struct {
 
 func newSMTPDetails(a *App, s *settingsView, entry accounts.Entry) *smtpAccountDetails {
 	d := &smtpAccountDetails{
-		entry: entry,
 		edit: newOutlineButton(i18n.T("settings.smtpEdit"), func() {
 			item := entry
 			a.showOverlay(newSMTPDialog(a, &item))
@@ -490,31 +480,8 @@ func newSMTPDetails(a *App, s *settingsView, entry accounts.Entry) *smtpAccountD
 
 func (d *smtpAccountDetails) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 	return tintedBlock(gtx, func(gtx layout.Context) layout.Dimensions {
-		return column(gtx,
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Left: 16, Right: 12, Top: 10, Bottom: 6}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return th.wrappedText(gtx, smtpDetailsText(d.entry), 12, colMuted, font.Normal)
-				})
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.actions(gtx, th) }),
-		)
+		return d.actions(gtx, th)
 	})
-}
-
-// smtpDetailsText spells out what the one-line summary leaves out.
-func smtpDetailsText(entry accounts.Entry) string {
-	if entry.SMTP == nil {
-		return entry.Email
-	}
-	cfg := entry.SMTP
-	text := smtpEntrySummary(entry)
-	if cfg.Username != "" {
-		text += " · " + cfg.Username
-	}
-	if cfg.BccToAccount {
-		text += " · " + i18n.T("settings.smtpBccTitle")
-	}
-	return text
 }
 
 // actions is the second line of the sub-card: the edit and delete links, or the
@@ -593,7 +560,14 @@ func (f *formSwitch) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 		invalidateAfterTap(gtx)
 	}
 	return f.click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return f.row(gtx, th)
+		// The row is the hit target, so the hand cursor must be declared
+		// inside it: a cursor op pushed outside is shadowed by this area.
+		macro := op.Record(gtx.Ops)
+		row := f.row(gtx, th)
+		call := macro.Stop()
+		th.cursor(gtx, pointer.CursorPointer, row.Size)
+		call.Add(gtx.Ops)
+		return row
 	})
 }
 
