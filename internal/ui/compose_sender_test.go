@@ -129,6 +129,12 @@ func TestComposeSendThroughTheMailbox(t *testing.T) {
 	if len(draft.To) != 1 || draft.To[0].Email != "friend@example.com" {
 		t.Fatalf("To = %+v", draft.To)
 	}
+	if draft.MessageID != c.messageID {
+		t.Fatalf("Message-ID = %q, want the one the composer shows %q", draft.MessageID, c.messageID)
+	}
+	if draft.Date.IsZero() || !draft.Date.Equal(c.date) {
+		t.Fatalf("Date = %v, want the one the composer shows %v", draft.Date, c.date)
+	}
 }
 
 // TestComposeSendThroughASendingAccount covers the second transport: picking a

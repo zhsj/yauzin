@@ -3,6 +3,7 @@ package ui
 import (
 	"image"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"gioui.org/font"
@@ -41,6 +42,18 @@ type composeView struct {
 	fromRows  []*settingsRow
 	fromOpen  bool
 	fromClick widget.Clickable
+	// date and messageID are fixed when the composer opens, so the header
+	// details show exactly what the message carries. The ID is rebuilt when
+	// another sender puts another domain on the wire.
+	date      time.Time
+	messageID string
+	// inReplyTo and references thread a reply onto the message it answers. A
+	// new message and a forward carry neither.
+	inReplyTo  string
+	references []string
+	// headersOpen folds out the read-only header details below the subject.
+	headersOpen  bool
+	headersClick widget.Clickable
 	// mailboxID is the account the draft belongs to, fixed when the composer
 	// opens: switching mailboxes mid-draft must not redirect the send.
 	mailboxID string
@@ -103,6 +116,9 @@ func newComposeView(a *App, mode composeMode, msg *mail.Message, replySelection 
 		c.fromRows = append(c.fromRows, row)
 	}
 
+	c.date = time.Now()
+	c.refreshIdentity()
+
 	if msg != nil && mode == composeReply {
 		c.to.SetText(msg.From.String())
 		c.subject.SetText(replySubject(msg.Subject))
@@ -112,6 +128,13 @@ func newComposeView(a *App, mode composeMode, msg *mail.Message, replySelection 
 		// the quote, so move it past the trailing blank line.
 		end := utf8.RuneCountInString(quote)
 		c.body.SetCaret(end, end)
+		// Without the parent's Message-ID there is nothing to thread onto, so
+		// the reply goes out as a message of its own instead of pointing at a
+		// guessed ID.
+		if inReplyTo, ok := mail.NormalizeMessageID(msg.MessageID); ok {
+			c.inReplyTo = inReplyTo
+			c.references = mail.ReplyReferences(msg)
+		}
 	}
 	if msg != nil && mode == composeForward {
 		c.subject.SetText(forwardSubject(msg.Subject))
@@ -263,6 +286,13 @@ func (c *composeView) Layout(gtx layout.Context, a *App) layout.Dimensions {
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return c.fieldRow(gtx, &c.subject, i18n.T("compose.subject"), "")
 			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.headersToggleRow(gtx) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if !c.headersOpen {
+					return layout.Dimensions{}
+				}
+				return c.headerDetails(gtx)
+			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.separator(gtx) }),
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions { return c.bodyRow(gtx) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.chipRow(gtx) }),
@@ -328,6 +358,16 @@ func (c *composeView) currentSender() *composeSender {
 	return nil
 }
 
+// refreshIdentity rebuilds the Message-ID after the sender changed, so the
+// right hand side of the ID stays in the domain the message is sent from.
+func (c *composeView) refreshIdentity() {
+	email := ""
+	if sender := c.currentSender(); sender != nil {
+		email = sender.email
+	}
+	c.messageID = mail.NewMessageID(email)
+}
+
 // senderLabel is the collapsed From line: the name next to the address, or just
 // the address when there is no name to add.
 func (c *composeView) senderLabel() string {
@@ -359,6 +399,7 @@ func (c *composeView) setSender(id string) {
 		return
 	}
 	c.fromID = id
+	c.refreshIdentity()
 	for i, sender := range c.senders {
 		if i < len(c.fromRows) {
 			c.fromRows[i].active = sender.id == id
@@ -507,6 +548,98 @@ func (c *composeView) fieldLabel(gtx layout.Context, label string) layout.Dimens
 	w := gtx.Dp(composeLabelWidth)
 	gtx.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, 1<<16)}
 	return c.app.th.text(gtx, label, 14, colMuted, font.Normal, 1)
+}
+
+// headersLabelWidth is the label column of the header details. It is wider than
+// composeLabelWidth because names such as References do not fit there.
+const headersLabelWidth = unit.Dp(96)
+
+// headersToggleRow folds the header details out below the subject. The whole row
+// is the control, so it advertises itself.
+func (c *composeView) headersToggleRow(gtx layout.Context) layout.Dimensions {
+	th := c.app.th
+	if c.headersClick.Clicked(gtx) {
+		c.headersOpen = !c.headersOpen
+		invalidateAfterTap(gtx)
+	}
+	return c.headersClick.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		dims := layout.Inset{Left: 16, Right: 10, Top: 2, Bottom: 2}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return th.text(gtx, i18n.T("compose.headers"), 12, colMuted, font.Normal, 1)
+				}),
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					return layout.Dimensions{Size: gtx.Constraints.Min}
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					if c.headersOpen {
+						return th.glyph(gtx, iconExpandLess, 14)
+					}
+					return th.glyph(gtx, iconExpandMore, 14)
+				}),
+			)
+		})
+		th.cursor(gtx, pointer.CursorPointer, dims.Size)
+		return dims
+	})
+}
+
+// headerDetails lists the headers the draft carries, read-only. A row without a
+// value is left out: a new message and a forward have no thread headers, and an
+// empty row would suggest otherwise.
+func (c *composeView) headerDetails(gtx layout.Context) layout.Dimensions {
+	rows := []struct{ label, value string }{
+		{i18n.T("compose.headerDate"), c.date.Format(time.RFC1123Z)},
+		{i18n.T("compose.headerMessageID"), c.messageID},
+		{i18n.T("compose.headerInReplyTo"), c.inReplyTo},
+		{i18n.T("compose.headerReferences"), c.referencesText()},
+	}
+	children := make([]layout.FlexChild, 0, len(rows))
+	for _, row := range rows {
+		if row.value == "" {
+			continue
+		}
+		item := row
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Left: 16, Right: 10, Top: 1, Bottom: 1}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.headerLabel(gtx, item.label) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						return c.app.th.wrappedText(gtx, item.value, 12, colMuted, font.Normal)
+					}),
+				)
+			})
+		}))
+	}
+	return layout.Inset{Bottom: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return column(gtx, children...)
+	})
+}
+
+// headerLabel draws one label of the details block in its own column, so the
+// values line up the way the editable fields do.
+func (c *composeView) headerLabel(gtx layout.Context, label string) layout.Dimensions {
+	w := gtx.Dp(headersLabelWidth)
+	gtx.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, 1<<16)}
+	return c.app.th.text(gtx, label, 12, colMuted, font.Normal, 1)
+}
+
+// referencesText is the visible form of the References chain. A long chain is
+// cut to its last entries so the details stay a few lines; the message itself
+// keeps every ID.
+func (c *composeView) referencesText() string {
+	const shown = 8
+	refs := c.references
+	if len(refs) == 0 {
+		return ""
+	}
+	prefix := ""
+	if len(refs) > shown {
+		refs = refs[len(refs)-shown:]
+		prefix = "… "
+	}
+	return prefix + strings.Join(refs, " ")
 }
 
 // separator draws the hairline between two header fields.

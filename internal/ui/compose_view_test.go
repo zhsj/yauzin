@@ -154,15 +154,19 @@ func TestComposeLayoutFrames(t *testing.T) {
 		maximize bool
 		minimize bool
 		fromOpen bool
+		headers  bool
 	}{
 		{name: "floating"},
 		{name: "expanded", maximize: true},
 		{name: "expanded with the From list open", maximize: true, fromOpen: true},
+		{name: "floating with the header details open", headers: true},
+		{name: "expanded with the header details open", maximize: true, headers: true},
 		{name: "collapsed", minimize: true},
 	}
 	for _, st := range states {
 		t.Run(st.name, func(t *testing.T) {
 			c.maximized, c.minimized, c.fromOpen = st.maximize, st.minimize, st.fromOpen
+			c.headersOpen = st.headers
 			var ops op.Ops
 			gtx := testGtx(&ops, testWindow)
 			if dims := c.Layout(gtx, a); dims.Size != testWindow {

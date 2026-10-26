@@ -187,6 +187,11 @@
   "compose.sendFailed": "发送失败：{{.Error}}",
   "compose.duplicateAttachment": "该附件已添加",
   "compose.attachUnavailable": "系统文件选择器不可用",
+  "compose.headers": "邮件头",
+  "compose.headerDate": "日期",
+  "compose.headerMessageID": "邮件 ID",
+  "compose.headerInReplyTo": "In-Reply-To",
+  "compose.headerReferences": "References",
 
   "attachment.name": "附件",
 

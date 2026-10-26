@@ -190,6 +190,11 @@
   "compose.sendFailed": "Could not send: {{.Error}}",
   "compose.duplicateAttachment": "That attachment is already added.",
   "compose.attachUnavailable": "The desktop file picker is not available.",
+  "compose.headers": "Headers",
+  "compose.headerDate": "Date",
+  "compose.headerMessageID": "Message-ID",
+  "compose.headerInReplyTo": "In-Reply-To",
+  "compose.headerReferences": "References",
 
   "attachment.name": "attachment",
 

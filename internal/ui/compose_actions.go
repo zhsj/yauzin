@@ -34,6 +34,12 @@ func (c *composeView) send() {
 		Subject:     c.subject.Text(),
 		Body:        c.body.Text(),
 		Attachments: append([]mail.DraftAttachment{}, c.attachments...),
+		// The identity and the thread headers are the ones the composer shows,
+		// so what was read in the details is what goes out.
+		MessageID:  c.messageID,
+		Date:       c.date,
+		InReplyTo:  c.inReplyTo,
+		References: append([]string{}, c.references...),
 	}
 
 	// The identity decides the transport: the mailbox sends through its own
