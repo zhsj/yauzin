@@ -27,9 +27,12 @@ RUN set -eux; \
 #   x11:     pkg-config x11 x11-xcb xkbcommon xkbcommon-x11 xcursor xfixes
 #   wayland: pkg-config wayland-client wayland-cursor wayland-egl
 #   render:  pkg-config egl, plus <vulkan/vulkan.h> for internal/vk
+# ca-certificates is not part of debian:unstable, but `go install` below talks
+# HTTPS to the module proxy and needs a trust store.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       build-essential \
+      ca-certificates \
       pkg-config \
       golang-go \
       libwayland-dev \
@@ -45,12 +48,26 @@ RUN apt-get update \
       libvulkan-dev \
  && rm -rf /var/lib/apt/lists/*
 
+# golangci-lint cannot come from the archive (Debian's copy lags far behind the
+# language), so it is built from the module proxy. This is the only step that
+# reaches the network; the version is pinned so the layer stays reproducible and
+# is only rebuilt when the pin changes. GOFLAGS is cleared here because
+# -mod=vendor must not apply to `go install pkg@version`.
+ARG GOLANGCI_LINT_VERSION=v2.15.0
+RUN set -eux; \
+    export GOFLAGS= GOTOOLCHAIN=local GOBIN=/usr/local/bin \
+           GOPROXY=https://goproxy.cn; \
+    go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}; \
+    rm -rf /root/go /root/.cache/go-build; \
+    golangci-lint version
+
 # Pin the build conventions so callers no longer pass -e flags per run.
 # GOTOOLCHAIN=local keeps the image offline: Go must not download a toolchain.
 ENV CGO_ENABLED=1 \
     GOFLAGS=-mod=vendor \
     GOTOOLCHAIN=local \
-    GOCACHE=/gocache
+    GOCACHE=/gocache \
+    GOLANGCI_LINT_CACHE=/gocache/golangci-lint
 
 # Compilation cache lives in a named volume, e.g.
 #   docker run -v yauzin-gocache:/gocache ...
