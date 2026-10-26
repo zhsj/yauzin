@@ -77,12 +77,6 @@ func mutedIcon(g iconGlyph) icon {
 	return icon{glyph: g, col: colMuted}
 }
 
-// tint returns the same glyph in another color, keeping the font instance.
-func (ic icon) tint(col color.NRGBA) icon {
-	ic.col = col
-	return ic
-}
-
 var (
 	iconMenu   = mutedIcon(glyphMenu)
 	iconSearch = mutedIcon(glyphSearch)

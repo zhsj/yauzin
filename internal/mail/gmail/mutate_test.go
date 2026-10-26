@@ -109,14 +109,14 @@ func (b *writeBatchServer) handler(t *testing.T) http.HandlerFunc {
 				return
 			}
 			if status == http.StatusNoContent {
-				fmt.Fprintf(part, "HTTP/1.1 %d %s\r\n\r\n", status, http.StatusText(status))
+				_, _ = fmt.Fprintf(part, "HTTP/1.1 %d %s\r\n\r\n", status, http.StatusText(status))
 				continue
 			}
 			payload := b.bodies[call.target]
 			if payload == "" {
 				payload = "{}"
 			}
-			fmt.Fprintf(part, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
+			_, _ = fmt.Fprintf(part, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
 				status, http.StatusText(status), len(payload), payload)
 		}
 		if err := mw.Close(); err != nil {

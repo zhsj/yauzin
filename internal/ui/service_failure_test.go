@@ -458,7 +458,6 @@ func TestSetFlagReceivesThreadMessages(t *testing.T) {
 type fakeNotifier struct {
 	mu      sync.Mutex
 	notices []notify.Notice
-	closed  bool
 }
 
 func (f *fakeNotifier) Show(notice notify.Notice) {
@@ -467,22 +466,12 @@ func (f *fakeNotifier) Show(notice notify.Notice) {
 	f.mu.Unlock()
 }
 
-func (f *fakeNotifier) Close() {
-	f.mu.Lock()
-	f.closed = true
-	f.mu.Unlock()
-}
+// Close satisfies the notifier interface; nothing has to be released.
+func (f *fakeNotifier) Close() {}
 
 // sent returns the published notifications.
 func (f *fakeNotifier) sent() []notify.Notice {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]notify.Notice(nil), f.notices...)
-}
-
-// wasClosed reports whether Close ran.
-func (f *fakeNotifier) wasClosed() bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.closed
 }

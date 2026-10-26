@@ -82,10 +82,7 @@ func Run() {
 	// closed.
 	a.startPolling()
 
-	for {
-		if a.quitting.Load() {
-			break
-		}
+	for !a.quitting.Load() {
 		w := new(app.Window)
 		a.attach(w)
 		a.eventLoop(w)

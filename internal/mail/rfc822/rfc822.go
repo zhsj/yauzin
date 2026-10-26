@@ -83,7 +83,9 @@ func Build(draft mail.Draft, from mail.Address, opts Options) ([]byte, error) {
 		writeLine(&b, "Content-Type", "text/plain; charset=utf-8")
 		writeLine(&b, "Content-Transfer-Encoding", "base64")
 		b.WriteString(crlf)
-		writeBase64(&b, bytes.NewReader([]byte(draft.Body)))
+		if err := writeBase64(&b, bytes.NewReader([]byte(draft.Body))); err != nil {
+			return nil, fmt.Errorf("rfc822: encode body: %w", err)
+		}
 		return b.Bytes(), nil
 	}
 
@@ -95,7 +97,9 @@ func Build(draft mail.Draft, from mail.Address, opts Options) ([]byte, error) {
 	writeLine(&b, "Content-Type", "text/plain; charset=utf-8")
 	writeLine(&b, "Content-Transfer-Encoding", "base64")
 	b.WriteString(crlf)
-	writeBase64(&b, bytes.NewReader([]byte(draft.Body)))
+	if err := writeBase64(&b, bytes.NewReader([]byte(draft.Body))); err != nil {
+		return nil, fmt.Errorf("rfc822: encode body: %w", err)
+	}
 
 	for _, att := range draft.Attachments {
 		if err := writeAttachment(&b, boundary, att); err != nil {

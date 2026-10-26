@@ -185,7 +185,7 @@ func (b *batchServer) handler(t *testing.T) http.HandlerFunc {
 			if body == "" {
 				body = "{}"
 			}
-			fmt.Fprintf(part, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\n\r\n%s\n",
+			_, _ = fmt.Fprintf(part, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\n\r\n%s\n",
 				status, http.StatusText(status), body)
 		}
 		if err := mw.Close(); err != nil {
@@ -499,7 +499,7 @@ func (b *threadBatchServer) handler(t *testing.T) http.HandlerFunc {
 				t.Errorf("batch response part: %v", err)
 				return
 			}
-			fmt.Fprintf(part, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\n\r\n%s\n",
+			_, _ = fmt.Fprintf(part, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\n\r\n%s\n",
 				status, http.StatusText(status), body)
 		}
 		if err := mw.Close(); err != nil {
@@ -556,7 +556,6 @@ func TestListThreadsAssemblesConversations(t *testing.T) {
 		PageToken: "prev",
 		Limit:     50,
 	})
-
 	if err != nil {
 		t.Fatalf("ListThreads: %v", err)
 	}

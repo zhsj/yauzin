@@ -11,11 +11,6 @@ const (
 	methodIface = "me.zhsj.yauzin"
 )
 
-// hold keeps the session bus connection alive for the whole process, so the
-// requested name and the exported Open method never disappear while the app
-// runs.
-var hold *dbus.Conn
-
 // activator serves the Open method on the bus connection of the first
 // instance; later launches call it to ask for the window.
 type activator struct {
@@ -43,20 +38,19 @@ func Acquire(name string, onActivate func()) (bool, error) {
 	}
 	ret, err := conn.RequestName(name, dbus.NameFlagDoNotQueue)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return false, err
 	}
 	if ret == dbus.RequestNameReplyExists {
-		conn.Close()
+		_ = conn.Close()
 		return false, nil
 	}
 	// ExportAll takes methods of any signature; plain Export drops methods
 	// whose last return value is not *dbus.Error, which Open is not.
 	if err := conn.ExportAll(&activator{open: onActivate}, objectPath, methodIface); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return false, err
 	}
-	hold = conn
 	return true, nil
 }
 
@@ -67,6 +61,6 @@ func Activate(name string) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	return conn.Object(name, objectPath).Call(methodIface+".Open", 0).Err
 }

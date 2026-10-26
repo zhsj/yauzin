@@ -94,9 +94,6 @@ type SignInResult struct {
 // defaultAuthTimeout is how long the loopback server waits for the callback.
 const defaultAuthTimeout = 5 * time.Minute
 
-// errStateMismatch reports a callback that did not echo our state value.
-var errStateMismatch = errors.New("gmail: OAuth state mismatch")
-
 // flow collects the pieces a test replaces: the endpoints, the listener and
 // the browser. Production uses defaultFlow.
 type flow struct {

@@ -2,9 +2,8 @@ package ui
 
 import (
 	"image"
-	"strings"
-
 	"image/color"
+	"strings"
 
 	"gioui.org/font"
 	"gioui.org/layout"
@@ -63,10 +62,10 @@ func newTheme(t *themeFonts) *theme {
 	mat.Shaper = t.shaper
 	mat.TextSize = 14
 	mat.Face = t.face
-	mat.Palette.Fg = colText
-	mat.Palette.Bg = colSurface
-	mat.Palette.ContrastBg = colPrimary
-	mat.Palette.ContrastFg = color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}
+	mat.Fg = colText
+	mat.Bg = colSurface
+	mat.ContrastBg = colPrimary
+	mat.ContrastFg = color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}
 
 	return &theme{
 		shaper:       t.shaper,
