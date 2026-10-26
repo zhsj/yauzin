@@ -1,0 +1,26 @@
+version: "2"
+
+linters:
+  # `standard` is errcheck, govet, ineffassign, staticcheck and unused; in v2 the
+  # old gosimple/stylecheck linters are folded into staticcheck, which is why it
+  # is listed alone here.
+  default: standard
+  enable:
+    - staticcheck
+  exclusions:
+    generated: lax
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      # Keep the three-block import layout: stdlib / third-party / this module.
+      local-prefixes:
+        - github.com/zhsj/yauzin
+
+issues:
+  # Report everything in one run so a clean run really means zero findings.
+  max-issues-per-linter: 0
+  max-same-issues: 0
