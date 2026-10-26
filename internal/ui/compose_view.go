@@ -160,33 +160,51 @@ const (
 	composeLabelWidth = unit.Dp(56)
 )
 
+// composeArea is the region an expanded composer may fill: the window below the
+// header and right of the sidebar. Overlays are laid out against the whole
+// window while the header is drawn after them, so an expansion that ignored
+// either edge would slide under the title bar and hide its own buttons.
+func composeArea(gtx layout.Context, a *App) image.Rectangle {
+	left := 0
+	if !a.sidebarCollapsed {
+		left = gtx.Dp(sidebarWidth)
+	}
+	topLeft := image.Pt(
+		min(left, gtx.Constraints.Max.X),
+		min(gtx.Dp(a.headerHeight()), gtx.Constraints.Max.Y),
+	)
+	return image.Rectangle{Min: topLeft, Max: gtx.Constraints.Max}
+}
+
 // panel reports the size and origin of the composer card for the current
-// state. A maximized composer asks for exactly the size panelSize clamps to,
-// so the same margin leaves it touching every window edge while the floating
-// one keeps that gap at the bottom right.
-func (c *composeView) panel(gtx layout.Context) (size, origin image.Point) {
+// state. The floating and minimized windows hug the bottom right corner of the
+// window; the expanded one fills composeArea up to composeMargin on every side.
+func (c *composeView) panel(gtx layout.Context, a *App) (size, origin image.Point) {
 	margin := gtx.Dp(composeMargin)
+	window := gtx.Constraints.Max
+	if c.maximized && !c.minimized {
+		space := composeArea(gtx, a).Inset(margin)
+		size = image.Pt(max(space.Dx(), 1), max(space.Dy(), 1))
+		// A window too small for the area still has to keep the card on screen.
+		return size, image.Pt(
+			max(min(space.Min.X, window.X-size.X), 0),
+			max(min(space.Min.Y, window.Y-size.Y), 0),
+		)
+	}
 	var want, least image.Point
-	switch {
-	case c.minimized:
+	if c.minimized {
 		// A minimized window keeps its width but shrinks to the header row, so
 		// the minimum collapses with it.
 		want = image.Pt(gtx.Dp(480), gtx.Dp(48))
 		least = image.Pt(gtx.Dp(320), gtx.Dp(48))
-	case c.maximized:
-		want = image.Pt(
-			max(gtx.Constraints.Max.X-2*margin, 1),
-			max(gtx.Constraints.Max.Y-2*margin, 1),
-		)
-		least = want
-	default:
+	} else {
 		want = image.Pt(gtx.Dp(480), gtx.Dp(540))
 		least = image.Pt(gtx.Dp(320), gtx.Dp(160))
 	}
 	size = panelSize(gtx, want, least)
 	origin = image.Pt(
-		max(gtx.Constraints.Max.X-size.X-margin, 0),
-		max(gtx.Constraints.Max.Y-size.Y-margin, 0),
+		max(window.X-size.X-margin, 0),
+		max(window.Y-size.Y-margin, 0),
 	)
 	return size, origin
 }
@@ -202,7 +220,7 @@ func (c *composeView) Layout(gtx layout.Context, a *App) layout.Dimensions {
 		c.send()
 	}
 
-	size, origin := c.panel(gtx)
+	size, origin := c.panel(gtx, a)
 
 	cardGtx, pop := placeCard(gtx, size, origin)
 	defer pop()
@@ -496,14 +514,12 @@ func (c *composeView) bodyRow(gtx layout.Context) layout.Dimensions {
 func (c *composeView) header(gtx layout.Context) layout.Dimensions {
 	a := c.app
 	th := a.th
-	// The button shows where a click leads: out of the corner while floating,
-	// back into it while expanded.
+	// The glyph alone says where a click leads: out of the corner while
+	// floating, back into it while expanded. The button carries no hover label.
 	if c.maximized {
 		c.maxBtn.setIcon(iconCloseFull)
-		c.maxBtn.setTip(i18n.T("compose.collapse"))
 	} else {
 		c.maxBtn.setIcon(iconOpenInFull)
-		c.maxBtn.setTip(i18n.T("compose.expand"))
 	}
 	return layout.Inset{Left: 16, Right: 8, Top: 4, Bottom: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,

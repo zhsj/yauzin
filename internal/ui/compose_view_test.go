@@ -10,17 +10,25 @@ import (
 
 // TestComposePanelStates pins the card geometry of the three sizes the header
 // offers: the floating window, the maximized one and the collapsed header row.
+// The expanded card lives in composeArea, so its size is the window minus the
+// header, the sidebar and the margin on every side.
 func TestComposePanelStates(t *testing.T) {
 	a, _, _ := composeTestApp(t)
 	c := newComposeView(a, composeNew, nil, "")
 
+	const (
+		bar    = 64 // topBarHeight: the test app leaves the decorations to the platform
+		side   = 256
+		margin = 24
+	)
 	tests := []struct {
-		name     string
-		window   image.Point
-		maximize bool
-		minimize bool
-		size     image.Point
-		origin   image.Point
+		name      string
+		window    image.Point
+		collapsed bool
+		maximize  bool
+		minimize  bool
+		size      image.Point
+		origin    image.Point
 	}{
 		{
 			name:   "floating sits at the bottom right",
@@ -29,18 +37,26 @@ func TestComposePanelStates(t *testing.T) {
 			origin: image.Pt(testWindow.X-480-24, testWindow.Y-540-24),
 		},
 		{
-			name:     "maximized fills the window up to the margin",
+			name:     "maximized fills the content area",
 			window:   testWindow,
 			maximize: true,
-			size:     image.Pt(testWindow.X-48, testWindow.Y-48),
-			origin:   image.Pt(24, 24),
+			size:     image.Pt(testWindow.X-side-2*margin, testWindow.Y-bar-2*margin),
+			origin:   image.Pt(side+margin, bar+margin),
+		},
+		{
+			name:      "maximized reclaims the folded sidebar",
+			window:    testWindow,
+			collapsed: true,
+			maximize:  true,
+			size:      image.Pt(testWindow.X-2*margin, testWindow.Y-bar-2*margin),
+			origin:    image.Pt(margin, bar+margin),
 		},
 		{
 			name:     "maximized follows a small window",
 			window:   smallWindow,
 			maximize: true,
-			size:     image.Pt(smallWindow.X-48, smallWindow.Y-48),
-			origin:   image.Pt(24, 24),
+			size:     image.Pt(smallWindow.X-side-2*margin, smallWindow.Y-bar-2*margin),
+			origin:   image.Pt(side+margin, bar+margin),
 		},
 		{
 			name:     "minimized keeps the width and the header height",
@@ -52,12 +68,26 @@ func TestComposePanelStates(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			a.sidebarCollapsed = tc.collapsed
 			c.maximized, c.minimized = tc.maximize, tc.minimize
 			var ops op.Ops
 			gtx := testGtx(&ops, tc.window)
-			size, origin := c.panel(gtx)
+			size, origin := c.panel(gtx, a)
 			if size != tc.size || origin != tc.origin {
 				t.Fatalf("panel = %v at %v, want %v at %v", size, origin, tc.size, tc.origin)
+			}
+			if !tc.maximize || tc.minimize {
+				return
+			}
+			// The card must clear the header, or the title bar painted after
+			// the overlay hides its own buttons, and the folder list.
+			area := composeArea(gtx, a)
+			if origin.Y < gtx.Dp(a.headerHeight()) || origin.X < area.Min.X {
+				t.Fatalf("expanded card at %v overlaps the header or the sidebar of %v", origin, area)
+			}
+			got := image.Rectangle{Min: origin, Max: origin.Add(size)}
+			if !got.In(area) {
+				t.Fatalf("expanded card %v leaves the content area %v", got, area)
 			}
 		})
 	}

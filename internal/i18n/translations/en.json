@@ -178,8 +178,6 @@
   "compose.new": "New message",
   "compose.reply": "Reply",
   "compose.forward": "Forward",
-  "compose.expand": "Expand",
-  "compose.collapse": "Exit full screen",
   "compose.from": "From",
   "compose.to": "To",
   "compose.cc": "Cc",
