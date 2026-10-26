@@ -2,10 +2,9 @@ package ui
 
 import (
 	"image"
+	"image/color"
 	"strconv"
 	"strings"
-
-	"image/color"
 
 	"gioui.org/font"
 	"gioui.org/layout"

@@ -2,9 +2,8 @@ package ui
 
 import (
 	"image"
-	"time"
-
 	"image/color"
+	"time"
 
 	"gioui.org/font"
 	"gioui.org/io/pointer"

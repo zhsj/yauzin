@@ -642,7 +642,6 @@ func TestListThreadsReturnsEmptyPagePastTheEnd(t *testing.T) {
 		PageToken: encodeToken(math.MaxInt),
 		Limit:     50,
 	})
-
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

@@ -167,15 +167,21 @@ func (s *Service) seedSent(now time.Time) {
 // the point of the folder.
 func (s *Service) seedSpam(now time.Time) {
 	junk := []struct{ from, email, subject, snippet, lead string }{
-		{"国际彩票中心", "winner@lottery.example", "恭喜：您已获得 8,800,000.00 元奖金",
+		{
+			"国际彩票中心", "winner@lottery.example", "恭喜：您已获得 8,800,000.00 元奖金",
 			"请于 48 小时内回复本邮件并提供银行账号，逾期视为放弃。",
-			"恭喜您在本季度国际抽奖中获得一等奖，奖金 8,800,000.00 元。"},
-		{"账户安全中心", "security@account-verify.example", "【紧急】您的账户将于今日被冻结",
+			"恭喜您在本季度国际抽奖中获得一等奖，奖金 8,800,000.00 元。",
+		},
+		{
+			"账户安全中心", "security@account-verify.example", "【紧急】您的账户将于今日被冻结",
 			"检测到异常登录，请在 24 小时内点击链接完成验证，否则账户将被停用。",
-			"我们检测到您的账户存在异常登录，为保障资金安全，需要您立即验证身份。"},
-		{"批发直供", "sales@cheap-watches.example", "工厂直供名表，一件代发",
+			"我们检测到您的账户存在异常登录，为保障资金安全，需要您立即验证身份。",
+		},
+		{
+			"批发直供", "sales@cheap-watches.example", "工厂直供名表，一件代发",
 			"原厂机芯，支持验货，回复本邮件即可获取报价单。",
-			"我们是源头工厂，长期供应各类名牌手表，支持一件代发与贴牌。"},
+			"我们是源头工厂，长期供应各类名牌手表，支持一件代发与贴牌。",
+		},
 	}
 	for i, j := range junk {
 		m := &mail.Message{

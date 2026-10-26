@@ -2,9 +2,8 @@ package ui
 
 import (
 	"image"
-	"math"
-
 	"image/color"
+	"math"
 
 	"gioui.org/f32"
 	"gioui.org/font"

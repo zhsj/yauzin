@@ -2,9 +2,8 @@ package ui
 
 import (
 	"image"
-	"strconv"
-
 	"image/color"
+	"strconv"
 
 	"gioui.org/font"
 	"gioui.org/io/pointer"

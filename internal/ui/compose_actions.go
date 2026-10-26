@@ -3,9 +3,8 @@ package ui
 import (
 	"context"
 	"errors"
-	"os"
-
 	"io/fs"
+	"os"
 
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"

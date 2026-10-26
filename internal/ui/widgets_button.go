@@ -2,10 +2,9 @@ package ui
 
 import (
 	"image"
+	"image/color"
 	"math"
 	"time"
-
-	"image/color"
 
 	"gioui.org/f32"
 	"gioui.org/font"

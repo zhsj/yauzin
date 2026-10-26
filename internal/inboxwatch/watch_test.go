@@ -38,9 +38,11 @@ func (f *fakeService) Folders(context.Context) ([]mail.Folder, error) { return n
 func (f *fakeService) FolderDetails(_ context.Context, folders []mail.Folder) ([]mail.Folder, error) {
 	return folders, nil
 }
+
 func (f *fakeService) ListThreads(context.Context, mail.ListRequest) (mail.ThreadPage, error) {
 	return mail.ThreadPage{}, nil
 }
+
 func (f *fakeService) GetThread(context.Context, string) ([]*mail.Message, error) {
 	return nil, mail.ErrNotFound
 }
@@ -51,6 +53,7 @@ func (f *fakeService) Send(context.Context, mail.Draft) error                   
 func (f *fakeService) SaveAttachment(context.Context, string, string, string) (string, error) {
 	return "", mail.ErrUnsupported
 }
+
 func (f *fakeService) RawMessage(context.Context, string) ([]byte, error) {
 	return nil, mail.ErrUnsupported
 }
