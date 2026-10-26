@@ -63,6 +63,11 @@ func New(acc mail.Account) *Service {
 // Account returns the account this service was built for.
 func (s *Service) Account() mail.Account { return s.acc }
 
+// messageID is the RFC 5322 Message-ID the demo data carries for one message:
+// the back-end ID in a domain no relay will try to deliver to, like the invalid
+// domain RFC 2606 reserves for examples.
+func messageID(id string) string { return "<" + id + "@yauzin.invalid>" }
+
 func (s *Service) seed() {
 	now := time.Now()
 	s.labels = []mail.Folder{
@@ -94,6 +99,9 @@ func (s *Service) seedInbox(now time.Time) {
 		count := 1 + i%3
 		newest := now.Add(-time.Duration(i)*37*time.Minute - 9*time.Minute)
 		th := &thread{id: fmt.Sprintf("%s-t%03d", s.acc.ID, i)}
+		// The conversation's ancestor chain, so a reply written in the demo
+		// carries the same References a real one would.
+		var refs []string
 
 		for k := 0; k < count; k++ {
 			date := newest.Add(-time.Duration(count-1-k) * 3 * time.Hour)
@@ -102,9 +110,10 @@ func (s *Service) seedInbox(now time.Time) {
 				msgSubject = "Re: " + subject
 				snippet = replySnippets[(i+k)%len(replySnippets)]
 			}
+			id := fmt.Sprintf("%s-t%03d-m%d", s.acc.ID, i, k)
 			m := &mail.Message{
 				MessageSummary: mail.MessageSummary{
-					ID:        fmt.Sprintf("%s-t%03d-m%d", s.acc.ID, i, k),
+					ID:        id,
 					AccountID: s.acc.ID,
 					From:      mail.Address{Name: tpl.from, Email: tpl.email},
 					To:        []mail.Address{{Name: s.acc.DisplayName(), Email: s.acc.Email}},
@@ -115,9 +124,12 @@ func (s *Service) seedInbox(now time.Time) {
 					Starred:   i%7 == 0 && k == count-1,
 					Labels:    append([]string{}, tpl.labels...),
 				},
-				HTMLBody: htmlBody(tpl.subject, tpl.lead, tpl.bullets, tpl.from),
-				TextBody: plainBody(tpl.lead, tpl.bullets, tpl.from),
+				MessageID:  messageID(id),
+				References: append([]string{}, refs...),
+				HTMLBody:   htmlBody(tpl.subject, tpl.lead, tpl.bullets, tpl.from),
+				TextBody:   plainBody(tpl.lead, tpl.bullets, tpl.from),
 			}
+			refs = append(refs, m.MessageID)
 			if i%9 == 0 && k == count-1 {
 				name := tpl.attachment
 				if name == "" {
@@ -141,9 +153,10 @@ func (s *Service) seedInbox(now time.Time) {
 func (s *Service) seedSent(now time.Time) {
 	for i := 0; i < 7; i++ {
 		t := templates[(i+5)%len(templates)]
+		id := fmt.Sprintf("%s-sent-%02d", s.acc.ID, i)
 		m := &mail.Message{
 			MessageSummary: mail.MessageSummary{
-				ID:        fmt.Sprintf("%s-sent-%02d", s.acc.ID, i),
+				ID:        id,
 				AccountID: s.acc.ID,
 				From:      mail.Address{Name: s.acc.DisplayName(), Email: s.acc.Email},
 				To:        []mail.Address{{Name: t.from, Email: t.email}},
@@ -152,8 +165,9 @@ func (s *Service) seedSent(now time.Time) {
 				Date:      now.Add(-time.Duration(i*126+30) * time.Minute),
 				Starred:   i == 2,
 			},
-			HTMLBody: `<div><p>你好，</p><p>已收到，我这边周三之前整理好同步给你。</p><p>Ada</p></div>`,
-			TextBody: "你好，\n\n已收到，我这边周三之前整理好同步给你。\n\nAda",
+			MessageID: messageID(id),
+			HTMLBody:  `<div><p>你好，</p><p>已收到，我这边周三之前整理好同步给你。</p><p>Ada</p></div>`,
+			TextBody:  "你好，\n\n已收到，我这边周三之前整理好同步给你。\n\nAda",
 		}
 		s.threads = append(s.threads, &thread{
 			id:   fmt.Sprintf("%s-sent-t%02d", s.acc.ID, i),
@@ -184,9 +198,10 @@ func (s *Service) seedSpam(now time.Time) {
 		},
 	}
 	for i, j := range junk {
+		id := fmt.Sprintf("%s-spam-%02d", s.acc.ID, i)
 		m := &mail.Message{
 			MessageSummary: mail.MessageSummary{
-				ID:        fmt.Sprintf("%s-spam-%02d", s.acc.ID, i),
+				ID:        id,
 				AccountID: s.acc.ID,
 				From:      mail.Address{Name: j.from, Email: j.email},
 				To:        []mail.Address{{Name: s.acc.DisplayName(), Email: s.acc.Email}},
@@ -195,8 +210,9 @@ func (s *Service) seedSpam(now time.Time) {
 				Date:      now.Add(-time.Duration(i*311+17) * time.Minute),
 				Unread:    i != 1,
 			},
-			HTMLBody: htmlBody(j.subject, j.lead, nil, j.from),
-			TextBody: plainBody(j.lead, nil, j.from),
+			MessageID: messageID(id),
+			HTMLBody:  htmlBody(j.subject, j.lead, nil, j.from),
+			TextBody:  plainBody(j.lead, nil, j.from),
 		}
 		s.threads = append(s.threads, &thread{
 			id:   fmt.Sprintf("%s-spam-t%02d", s.acc.ID, i),
@@ -209,9 +225,10 @@ func (s *Service) seedSpam(now time.Time) {
 func (s *Service) seedTrash(now time.Time) {
 	for i := 0; i < 3; i++ {
 		t := templates[(i+9)%len(templates)]
+		id := fmt.Sprintf("%s-trash-%02d", s.acc.ID, i)
 		m := &mail.Message{
 			MessageSummary: mail.MessageSummary{
-				ID:        fmt.Sprintf("%s-trash-%02d", s.acc.ID, i),
+				ID:        id,
 				AccountID: s.acc.ID,
 				From:      mail.Address{Name: t.from, Email: t.email},
 				To:        []mail.Address{{Name: s.acc.DisplayName(), Email: s.acc.Email}},
@@ -219,8 +236,9 @@ func (s *Service) seedTrash(now time.Time) {
 				Snippet:   t.snippet,
 				Date:      now.Add(-time.Duration(i*1440+90) * time.Minute),
 			},
-			HTMLBody: htmlBody(t.subject, t.lead, t.bullets, t.from),
-			TextBody: plainBody(t.lead, t.bullets, t.from),
+			MessageID: messageID(id),
+			HTMLBody:  htmlBody(t.subject, t.lead, t.bullets, t.from),
+			TextBody:  plainBody(t.lead, t.bullets, t.from),
 		}
 		s.threads = append(s.threads, &thread{
 			id:   fmt.Sprintf("%s-trash-t%02d", s.acc.ID, i),
@@ -735,9 +753,25 @@ func (s *Service) storeSent(draft mail.Draft) {
 	if from.Email == "" {
 		from = mail.Address{Name: s.acc.DisplayName(), Email: s.acc.Email}
 	}
+	id := fmt.Sprintf("%s-sent-%d", s.acc.ID, time.Now().UnixNano())
+	date := draft.Date
+	if date.IsZero() {
+		date = time.Now()
+	}
+	// The composer decides the Message-ID and the thread chain; a draft that
+	// carries none still gets a unique ID so every message can be replied to.
+	msgID := draft.MessageID
+	if _, ok := mail.NormalizeMessageID(msgID); !ok {
+		msgID = messageID(id)
+	}
+	refs := append([]string{}, draft.References...)
+	if inReplyTo, ok := mail.NormalizeMessageID(draft.InReplyTo); ok &&
+		(len(refs) == 0 || refs[len(refs)-1] != inReplyTo) {
+		refs = append(refs, inReplyTo)
+	}
 	m := &mail.Message{
 		MessageSummary: mail.MessageSummary{
-			ID:        fmt.Sprintf("%s-sent-%d", s.acc.ID, time.Now().UnixNano()),
+			ID:        id,
 			AccountID: s.acc.ID,
 			From:      from,
 			// The draft belongs to the caller; the stored message must not share
@@ -745,11 +779,13 @@ func (s *Service) storeSent(draft mail.Draft) {
 			To:      append([]mail.Address{}, draft.To...),
 			Subject: draft.Subject,
 			Snippet: snippet,
-			Date:    time.Now(),
+			Date:    date,
 		},
-		Cc:       append([]mail.Address{}, draft.Cc...),
-		TextBody: draft.Body,
-		HTMLBody: "<div>" + strings.ReplaceAll(html.EscapeString(draft.Body), "\n", "<br/>") + "</div>",
+		MessageID:  msgID,
+		References: refs,
+		Cc:         append([]mail.Address{}, draft.Cc...),
+		TextBody:   draft.Body,
+		HTMLBody:   "<div>" + strings.ReplaceAll(html.EscapeString(draft.Body), "\n", "<br/>") + "</div>",
 	}
 	for _, a := range draft.Attachments {
 		m.HasAttachments = true
@@ -847,7 +883,19 @@ func sourceOf(m *mail.Message) string {
 		}
 		fmt.Fprintf(&b, "%s: %s\r\n", name, value)
 	}
-	write("Message-ID", "<"+m.ID+"@yauzin.invalid>")
+	id := m.MessageID
+	if _, ok := mail.NormalizeMessageID(id); !ok {
+		id = messageID(m.ID)
+	}
+	write("Message-ID", id)
+	// In-Reply-To names the message this one answers, which is the last entry of
+	// the chain; a message with no chain carries neither header.
+	if n := len(m.References); n > 0 {
+		if last, ok := mail.NormalizeMessageID(m.References[n-1]); ok {
+			write("In-Reply-To", last)
+		}
+		write("References", strings.Join(m.References, " "))
+	}
 	write("From", m.From.String())
 	write("To", mail.FormatAddressList(m.To))
 	write("Cc", mail.FormatAddressList(m.Cc))

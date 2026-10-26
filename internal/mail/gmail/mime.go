@@ -32,7 +32,9 @@ func (s *Service) message(m *Message) *mail.Message {
 			Starred:   m.hasFlag("STARRED"),
 			Labels:    append([]string(nil), m.LabelIDs...),
 		},
-		Cc: parseAddressList(h["cc"]),
+		MessageID:  strings.TrimSpace(h["message-id"]),
+		References: messageIDList(h["references"]),
+		Cc:         parseAddressList(h["cc"]),
 	}
 	var bodies mimeBodies
 	collectParts(m.Payload, &bodies)
@@ -41,6 +43,17 @@ func (s *Service) message(m *Message) *mail.Message {
 	out.Attachments = bodies.attachments
 	out.HasAttachments = len(bodies.attachments) > 0
 	return out
+}
+
+// messageIDList splits a References header into its IDs. Gmail folds the header
+// at arbitrary points, so the values are read as whitespace separated fields
+// rather than at the commas of a list; no header means no chain.
+func messageIDList(raw string) []string {
+	ids := strings.Fields(raw)
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids
 }
 
 // collectParts walks the MIME tree, keeping the first text and HTML bodies and

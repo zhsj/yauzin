@@ -161,6 +161,26 @@ func TestDateFallsBackToTheHeader(t *testing.T) {
 	}
 }
 
+// TestMessageReadsThreadHeaders pins where a reply finds the IDs it has to point
+// at. format=full already carries them, so no extra request is needed.
+func TestMessageReadsThreadHeaders(t *testing.T) {
+	svc := &Service{acc: mail.Account{ID: "acc"}}
+	got := svc.message(&Message{ID: "m2", Payload: &MessagePart{Headers: []*MessagePartHeader{
+		{Name: "Message-ID", Value: " <b@example.com> "},
+		{Name: "References", Value: "<a@example.com>\r\n <b@example.com>"},
+	}}})
+	if got.MessageID != "<b@example.com>" {
+		t.Fatalf("Message-ID = %q", got.MessageID)
+	}
+	if len(got.References) != 2 || got.References[0] != "<a@example.com>" || got.References[1] != "<b@example.com>" {
+		t.Fatalf("References = %q", got.References)
+	}
+
+	if missing := svc.message(&Message{ID: "m3", Payload: &MessagePart{}}); missing.MessageID != "" || missing.References != nil {
+		t.Fatalf("a message without threading headers reported %q/%q", missing.MessageID, missing.References)
+	}
+}
+
 func TestMalformedAddressesFallBackToText(t *testing.T) {
 	addrs := parseAddressList("not an address <")
 	if len(addrs) != 1 || addrs[0].String() != "not an address <" {

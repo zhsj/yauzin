@@ -4,6 +4,8 @@ package mail
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -127,6 +129,13 @@ type MessageSummary struct {
 // Message is a fully loaded message body plus attachments.
 type Message struct {
 	MessageSummary
+	// MessageID is the RFC 5322 Message-ID header of this message, angle
+	// brackets included. It is what a reply has to point at, so a backend that
+	// can read headers fills it in; the value stays empty when it cannot.
+	MessageID string
+	// References lists the Message-IDs of the conversation's ancestors, oldest
+	// first, angle brackets included.
+	References  []string
 	Cc          []Address
 	HTMLBody    string
 	TextBody    string
@@ -234,6 +243,16 @@ type Draft struct {
 	Subject     string
 	Body        string
 	Attachments []DraftAttachment
+
+	// MessageID and Date are decided by the composer before the draft is sent,
+	// so the headers it shows are the ones the message carries. The zero value
+	// leaves both to the renderer.
+	MessageID string
+	Date      time.Time
+	// InReplyTo is the Message-ID this draft answers and References the whole
+	// ancestor chain ending with it. A forward carries neither.
+	InReplyTo  string
+	References []string
 }
 
 // Recipients returns every address the draft has to be delivered to: To, Cc
@@ -431,6 +450,72 @@ func FormatAddressList(addrs []Address) string {
 		parts = append(parts, a.String())
 	}
 	return strings.Join(parts, ", ")
+}
+
+// NewMessageID builds a Message-ID in the sender's domain, so relays that check
+// the right hand side accept it. The composer and the renderer share it, so the
+// ID a draft shows is the one it is sent with.
+func NewMessageID(email string) string {
+	domain := "yauzin"
+	if at := strings.LastIndexByte(email, '@'); at >= 0 && at+1 < len(email) {
+		domain = email[at+1:]
+	}
+	var raw [10]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return fmt.Sprintf("<%d@%s>", time.Now().UnixNano(), domain)
+	}
+	return "<" + hex.EncodeToString(raw[:]) + "@" + domain + ">"
+}
+
+// NormalizeMessageID reads one Message-ID header value into the bracketed form
+// the wire uses. It reports false for text that cannot be an ID, so a malformed
+// back-end header never reaches a draft or a message.
+func NormalizeMessageID(raw string) (string, bool) {
+	id := strings.TrimSpace(raw)
+	if id == "" || strings.ContainsAny(id, " \t\r\n") {
+		return "", false
+	}
+	if strings.HasPrefix(id, "<") && strings.HasSuffix(id, ">") {
+		if len(id) < 3 || strings.ContainsAny(id[1:len(id)-1], "<>") {
+			return "", false
+		}
+		return id, true
+	}
+	if strings.ContainsAny(id, "<>") || !strings.Contains(id, "@") {
+		return "", false
+	}
+	return "<" + id + ">", true
+}
+
+// ReplyReferences returns the References chain of a reply to parent: the
+// ancestors the parent already lists, followed by the parent itself, oldest
+// first. A repeat is dropped, and a parent without a Message-ID contributes
+// nothing, so the caller can send the result as is.
+func ReplyReferences(parent *Message) []string {
+	if parent == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(parent.References)+1)
+	seen := make(map[string]struct{}, len(parent.References)+1)
+	add := func(raw string) {
+		id, ok := NormalizeMessageID(raw)
+		if !ok {
+			return
+		}
+		if _, dup := seen[id]; dup {
+			return
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	for _, ref := range parent.References {
+		add(ref)
+	}
+	add(parent.MessageID)
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids
 }
 
 // subjectPrefixes are the reply/forward markers stripped when conversations are

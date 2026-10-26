@@ -38,9 +38,11 @@ type Options struct {
 	// delivers them through RCPT TO and must leave the header out, or every
 	// other recipient learns who was blind-copied.
 	BccHeader bool
-	// Date replaces the current time in the Date header.
+	// Date replaces the current time in the Date header unless the draft
+	// already carries one.
 	Date time.Time
-	// MessageID replaces the generated Message-ID, which tests rely on.
+	// MessageID replaces the generated Message-ID, which tests rely on. A
+	// Message-ID on the draft wins over it.
 	MessageID string
 }
 
@@ -58,13 +60,23 @@ func Build(draft mail.Draft, from mail.Address, opts Options) ([]byte, error) {
 		return nil, err
 	}
 
-	date := opts.Date
+	// The composer fills Date and Message-ID so the headers it shows are the
+	// ones written here; Options stays the override tests use.
+	date := draft.Date
+	if date.IsZero() {
+		date = opts.Date
+	}
 	if date.IsZero() {
 		date = time.Now()
 	}
 	messageID := opts.MessageID
-	if messageID == "" {
-		messageID = newMessageID(from.Email)
+	if draft.MessageID != "" {
+		messageID = draft.MessageID
+	}
+	if id, ok := mail.NormalizeMessageID(messageID); ok {
+		messageID = id
+	} else {
+		messageID = mail.NewMessageID(from.Email)
 	}
 
 	var b bytes.Buffer
@@ -77,6 +89,7 @@ func Build(draft mail.Draft, from mail.Address, opts Options) ([]byte, error) {
 	writeFolded(&b, "Subject", mime.QEncoding.Encode("utf-8", stripNewlines(draft.Subject)))
 	writeLine(&b, "Date", date.Format(time.RFC1123Z))
 	writeLine(&b, "Message-ID", messageID)
+	writeThreadHeaders(&b, draft)
 	writeLine(&b, "MIME-Version", "1.0")
 
 	if len(draft.Attachments) == 0 {
@@ -137,6 +150,24 @@ func attachmentType(name string) string {
 		return ctype
 	}
 	return "application/octet-stream"
+}
+
+// writeThreadHeaders writes the headers that file a reply under the message it
+// answers. A new message and a forward carry neither, so they write nothing.
+func writeThreadHeaders(b *bytes.Buffer, draft mail.Draft) {
+	if id, ok := mail.NormalizeMessageID(draft.InReplyTo); ok {
+		writeLine(b, "In-Reply-To", id)
+	}
+	refs := make([]string, 0, len(draft.References))
+	for _, raw := range draft.References {
+		if id, ok := mail.NormalizeMessageID(raw); ok {
+			refs = append(refs, id)
+		}
+	}
+	if len(refs) == 0 {
+		return
+	}
+	writeFolded(b, "References", strings.Join(refs, " "))
 }
 
 // writeLine writes a single header that is never folded.
@@ -296,18 +327,4 @@ func newBoundary() string {
 		return "yauzin-boundary"
 	}
 	return "yauzin-" + hex.EncodeToString(raw[:])
-}
-
-// newMessageID builds a message ID in the sender's domain, so relays that check
-// the right hand side accept it.
-func newMessageID(email string) string {
-	domain := "yauzin"
-	if at := strings.LastIndexByte(email, '@'); at >= 0 && at+1 < len(email) {
-		domain = email[at+1:]
-	}
-	var raw [10]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return fmt.Sprintf("<%d@%s>", time.Now().UnixNano(), domain)
-	}
-	return "<" + hex.EncodeToString(raw[:]) + "@" + domain + ">"
 }

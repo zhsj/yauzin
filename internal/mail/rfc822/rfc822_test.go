@@ -94,6 +94,142 @@ func TestBuildBccHeader(t *testing.T) {
 	}
 }
 
+// TestBuildThreadsReply pins the two headers that make a receiving client file
+// the reply under the conversation it answers.
+func TestBuildThreadsReply(t *testing.T) {
+	draft := mail.Draft{
+		To:         []mail.Address{{Email: "to@example.com"}},
+		Subject:    "Re: hello",
+		Body:       "answer",
+		InReplyTo:  "<b@example.com>",
+		References: []string{"<a@example.com>", "<b@example.com>"},
+	}
+	raw, err := Build(draft, mail.Address{Email: "from@example.com"}, Options{})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	msg := parse(t, raw)
+	if got := msg.Header.Get("In-Reply-To"); got != "<b@example.com>" {
+		t.Fatalf("In-Reply-To = %q", got)
+	}
+	if got := msg.Header.Get("References"); got != "<a@example.com> <b@example.com>" {
+		t.Fatalf("References = %q", got)
+	}
+}
+
+// TestBuildOmitsThreadHeaders pins that a new message and a forward carry no
+// threading headers at all: an empty In-Reply-To would still create a thread.
+func TestBuildOmitsThreadHeaders(t *testing.T) {
+	draft := mail.Draft{
+		To:      []mail.Address{{Email: "to@example.com"}},
+		Subject: "Fwd: hello",
+		Body:    "forwarded",
+	}
+	raw, err := Build(draft, mail.Address{Email: "from@example.com"}, Options{})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	msg := parse(t, raw)
+	if got := msg.Header.Get("In-Reply-To"); got != "" {
+		t.Fatalf("In-Reply-To = %q, want none", got)
+	}
+	if got := msg.Header.Get("References"); got != "" {
+		t.Fatalf("References = %q, want none", got)
+	}
+}
+
+// TestBuildDropsMalformedThreadHeaders keeps a back-end header from injecting a
+// header of its own or writing an ID the wire cannot carry.
+func TestBuildDropsMalformedThreadHeaders(t *testing.T) {
+	draft := mail.Draft{
+		To:         []mail.Address{{Email: "to@example.com"}},
+		Body:       "x",
+		InReplyTo:  "<a@example.com>\r\nBcc: victim@example.com",
+		References: []string{"", "junk", "<ok@example.com>"},
+	}
+	raw, err := Build(draft, mail.Address{Email: "from@example.com"}, Options{})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	msg := parse(t, raw)
+	if got := msg.Header.Get("In-Reply-To"); got != "" {
+		t.Fatalf("In-Reply-To = %q, want the malformed value dropped", got)
+	}
+	if got := msg.Header.Get("References"); got != "<ok@example.com>" {
+		t.Fatalf("References = %q", got)
+	}
+	if msg.Header.Get("Bcc") != "" {
+		t.Fatalf("injected header survived:\n%s", raw)
+	}
+}
+
+// TestBuildFoldsReferences checks that a long ancestor chain is folded like any
+// other header and still reads back as one list.
+func TestBuildFoldsReferences(t *testing.T) {
+	refs := []string{
+		"<0000000000000000000001@mail.example.com>",
+		"<0000000000000000000002@mail.example.com>",
+		"<0000000000000000000003@mail.example.com>",
+		"<0000000000000000000004@mail.example.com>",
+	}
+	draft := mail.Draft{
+		To:         []mail.Address{{Email: "to@example.com"}},
+		Body:       "x",
+		InReplyTo:  refs[len(refs)-1],
+		References: refs,
+	}
+	raw, err := Build(draft, mail.Address{Email: "from@example.com"}, Options{})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	requireCRLF(t, raw)
+	head := string(raw)
+	if i := strings.Index(head, "\r\n\r\n"); i >= 0 {
+		head = head[:i]
+	}
+	folded := false
+	for _, line := range strings.Split(head, "\r\n") {
+		if len(line) > foldWidth {
+			t.Fatalf("header line of %d octets: %q", len(line), line)
+		}
+		if strings.HasPrefix(line, " ") {
+			folded = true
+		}
+	}
+	if !folded {
+		t.Fatalf("References was not folded:\n%s", head)
+	}
+	if got, want := parse(t, raw).Header.Get("References"), strings.Join(refs, " "); got != want {
+		t.Fatalf("References = %q, want %q", got, want)
+	}
+}
+
+// TestBuildPrefersDraftIdentity pins that the composer's Date and Message-ID are
+// the ones written: they are what its header panel shows.
+func TestBuildPrefersDraftIdentity(t *testing.T) {
+	when := time.Date(2026, 3, 5, 8, 7, 0, 0, time.FixedZone("CST", 8*3600))
+	draft := mail.Draft{
+		To:        []mail.Address{{Email: "to@example.com"}},
+		Body:      "x",
+		Date:      when,
+		MessageID: "<fixed@example.com>",
+	}
+	raw, err := Build(draft, mail.Address{Email: "from@example.com"}, Options{
+		Date:      time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+		MessageID: "<option@example.com>",
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	msg := parse(t, raw)
+	if got := msg.Header.Get("Message-ID"); got != "<fixed@example.com>" {
+		t.Fatalf("Message-ID = %q, want the draft one", got)
+	}
+	if got := msg.Header.Get("Date"); got != when.Format(time.RFC1123Z) {
+		t.Fatalf("Date = %q, want %q", got, when.Format(time.RFC1123Z))
+	}
+}
+
 func TestBuildWithAttachment(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "notes.txt")

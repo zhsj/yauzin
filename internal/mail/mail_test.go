@@ -2,6 +2,7 @@ package mail
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -178,6 +179,107 @@ func TestDraftValidate(t *testing.T) {
 	}
 	if err := (Draft{Bcc: []Address{{Email: "bcc@example.com"}}}).Validate(); err != nil {
 		t.Fatalf("Validate(bcc only) = %v, want nil", err)
+	}
+}
+
+func TestNewMessageID(t *testing.T) {
+	tests := []struct{ email, domain string }{
+		{"user@example.com", "example.com"},
+		{"user@mail.example.org", "mail.example.org"},
+		{"no-at-sign", "yauzin"},
+		{"trailing@", "yauzin"},
+	}
+	for _, tt := range tests {
+		id := NewMessageID(tt.email)
+		if _, ok := NormalizeMessageID(id); !ok {
+			t.Fatalf("NewMessageID(%q) = %q, which is not a valid ID", tt.email, id)
+		}
+		if !strings.HasSuffix(id, "@"+tt.domain+">") {
+			t.Fatalf("NewMessageID(%q) = %q, want the %q domain", tt.email, id, tt.domain)
+		}
+	}
+	first, second := NewMessageID("user@example.com"), NewMessageID("user@example.com")
+	if first == second {
+		t.Fatal("two Message-IDs came out identical")
+	}
+}
+
+func TestNormalizeMessageID(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+		ok   bool
+	}{
+		{"bracketed", "<abc@example.com>", "<abc@example.com>", true},
+		{"padded", "  <abc@example.com>  ", "<abc@example.com>", true},
+		{"bare", "abc@example.com", "<abc@example.com>", true},
+		{"empty", "   ", "", false},
+		{"spaces", "<a@b> <c@d>", "", false},
+		{"newline", "<a@b>\r\nBcc: x@y", "", false},
+		{"nested brackets", "<<a@b>>", "", false},
+		{"not an address", "abc", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := NormalizeMessageID(tt.raw)
+			if got != tt.want || ok != tt.ok {
+				t.Fatalf("NormalizeMessageID(%q) = %q, %v; want %q, %v", tt.raw, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
+func TestReplyReferences(t *testing.T) {
+	tests := []struct {
+		name   string
+		parent *Message
+		want   []string
+	}{
+		{
+			name:   "parent without references",
+			parent: &Message{MessageID: "<b@example.com>"},
+			want:   []string{"<b@example.com>"},
+		},
+		{
+			name: "keeps the ancestor chain",
+			parent: &Message{
+				MessageID:  "<c@example.com>",
+				References: []string{"<a@example.com>", "<b@example.com>"},
+			},
+			want: []string{"<a@example.com>", "<b@example.com>", "<c@example.com>"},
+		},
+		{
+			name: "drops repeats and junk",
+			parent: &Message{
+				MessageID:  "c@example.com",
+				References: []string{"<a@example.com>", "<a@example.com>", "", "<b@example.com>"},
+			},
+			want: []string{"<a@example.com>", "<b@example.com>", "<c@example.com>"},
+		},
+		{
+			name:   "no message ID contributes nothing",
+			parent: &Message{References: []string{"", "  "}},
+			want:   nil,
+		},
+		{
+			name:   "missing parent",
+			parent: nil,
+			want:   nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ReplyReferences(tt.parent)
+			if len(got) != len(tt.want) {
+				t.Fatalf("ReplyReferences = %q, want %q", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("ReplyReferences = %q, want %q", got, tt.want)
+				}
+			}
+		})
 	}
 }
 

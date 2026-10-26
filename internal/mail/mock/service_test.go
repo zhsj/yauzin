@@ -721,6 +721,113 @@ func TestRawMessageRendersSource(t *testing.T) {
 	}
 }
 
+// TestSeededThreadsCarryThreadHeaders pins the demo data a reply is written
+// from: every message has a Message-ID and a reply lists the chain before it.
+func TestSeededThreadsCarryThreadHeaders(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+	page, err := s.ListThreads(ctx, mail.ListRequest{FolderID: "inbox", Limit: 50})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var merged mail.ThreadSummary
+	for _, th := range page.Threads {
+		if th.MessageCount > 1 {
+			merged = th
+			break
+		}
+	}
+	if merged.ID == "" {
+		t.Fatal("the seeded inbox has no merged conversation")
+	}
+	msgs, err := s.GetThread(ctx, merged.ID)
+	if err != nil {
+		t.Fatalf("get thread: %v", err)
+	}
+	if len(msgs) < 2 {
+		t.Fatalf("thread has %d messages", len(msgs))
+	}
+	for i, m := range msgs {
+		if m.MessageID == "" {
+			t.Fatalf("message %d has no Message-ID", i)
+		}
+		if i == 0 {
+			continue
+		}
+		if len(m.References) == 0 {
+			t.Fatalf("message %d has no References", i)
+		}
+		if last := m.References[len(m.References)-1]; last != msgs[i-1].MessageID {
+			t.Fatalf("message %d references %q, want its parent %q", i, last, msgs[i-1].MessageID)
+		}
+	}
+}
+
+// TestSentMessageKeepsThreadHeaders pins that a reply sent through the demo
+// backend keeps the ID and chain the composer decided, so the source view shows
+// what went out.
+func TestSentMessageKeepsThreadHeaders(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+	when := time.Date(2026, 3, 5, 8, 7, 0, 0, time.FixedZone("CST", 8*3600))
+	draft := mail.Draft{
+		To:         []mail.Address{{Email: "bob@example.com"}},
+		Subject:    "Re: hello",
+		Body:       "reply",
+		Date:       when,
+		MessageID:  "<fixed@example.com>",
+		InReplyTo:  "<parent@example.com>",
+		References: []string{"<root@example.com>", "<parent@example.com>"},
+	}
+	if err := s.Send(ctx, draft); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	// The draft is dated in the past, so the sent copy is not the newest row:
+	// look it up by the ID the composer decided.
+	sent, err := s.ListThreads(ctx, mail.ListRequest{FolderID: "sent", Limit: 200})
+	if err != nil {
+		t.Fatalf("list sent: %v", err)
+	}
+	var got *mail.Message
+	for _, th := range sent.Threads {
+		msgs, err := s.GetThread(ctx, th.ID)
+		if err != nil {
+			t.Fatalf("get thread: %v", err)
+		}
+		for _, m := range msgs {
+			if m.MessageID == draft.MessageID {
+				got = m
+			}
+		}
+	}
+	if got == nil {
+		t.Fatalf("the sent folder does not hold %q", draft.MessageID)
+	}
+	if got.MessageID != draft.MessageID {
+		t.Fatalf("Message-ID = %q, want %q", got.MessageID, draft.MessageID)
+	}
+	if gotRefs := strings.Join(got.References, " "); gotRefs != strings.Join(draft.References, " ") {
+		t.Fatalf("References = %q, want %q", gotRefs, draft.References)
+	}
+	if !got.Date.Equal(when) {
+		t.Fatalf("Date = %v, want %v", got.Date, when)
+	}
+
+	raw, err := s.RawMessage(ctx, got.ID)
+	if err != nil {
+		t.Fatalf("raw message: %v", err)
+	}
+	for _, want := range []string{
+		"Message-ID: <fixed@example.com>",
+		"In-Reply-To: <parent@example.com>",
+		"References: <root@example.com> <parent@example.com>",
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("source misses %q:\n%s", want, raw)
+		}
+	}
+}
+
 func TestSaveAttachment(t *testing.T) {
 	s := newTestService(t)
 	ctx := context.Background()
