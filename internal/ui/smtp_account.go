@@ -487,7 +487,7 @@ func (d *smtpAccountDetails) Layout(gtx layout.Context, th *theme) layout.Dimens
 // actions is the second line of the sub-card: the edit and delete links, or the
 // delete confirmation that replaces them in place.
 func (d *smtpAccountDetails) actions(gtx layout.Context, th *theme) layout.Dimensions {
-	return layout.Inset{Left: 16, Right: 12, Bottom: 10}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layout.Inset{Left: 16, Right: 12, Top: 10, Bottom: 10}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		if d.armed {
 			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
