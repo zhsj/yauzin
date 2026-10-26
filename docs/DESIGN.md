@@ -51,7 +51,7 @@
 
 - **一份报文，两条传输**：`rfc822.Build(draft, from, opts)` 把 `mail.Draft` 渲染成完整 RFC 5322 报文（CRLF 行尾、`Date` / `Message-ID` / `MIME-Version`、RFC 2047 编码的主题与显示名、`text/plain` 正文 base64、有附件时 `multipart/mixed` + 流式 base64 附件），Gmail 与 SMTP 共用，避免两套 MIME 行为分叉。显示名、主题与附件名里的 CR/LF 一律替换成空格，防止用户输入注入报文头。
 - **Bcc 头是传输差异**：`Draft.Bcc` 始终属于信封（`Draft.Recipients()` = To + Cc + Bcc 去重）。Gmail API 只能看到 raw 报文，所以 `rfc822.Options{BccHeader: true}` 把密送地址写进 `Bcc` 头（Gmail 投递时剔除该头）；直连 SMTP 时密送地址只进 `RCPT TO`，报文头必须不含 `Bcc`，否则其他收件人都能看到密送对象。
-- **线程头只在回复里写**：回复把被回复邮件的 Message-ID 写进 `In-Reply-To`，`References` 保留原文祖链（去重）并追加该 Message-ID；转发与新邮件都不写，避免把转发硬塞进原会话。`mail.ReplyReferences` 是唯一的拼接点，`mail.NormalizeMessageID` 校验尖括号形态并丢弃畸形值（同时挡住头注入）。读取侧没有新增请求：Gmail `GetThread` 已是 `format=full`，`payload.headers` 里直接取 `message-id` / `references`；mock 的种子数据按 `<id@yauzin.invalid>` 补齐，`RawMessage` 也写出这些头，便于对照检查。
+- **线程头只在回复与 mailto 里写**：回复把被回复邮件的 Message-ID 写进 `In-Reply-To`，`References` 保留原文祖链（去重）并追加该 Message-ID；mailto 链接自带的 RFC 2368 `in-reply-to` 只给出父 ID，因此 `References` 只含这一个 ID；转发与新邮件都不写，避免把转发硬塞进原会话。`mail.ReplyReferences` 是回复的唯一拼接点，`mail.NormalizeMessageID` 校验尖括号形态并丢弃畸形值（同时挡住头注入），mailto 的 `in-reply-to` 也走同一校验。读取侧没有新增请求：Gmail `GetThread` 已是 `format=full`，`payload.headers` 里直接取 `message-id` / `references`；mock 的种子数据按 `<id@yauzin.invalid>` 补齐，`RawMessage` 也写出这些头，便于对照检查。
 - **Date 与 Message-ID 由写信浮层决定**：两者在打开写信时确定（切换发件人只重算 Message-ID 的域名），随 `Draft` 交给渲染器，取值顺序是 `Draft > Options > 现场生成`。这样写信浮层的表头详情显示的就是报文里真正写出的值；`Options` 仍只作测试注入点。
 - **Gmail 发送**：`messages.send` 走 media 上传（`POST <host>/upload/gmail/v1/users/me/messages/send?uploadType=media`，`Content-Type: message/rfc822`），避开 `{"raw": base64}` 的 33% 体积膨胀与 JSON 请求上限。`From` 一律取账号自身地址，不采信 `Draft.From`：Gmail 只接受属于该账号的身份。发送成功的邮件由 Gmail 自己放进「已发送」。`client` 因此有两个 API 根：`apiPath`（普通 REST）与 `uploadURL`（`/upload` + `apiPath`），两者共用请求槽、401 重试与 `apiError` 分类。
 - **SMTP 发信**：`smtp.Sender` 每条发信条目一个实例、每次发送一条连接（`net/smtp`）。`Security` 三选一：`tls`（465 隐式 TLS，本包先包裹连接）、`starttls`（587，服务器不广告 STARTTLS 就报错而不是退回明文）、`none`（25，仅限自有网络的中继）。`Username` 为空跳过 AUTH；否则按服务器广告选 `PLAIN`（优先）或 `LOGIN`——两者都在本包实现，因为 `net/smtp` 的 `PlainAuth` 拒绝在未加密连接上发密码，而「不加密」是用户显式选择。认证被拒（501/504/530/534/535）包成 `smtp.ErrAuth`，由 `errors.go` 翻成「检查用户名和密码」，其余协议错误保留原文（用户要看到具体原因）。连接、TLS 与 AUTH 各阶段都受 `ctx` 的 deadline 与取消约束；DEBUG 只记 host/port/发件地址/收件人数，不记密码与报文。
@@ -99,7 +99,7 @@
 - Esc 优先级：状态条 / 菜单 → 写信 / 设置 → 阅读器返回列表。Esc 不清空查询、不在搜索时回退文件夹；搜索框胶囊的 ✕ 只清空输入框文字，列表保持当前搜索结果（`query` 与 `activeFolder` 都不变）。
 - 面板内的下拉**必须页内展开**，不能复用 `App.showMenu`：`showOverlay` 先 `closeOverlay()` 把 `a.settings` 置 nil，菜单关闭时 `hideOverlay()` 又直接清空 `a.overlay`，设置面板不会回来。设置页的语言选择即按此实现（`settingsView.langOpen`，候选行在同一张卡片内展开）；写信浮层的「发件人」同理（`composeView.fromOpen`），因为菜单会顺带把草稿丢掉。
 - 写信浮层的「发件人」行只在存在 SMTP 发信账号时出现（否则整行不占位）：候选在卡片内就地展开，当前身份带勾，选中即收起。身份决定传输——邮箱身份走它自己的后端（`services[mailboxID]`，写信开始时固定，中途切账号不会改投），发信账号走 `App.sendSMTP`（可注入，测试不碰网络）。「密送」行始终显示；自动预填的值记在 `composeView.bccAuto` 里，切走发件人时只清除仍是该自动值的文本，用户改过的内容不动。
-- 主题下方的「邮件头」折叠行是本层唯一的表头可见入口：展开后只读列出 `Date` / `Message-ID` / `In-Reply-To` / `References`，空值不显示（新邮件与转发因此只有前两行）。回复打开时由 `mail.ReplyReferences` 预置线程头，被回复邮件没有 Message-ID 就整条链留空，不伪造 ID。长引用链在界面上只显示最后 8 条（前置 `… `），`Draft.References` 仍是完整链。标签列宽 `headersLabelWidth`（96dp）比通用 `composeLabelWidth` 宽，头部名称不会截断；只用现有 chevron 字形，避免为一个折叠箭头重建图标字体子集。
+- 主题下方的「邮件头」折叠行是本层唯一的表头可见入口：展开后只读列出 `Date` / `Message-ID` / `In-Reply-To` / `References`，空值不显示（新邮件与转发因此只有前两行；mailto 打开的信件若带 `in-reply-to`，这里同样显示对应两行）。回复打开时由 `mail.ReplyReferences` 预置线程头，被回复邮件没有 Message-ID 就整条链留空，不伪造 ID。长引用链在界面上只显示最后 8 条（前置 `… `），`Draft.References` 仍是完整链。标签列宽 `headersLabelWidth`（96dp）比通用 `composeLabelWidth` 宽，头部名称不会截断；只用现有 chevron 字形，避免为一个折叠箭头重建图标字体子集。
 - 下拉菜单的水平位置由调用点声明的 `menuAlign` 决定：默认 `menuAlignStart` 与锚点左边缘对齐（从左往右展开），靠窗口右缘的锚点——阅读器消息卡的 ⋮ 与顶栏账号菜单——显式用 `menuAlignEnd` 与右边缘对齐（从右往左展开）。两种对齐最后都 clamp 进窗口，下方放不下时仍向上展开。
 - 写信浮窗的引用块由 `format.go` 的 `replyQuote` / `forwardQuote` 生成，文案固定英文、不走 i18n（它们属于邮件内容而非界面文案，中文界面下同样是英文）：回复是 Gmail 的 `On <时间> <发件人> wrote:` 抬头（本地时区的 `Mon, Jan 2, 2006 at 3:04 PM`）加逐行 `> ` 前缀的正文，转发是 `---------- Forwarded message ----------` 加 `From:` / `Date:` / `Subject:` 与完整正文。回复前阅读器里该封邮件正文若有选区，只引用选中片段（`messageCard.selectedText` → `readerView.replySelection` → `openCompose` 快照一次），选区为空或只有空白时回退完整正文；转发不使用选区。回复把引用块放在正文最前、其后留一个空行，打开写信浮窗时光标与键盘焦点就落在引用末尾（`SetText` 会把光标置为开头，因此回复分支在写入后显式 `SetCaret` 到末尾，按 rune 计数）；转发仍是顶部两行空行之后书写，光标在开头、首帧焦点在「收件人」。`replySubject` / `forwardSubject` 的 `Re: ` / `Fwd: ` 同理写死英文。
 
@@ -226,7 +226,8 @@
 - `internal/tray` 是 `fyne.io/systray` 的薄封装：左键 `SetOnTapped` 直接开窗，右键菜单只有「打开 / 退出」；回调在库的 goroutine 上，必须经 `post` / channel 回 UI 线程。通知区预检失败时 `Start` 返回错误，应用降级。托盘只持有 PNG 字节：`Icons.Idle`/`Icons.Active` 分别对应灰点与红点两态，`SetActive` 在状态未变化时不重复调用 `SetIcon`。
 - 图标设计源为 `internal/ui/assets/icon-gray.svg`（灰封蜡，托盘 idle）与 `icon-red.svg`（红封蜡，托盘 unread 与顶栏 mark），由 `scripts/gen_app_icons.py` 用 rsvg-convert 派生 PNG 后提交；运行时不解析 SVG。顶栏 mark 用红点母版，cell 固定 36dp：内嵌 32–128px 多个尺寸，按设备像素取刚好覆盖的一张（`internal/ui/appicon.go`），1x / 1.25x / 1.5x / 2x / 3x 正好命中 36 / 45 / 54 / 72 / 108px（旧的 32/40/48/64/96/128px 变体保留，覆盖 1.1x、1.75x 这类零散比例），缩放比例为 1，不会被线性滤波插值而发糊。Gio v0.10.3 没有窗口图标 API，窗口/任务栏图标由桌面集成使用 `icon-red-512.png`（与顶栏 mark 同一母版）。
 - **轮询与徽标**：轮询属于进程而不是窗口——`Run` 在 `tray.Start` 之后 `startPolling()`，退出前 `stopPolling()`。托盘驻留期间每分钟经同一检查通道（单飞 + 冷却，见 §4.2）检查一次，变化时只重载侧栏（标签名 + 未读数/颜色），不拉列表；徽标在 `loadFolderDetails` 的成功回调里统一刷新（收件箱未读 > 0 红、= 0 灰），因此启动、手动刷新、轮询、切账号、重建后端都会更新它。重开窗口时 `attach` 的「检查 + 全量加载」补齐列表。
-- `internal/singleinstance` 用会话总线名 `me.zhsj.yauzin`（同时是 Gio application ID）保证单实例：第一个进程持有名字并导出 `Open`，后续启动调用 `Open` 唤起窗口后 `os.Exit(0)`。Wayland 不允许强制前置已有窗口，这是已知限制。
+- `internal/singleinstance` 用会话总线名 `me.zhsj.yauzin`（同时是 Gio application ID）保证单实例：第一个进程持有名字并导出 `Open` 与 `OpenURI`，后续启动唤起窗口后 `os.Exit(0)`。带 mailto 参数时调 `OpenURI(uri)`，正在运行的实例若是旧版本、没有该方法，则回退 `Open`（窗口照开、URI 丢失并记日志），避免升级期间激活整个失败。Wayland 不允许强制前置已有窗口，这是已知限制。
+- **mailto**：`cmd/yauzin` 把 `os.Args[1:]` 原样交给 `ui.Run`，解析放在纯 Go 的 `internal/mailto`（RFC 6068 的 path + hfields；按 `&` 与首个 `=` 手工切分、用 `url.PathUnescape` 解码，因为 `url.ParseQuery` 会把 RFC 6068 里字面的 `+` 当空格）。认 `to/cc/bcc/subject/body` 与 RFC 2368 遗留的 `in-reply-to`，地址类按出现顺序累加并去重，单行字段把 CR/LF 换成空格，正文把行尾归一为 LF。启动参数与「D-Bus 回调早于 `newApp` 返回」的 URI 都只 `post` 不 `requestOpen`（首个 `FrameEvent` 的 `drain` 就会打开撰写框；乱发 `openCh` 令牌会让用户刚关的窗口被重新弹出），外部激活才 `post + requestOpen`，`attach` 会清掉残留令牌。撰写框是单槽位，收到 mailto 一律替换当前草稿（丢弃未发送内容，属既定取舍）；有收件人时焦点落在正文并置于链接正文末尾。`in-reply-to` 经 `mail.NormalizeMessageID` 校验后写进 `composeView.inReplyTo`，`references` 只含这个父 ID；非法值只丢该头，主题不加 `Re:`。日志只说「拒绝了 mailto URI」，不记 URI（含收件人与正文）。
 
 ## 12. 性能监视器
 
@@ -439,6 +440,7 @@ internal/cursor/               系统光标主题解析（门户 / kreadconfig6 
 internal/i18n/                 中英文翻译与系统 locale
 internal/tray/                 系统托盘封装（fyne.io/systray）
 internal/singleinstance/       D-Bus 单实例（会话总线名 me.zhsj.yauzin）
+internal/mailto/               mailto URI 解析（收件人、抄送、密送、主题、正文、in-reply-to）
 scripts/gen_icon_fonts.py      Material Symbols 子集字体生成（fonttools）
 scripts/gen_app_icons.py       应用图标 SVG → PNG 生成（rsvg-convert）
 ```

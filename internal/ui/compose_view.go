@@ -19,6 +19,7 @@ import (
 	"github.com/zhsj/yauzin/internal/accounts"
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/mailto"
 )
 
 // composeView is Gmail's floating compose window, docked bottom right.
@@ -150,6 +151,32 @@ func newComposeView(a *App, mode composeMode, msg *mail.Message, replySelection 
 	return c
 }
 
+// newComposeFromMailto fills a new-message composer from a mailto URI. It is a
+// constructor of its own so newComposeView keeps its shape for the reply,
+// forward and plain new-message callers.
+func newComposeFromMailto(a *App, m mailto.Message) *composeView {
+	c := newComposeView(a, composeNew, nil, "")
+	c.to.SetText(m.To)
+	c.cc.SetText(m.Cc)
+	c.bcc.SetText(m.Bcc)
+	c.subject.SetText(m.Subject)
+	c.body.SetText(m.Body)
+	if m.Body != "" {
+		// SetText leaves the caret at the beginning; the link's text is a
+		// starting point, so the caret goes past it.
+		end := utf8.RuneCountInString(m.Body)
+		c.body.SetCaret(end, end)
+	}
+	// in-reply-to becomes the threading headers the composer owns, and nothing
+	// else. A value NormalizeMessageID rejects leaves the draft a message of
+	// its own, the way a reply to a parent without a Message-ID does.
+	if id, ok := mail.NormalizeMessageID(m.InReplyTo); ok {
+		c.inReplyTo = id
+		c.references = []string{id}
+	}
+	return c
+}
+
 // toggleMaximized expands the composer over the window, or drops back to the
 // floating window. Expanding and minimizing are opposite ends of one axis, so
 // leaving the collapsed state clears it.
@@ -241,10 +268,11 @@ func (c *composeView) panel(gtx layout.Context, a *App) (size, origin image.Poin
 func (c *composeView) Layout(gtx layout.Context, a *App) layout.Dimensions {
 	if !c.focusInit {
 		c.focusInit = true
-		// A reply is written below the quote, so the body takes the keyboard
-		// right away; a new message and a forward start with the recipient.
+		// A draft whose recipient is already set — a reply, or a message filled
+		// from a mailto URI — is written in the body, so the body takes the
+		// keyboard right away; an empty composer starts with the recipient.
 		target := &c.to
-		if c.mode == composeReply && c.msg != nil {
+		if strings.TrimSpace(c.to.Text()) != "" {
 			target = &c.body
 			// The focus command lands after this frame, so the caret only shows
 			// once one more frame draws the now focused body.

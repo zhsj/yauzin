@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -20,37 +21,65 @@ import (
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/logging"
 	"github.com/zhsj/yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/mailto"
 	"github.com/zhsj/yauzin/internal/notify"
 	"github.com/zhsj/yauzin/internal/singleinstance"
 	"github.com/zhsj/yauzin/internal/tray"
 )
 
-// Run owns the window lifecycle. The tray keeps the process alive after the
-// window is closed, so the App instance survives across windows and keeps the
-// loaded mail, the current folder and the draft state intact.
-func Run() {
+// Run owns the window lifecycle. args are the arguments of this launch: a
+// mailto URI among them opens a composer once the app exists. The tray keeps
+// the process alive after the window is closed, so the App instance survives
+// across windows and keeps the loaded mail, the current folder and the draft
+// state intact.
+func Run(args []string) {
 	// The console logger belongs to the process, not to an App: install it
 	// before anything below can log. newApp then applies the stored level.
 	logging.Init()
 
-	// Single instance: the first process owns the bus name and serves the
-	// Open method on it; later launches call Open to bring the window back
-	// and exit. An unreachable bus only costs the guard, not the app.
+	// Single instance: the first process owns the bus name and serves the Open
+	// and OpenURI methods on it; later launches call one of them to bring the
+	// window back (OpenURI with a mailto URI) and exit. An unreachable bus only
+	// costs the guard, not the app.
 	//
-	// The bus serves Open from its own goroutine, which can call it before
-	// newApp has returned; the atomic pointer keeps that window panic-free.
-	var current atomic.Pointer[App]
-	own, err := singleinstance.Acquire(singleinstance.Name, func() {
-		if a := current.Load(); a != nil {
-			a.requestOpen()
+	// The bus serves those methods from its own goroutine, which can call them
+	// before newApp has returned; the atomic pointer keeps that window
+	// panic-free, and a URI that arrives in it is buffered for replay below.
+	var (
+		current   atomic.Pointer[App]
+		pendingMu sync.Mutex
+		pending   []string
+	)
+	own, err := singleinstance.Acquire(singleinstance.Name, func(uri string) {
+		pendingMu.Lock()
+		defer pendingMu.Unlock()
+		a := current.Load()
+		if a == nil {
+			if uri != "" {
+				pending = append(pending, uri)
+			}
+			return
 		}
+		if uri == "" {
+			a.requestOpen()
+			return
+		}
+		a.requestMailto(uri)
 	})
 	if err != nil {
 		slog.Warn("single instance check failed", "err", err)
 		own = true
 	}
 	if !own {
-		if err := singleinstance.Activate(singleinstance.Name); err != nil {
+		// The instance that owns the name takes over: a plain launch asks for
+		// its window, a mailto launch hands it the URI.
+		var err error
+		if uri, ok := mailto.FromArgs(args); ok {
+			err = singleinstance.ActivateURI(singleinstance.Name, uri)
+		} else {
+			err = singleinstance.Activate(singleinstance.Name)
+		}
+		if err != nil {
 			slog.Warn("activate the running instance", "err", err)
 		}
 		os.Exit(0)
@@ -59,7 +88,21 @@ func Run() {
 	// The cursor theme is resolved in attach, right before every window is
 	// created: doing it here as well would only resolve it twice.
 	a := newApp()
+	pendingMu.Lock()
 	current.Store(a)
+	queued := pending
+	pending = nil
+	pendingMu.Unlock()
+	// The launch arguments go first and the buffered activations after them:
+	// the composer is one slot, so the last URI written is the one on screen.
+	// Neither asks for a window here; the lifecycle loop is about to create the
+	// first one, and a token left behind would reopen the next window closed.
+	if uri, ok := mailto.FromArgs(args); ok {
+		a.enqueueMailto(uri)
+	}
+	for _, uri := range queued {
+		a.enqueueMailto(uri)
+	}
 	// Before the tray and the window loop: an interrupt while the process
 	// sits in the notification area must clean up just like a quit does.
 	a.watchInterrupt()
@@ -168,6 +211,13 @@ func (a *App) performWindowActions(w *app.Window, acts system.Action) {
 
 // attach binds a fresh window to the existing App state.
 func (a *App) attach(w *app.Window) {
+	// An openCh token posted before this window existed is answered by creating
+	// it. Draining the token keeps it from reopening the next window the user
+	// closes, which is why the startup mailto arguments post without one.
+	select {
+	case <-a.openCh:
+	default:
+	}
 	// Gio reads the cursor theme when it creates the window, so re-resolve it
 	// here to follow theme changes made while the app sat in the tray.
 	applyCursorTheme()

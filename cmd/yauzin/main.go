@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+
 	"gioui.org/app"
 
 	"github.com/zhsj/yauzin/internal/singleinstance"
@@ -15,7 +17,8 @@ func main() {
 	app.ID = singleinstance.Name
 
 	// app.Main has to own the main thread on some platforms, so the window
-	// event loop runs in a goroutine.
-	go ui.Run()
+	// event loop runs in a goroutine. The arguments travel untouched: a mailto
+	// URI among them is what opens a composer on the running instance.
+	go ui.Run(os.Args[1:])
 	app.Main()
 }
