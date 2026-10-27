@@ -1,0 +1,21 @@
+name: Publish Flatpak
+
+on:
+  push:
+    branches: [master]
+    tags: ["*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  pages: write
+  id-token: write
+
+jobs:
+  publish:
+    uses: aetherpak/actions/.github/workflows/publish.yml@v3
+    with:
+      manifest-path: packaging/flatpak/me.zhsj.yauzin.json
+      arches: x86_64
+      remote-name: yauzin
