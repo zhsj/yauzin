@@ -15,7 +15,6 @@ const subjectMaxRunes = 80
 func buildNotice(subjects []string, total int) *notify.Notice {
 	body := strings.Join(subjects, "\n") + "\n\n" + i18n.N("notify.count", total)
 	return &notify.Notice{
-		AppName: i18n.T("app.brand"),
 		Summary: i18n.T("notify.title"),
 		Body:    body,
 		Action:  i18n.T("notify.open"),
