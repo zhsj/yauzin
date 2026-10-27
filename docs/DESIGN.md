@@ -441,7 +441,7 @@ internal/i18n/                 中英文翻译与系统 locale
 internal/tray/                 系统托盘封装（fyne.io/systray）
 internal/singleinstance/       D-Bus 单实例（会话总线名 me.zhsj.yauzin）
 internal/mailto/               mailto URI 解析（收件人、抄送、密送、主题、正文、in-reply-to）
-artwork/                       图标设计母版（SVG）与 512px 桌面图标，均不进二进制
+artwork/                       图标设计母版（SVG）、512px 桌面图标与截图，均不进二进制
 scripts/gen_icon_fonts.py      Material Symbols 子集字体生成（fonttools）
 scripts/gen_app_icons.py       应用图标 SVG → PNG 生成（rsvg-convert）
 ```

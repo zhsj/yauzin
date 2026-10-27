@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>me.zhsj.yauzin</id>
+  <name>Yauzin</name>
+  <summary>Native desktop email client</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="me.zhsj">
+    <name>zhsj</name>
+  </developer>
+  <launchable type="desktop-id">me.zhsj.yauzin.desktop</launchable>
+  <description>
+    <p>
+      Yauzin is a desktop email client built with Go and Gio. Gmail is read
+      through the Gmail API, and mail can be sent from any address through an
+      SMTP account.
+    </p>
+  </description>
+  <categories>
+    <category>Network</category>
+    <category>Email</category>
+  </categories>
+  <keywords>
+    <keyword>mail</keyword>
+    <keyword>email</keyword>
+    <keyword>gmail</keyword>
+    <keyword>client</keyword>
+  </keywords>
+  <url type="homepage">https://github.com/zhsj/yauzin</url>
+  <url type="bugtracker">https://github.com/zhsj/yauzin/issues</url>
+  <url type="vcs-browser">https://github.com/zhsj/yauzin</url>
+  <screenshots>
+    <screenshot type="default">
+      <image type="source">https://raw.githubusercontent.com/zhsj/yauzin/master/artwork/screenshot.png</image>
+      <caption>A mailbox with an open compose window</caption>
+    </screenshot>
+  </screenshots>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <provides>
+    <binary>yauzin</binary>
+  </provides>
+</component>

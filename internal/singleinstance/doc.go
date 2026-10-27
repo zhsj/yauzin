@@ -10,8 +10,9 @@
 // draft instead of the activation being lost.
 //
 // The well-known name doubles as the application ID reported to the
-// compositor (gioui.org/app.ID). A Flatpak build needs --own-name and
-// --talk-name for this name in its manifest.
+// compositor (gioui.org/app.ID). Flatpak's default session bus policy already
+// lets an application own and talk to its own application ID, so a manifest
+// needs no --own-name or --talk-name for it.
 package singleinstance
 
 // Name is the well-known D-Bus bus name and the Gio application ID.

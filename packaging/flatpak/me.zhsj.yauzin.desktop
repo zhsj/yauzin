@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Yauzin
+GenericName=Mail Client
+Comment=Native desktop email client
+Exec=yauzin %u
+Icon=me.zhsj.yauzin
+Terminal=false
+Categories=Network;Email;
+Keywords=mail;email;gmail;
+StartupNotify=true
+StartupWMClass=me.zhsj.yauzin
+MimeType=x-scheme-handler/mailto;
