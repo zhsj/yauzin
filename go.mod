@@ -8,7 +8,7 @@ require (
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/nicksnyder/go-i18n/v2 v2.6.1
 	golang.org/x/image v0.47.0
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/text v0.43.0
 )
