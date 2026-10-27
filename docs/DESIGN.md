@@ -224,7 +224,7 @@
 ## 11. 托盘与单实例
 
 - `internal/tray` 是 `fyne.io/systray` 的薄封装：左键 `SetOnTapped` 直接开窗，右键菜单只有「打开 / 退出」；回调在库的 goroutine 上，必须经 `post` / channel 回 UI 线程。通知区预检失败时 `Start` 返回错误，应用降级。托盘只持有 PNG 字节：`Icons.Idle`/`Icons.Active` 分别对应灰点与红点两态，`SetActive` 在状态未变化时不重复调用 `SetIcon`。
-- 图标设计源为 `internal/ui/assets/icon-gray.svg`（灰封蜡，托盘 idle）与 `icon-red.svg`（红封蜡，托盘 unread 与顶栏 mark），由 `scripts/gen_app_icons.py` 用 rsvg-convert 派生 PNG 后提交；运行时不解析 SVG。顶栏 mark 用红点母版，cell 固定 36dp：内嵌 32–128px 多个尺寸，按设备像素取刚好覆盖的一张（`internal/ui/appicon.go`），1x / 1.25x / 1.5x / 2x / 3x 正好命中 36 / 45 / 54 / 72 / 108px（旧的 32/40/48/64/96/128px 变体保留，覆盖 1.1x、1.75x 这类零散比例），缩放比例为 1，不会被线性滤波插值而发糊。Gio v0.10.3 没有窗口图标 API，窗口/任务栏图标由桌面集成使用 `icon-red-512.png`（与顶栏 mark 同一母版）。
+- 图标设计源为 `artwork/icon-gray.svg`（灰封蜡，托盘 idle）与 `artwork/icon-red.svg`（红封蜡，托盘 unread 与顶栏 mark），由 `scripts/gen_app_icons.py` 用 rsvg-convert 派生 PNG 后提交（小尺寸写 `internal/ui/assets/`，512px 留在 `artwork/`）；运行时不解析 SVG。顶栏 mark 用红点母版，cell 固定 36dp：内嵌 32–128px 多个尺寸，按设备像素取刚好覆盖的一张（`internal/ui/appicon.go`），1x / 1.25x / 1.5x / 2x / 3x 正好命中 36 / 45 / 54 / 72 / 108px（旧的 32/40/48/64/96/128px 变体保留，覆盖 1.1x、1.75x 这类零散比例），缩放比例为 1，不会被线性滤波插值而发糊。Gio v0.10.3 没有窗口图标 API，窗口/任务栏图标由桌面集成使用 `artwork/icon-red-512.png`（与顶栏 mark 同一母版）。
 - **轮询与徽标**：轮询属于进程而不是窗口——`Run` 在 `tray.Start` 之后 `startPolling()`，退出前 `stopPolling()`。托盘驻留期间每分钟经同一检查通道（单飞 + 冷却，见 §4.2）检查一次，变化时只重载侧栏（标签名 + 未读数/颜色），不拉列表；徽标在 `loadFolderDetails` 的成功回调里统一刷新（收件箱未读 > 0 红、= 0 灰），因此启动、手动刷新、轮询、切账号、重建后端都会更新它。重开窗口时 `attach` 的「检查 + 全量加载」补齐列表。
 - `internal/singleinstance` 用会话总线名 `me.zhsj.yauzin`（同时是 Gio application ID）保证单实例：第一个进程持有名字并导出 `Open` 与 `OpenURI`，后续启动唤起窗口后 `os.Exit(0)`。带 mailto 参数时调 `OpenURI(uri)`，正在运行的实例若是旧版本、没有该方法，则回退 `Open`（窗口照开、URI 丢失并记日志），避免升级期间激活整个失败。Wayland 不允许强制前置已有窗口，这是已知限制。
 - **mailto**：`cmd/yauzin` 把 `os.Args[1:]` 原样交给 `ui.Run`，解析放在纯 Go 的 `internal/mailto`（RFC 6068 的 path + hfields；按 `&` 与首个 `=` 手工切分、用 `url.PathUnescape` 解码，因为 `url.ParseQuery` 会把 RFC 6068 里字面的 `+` 当空格）。认 `to/cc/bcc/subject/body` 与 RFC 2368 遗留的 `in-reply-to`，地址类按出现顺序累加并去重，单行字段把 CR/LF 换成空格，正文把行尾归一为 LF。启动参数与「D-Bus 回调早于 `newApp` 返回」的 URI 都只 `post` 不 `requestOpen`（首个 `FrameEvent` 的 `drain` 就会打开撰写框；乱发 `openCh` 令牌会让用户刚关的窗口被重新弹出），外部激活才 `post + requestOpen`，`attach` 会清掉残留令牌。撰写框是单槽位，收到 mailto 一律替换当前草稿（丢弃未发送内容，属既定取舍）；有收件人时焦点落在正文并置于链接正文末尾。`in-reply-to` 经 `mail.NormalizeMessageID` 校验后写进 `composeView.inReplyTo`，`references` 只含这个父 ID；非法值只丢该头，主题不加 `Re:`。日志只说「拒绝了 mailto URI」，不记 URI（含收件人与正文）。
@@ -366,7 +366,7 @@ python3 scripts/gen_icon_fonts.py --check    # 校验现有字体是否与代码
 
 ### 14.3 应用图标
 
-设计源是 `internal/ui/assets/icon-gray.svg`（灰色封蜡）与 `icon-red.svg`（红色封蜡），两者几何完全一致、只有封蜡颜色不同。程序不解析 SVG，二进制只嵌入由二者派生的小尺寸 PNG；`icon-red-512.png` 不进二进制，留给桌面集成（`.desktop` 的 `Icon=` 或任务栏），因为 Gio v0.10.3 没有窗口图标 API。改图标后重新生成：
+设计源是 `artwork/icon-gray.svg`（灰色封蜡）与 `artwork/icon-red.svg`（红色封蜡），两者几何完全一致、只有封蜡颜色不同。程序不解析 SVG，二进制只嵌入由二者派生的小尺寸 PNG（写进 `internal/ui/assets/`）；`artwork/icon-red-512.png` 不进二进制，留给桌面集成（`.desktop` 的 `Icon=` 或任务栏），因为 Gio v0.10.3 没有窗口图标 API。改图标后重新生成：
 
 ```bash
 python3 scripts/gen_app_icons.py            # 需要 rsvg-convert（librsvg2-bin）
@@ -441,6 +441,7 @@ internal/i18n/                 中英文翻译与系统 locale
 internal/tray/                 系统托盘封装（fyne.io/systray）
 internal/singleinstance/       D-Bus 单实例（会话总线名 me.zhsj.yauzin）
 internal/mailto/               mailto URI 解析（收件人、抄送、密送、主题、正文、in-reply-to）
+artwork/                       图标设计母版（SVG）与 512px 桌面图标，均不进二进制
 scripts/gen_icon_fonts.py      Material Symbols 子集字体生成（fonttools）
 scripts/gen_app_icons.py       应用图标 SVG → PNG 生成（rsvg-convert）
 ```

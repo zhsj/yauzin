@@ -18,10 +18,11 @@ import (
 )
 
 // The application icon is authored as SVG and shipped as PNG: the masters
-// assets/icon-gray.svg (grey wax seal) and assets/icon-red.svg (red wax seal)
-// are rasterised by scripts/gen_app_icons.py, because the binary carries no SVG
-// renderer. Only the small variants are embedded; assets/icon-gray-512.png
-// exists for desktop integration and stays out of the executable.
+// artwork/icon-gray.svg (grey wax seal) and artwork/icon-red.svg (red wax seal)
+// are rasterised into assets/ by scripts/gen_app_icons.py, because the binary
+// carries no SVG renderer. Only the small variants are embedded;
+// artwork/icon-red-512.png exists for desktop integration and stays out of the
+// executable.
 //
 //go:embed assets/icon-gray-44.png
 var iconGrayPNG []byte

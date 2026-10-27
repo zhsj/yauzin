@@ -15,8 +15,9 @@ import (
 // The script parses the codepoints below, instantiates the upstream variable
 // font at FILL=0, GRAD=0, opsz=24, wght=400 and subsets it; the FILL=1
 // instance only needs U+F09A. icons_test.go fails when a glyph is missing.
-// The application icon is separate artwork: assets/icon*.png are rendered from
-// the SVG masters by scripts/gen_app_icons.py, see appicon.go.
+// The application icon is separate artwork: the small assets/icon*.png are
+// rendered from the SVG masters in artwork/ by scripts/gen_app_icons.py, see
+// appicon.go.
 //
 //go:embed assets/material-symbols-rounded.ttf
 var iconFontData []byte

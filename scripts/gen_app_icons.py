@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Regenerate the raster app icons in internal/ui/assets from the SVG masters.
+"""Regenerate the raster app icons from the SVG masters in artwork/.
 
-icon-gray.svg (grey wax seal) and icon-red.svg (red wax seal) are the design
-sources. The PNGs next to them are committed build products because the runtime
-does not parse SVG: see internal/ui/appicon.go. Only the small variants are
-embedded in the binary; icon-red-512.png ships as the desktop icon.
+artwork/icon-gray.svg (grey wax seal) and artwork/icon-red.svg (red wax seal) are
+the design sources. The small PNGs they render into are committed next to the Go
+sources in internal/ui/assets because the runtime does not parse SVG: see
+internal/ui/appicon.go. Only the small variants are embedded in the binary;
+artwork/icon-red-512.png ships as the desktop icon.
 
 The masters keep their 174x118 viewBox, which suits the design but not the
 output: every PNG has to be square. Rendering such a document by width alone
@@ -33,6 +34,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ASSETS = REPO_ROOT / "internal" / "ui" / "assets"
+ARTWORK = REPO_ROOT / "artwork"
+
+# The desktop icon is not embedded in the binary, so it is written next to the
+# masters in artwork/ instead of next to the small variants beside the Go code.
+DESKTOP_PNGS = {"icon-red-512.png"}
 
 # master SVG -> rendered PNG name -> edge length in pixels.
 #
@@ -118,12 +124,12 @@ def main() -> int:
     parser.parse_args()
 
     for master, variants in TARGETS.items():
-        path = ASSETS / master
+        path = ARTWORK / master
         if not path.exists():
             raise SystemExit(f"missing icon master {path}")
         svg = square_document(path.read_text(encoding="utf-8"), master)
         for name, size in variants.items():
-            out = ASSETS / name
+            out = (ARTWORK if name in DESKTOP_PNGS else ASSETS) / name
             out.write_bytes(render(svg, name, size))
             print(f"wrote {out.relative_to(REPO_ROOT)} ({size}x{size})")
     return 0
