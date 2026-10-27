@@ -48,24 +48,24 @@ func (a *activator) activate(uri string) {
 // is returned when the session bus cannot be reached: the caller decides
 // whether that is fatal (here it is not, the tray degrades the same way).
 func Acquire(name string, onActivate func(uri string)) (bool, error) {
+	// The session bus is shared with the rest of the process, so the connection
+	// is never closed here, not even on the paths where this call fails: it
+	// belongs to the process, and closing it would break every other user.
 	conn, err := dbus.SessionBus()
 	if err != nil {
 		return false, err
 	}
 	ret, err := conn.RequestName(name, dbus.NameFlagDoNotQueue)
 	if err != nil {
-		_ = conn.Close()
 		return false, err
 	}
 	if ret == dbus.RequestNameReplyExists {
-		_ = conn.Close()
 		return false, nil
 	}
 	// ExportAll takes methods of any signature; plain Export drops methods
 	// whose last return value is not *dbus.Error, which Open and OpenURI are
 	// not.
 	if err := conn.ExportAll(&activator{open: onActivate}, objectPath, methodIface); err != nil {
-		_ = conn.Close()
 		return false, err
 	}
 	return true, nil
@@ -93,13 +93,13 @@ func ActivateURI(name, uri string) error {
 	return err
 }
 
-// call invokes one method on the instance that owns name. Every call opens its
-// own connection: a second launch makes exactly one and exits.
+// call invokes one method on the instance that owns name. The shared session
+// bus connection is left open: the process owns it and exits right after this
+// call.
 func call(name, method string, args ...any) error {
 	conn, err := dbus.SessionBus()
 	if err != nil {
 		return err
 	}
-	defer func() { _ = conn.Close() }()
 	return conn.Object(name, objectPath).Call(method, 0, args...).Err
 }
