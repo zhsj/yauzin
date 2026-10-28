@@ -23,6 +23,7 @@ import (
 	"github.com/zhsj/yauzin/internal/mail"
 	"github.com/zhsj/yauzin/internal/mailto"
 	"github.com/zhsj/yauzin/internal/notify"
+	"github.com/zhsj/yauzin/internal/profiling"
 	"github.com/zhsj/yauzin/internal/singleinstance"
 	"github.com/zhsj/yauzin/internal/tray"
 )
@@ -83,6 +84,18 @@ func Run(args []string) {
 			slog.Warn("activate the running instance", "err", err)
 		}
 		os.Exit(0)
+	}
+
+	// Profiling is opt-in and never part of startup: a port that is invalid
+	// or busy only costs the endpoints, not the app.
+	if port, ok, err := profiling.Port(); err != nil {
+		slog.Warn("invalid profile port", "err", err)
+	} else if ok {
+		if addr, err := profiling.Start(port); err != nil {
+			slog.Warn("profiles unavailable", "err", err)
+		} else {
+			slog.Info("serving profiles", "addr", addr.String())
+		}
 	}
 
 	// The cursor theme is resolved in attach, right before every window is
