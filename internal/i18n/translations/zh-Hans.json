@@ -21,8 +21,6 @@
   "settings.tabShortcuts": "快捷键",
   "settings.appearance": "外观",
   "settings.language": "界面语言",
-  "settings.decorationSwitch": "使用客户端标题栏",
-  "settings.decorationHint": "由应用自绘标题栏，仅 Wayland 有效。KDE 需先添加「无标题栏和边框」窗口规则。",
   "settings.accounts": "账号",
   "settings.perfMonitor": "显示性能监视",
   "settings.perfHint": "在顶部栏显示 CPU、内存、goroutine 数与帧率。",

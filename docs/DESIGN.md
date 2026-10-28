@@ -9,7 +9,7 @@
 - Fyne 实现（已整体重写为 Gio；托盘也改为项目内自实现，见 §11）。
 - 应用内 HTML 富文本渲染（含 `internal/htmlrich` + 自绘排版方案）；HTML 正文只交给系统浏览器。
 - HTML 正文的纯文本降级（`internal/htmltext`，以及正则剥标签、`x/net/html` 取文本等替代方案）：没有 `text/plain` 即视为无正文。
-- Fyne 内建图标、`page/perPage` 双模式分页、窗口装饰自动探测。
+- Fyne 内建图标、`page/perPage` 双模式分页。
 - tooltip 跨帧重放、设置页胶囊分段控件。
 - 日志落文件（`YAUZIN_LOG` 环境变量 + 文件 handler）：日志继续只写 stderr，不引入文件轮转与路径配置。
 - 演示数据本地化：`internal/mail/mock` 的标签名与正文摘要保持硬编码，不随界面语言切换；真实账号的标签来自服务端，不受影响。
@@ -69,7 +69,7 @@
 1. 会话上下文：`activeAcc`、`activeFolder`、`query`、`folders`。`activeFolder == ""` 就是搜索视图（此时 `query` 非空），侧栏不高亮任何项；非空则是该文件夹/标签的浏览视图。
 2. 分页：`page`（1 基）+ `tokens`（`tokens[i]` 打开第 `i+1` 页，`tokens[0]` 恒为空游标）。
 3. 阅读：`selectedThread`、`thread`、`msgs`、`expanded`、`loadingThread`。
-4. 窗口/浮层：`decorated`、`maximized`、`csd`、`windowActions`、`overlay` + `compose`/`settings`/`menu`。
+4. 窗口/浮层：`decorated`、`maximized`、`windowActions`、`overlay` + `compose`/`settings`/`menu`。
 
 窗口句柄、post 队列、退出标志是唯一跨 goroutine 共享的部分（`winMu`、`postMu`、`quitting`）。
 
@@ -154,9 +154,9 @@
 
 ### 7.1 机制
 
-- 应用主动 `app.Decorated(false)`；唯一判定出口是 `clientSide() = !decorated || (csd && WAYLAND_DISPLAY != "")`。**X11 永不画自绘标题栏**（Gio 在 X11 恒要求服务端装饰，会重复）。
+- 应用建窗时 `app.Decorated(false)`，唯一判定出口是 `clientSide() = !decorated`：`Config.Decorated` 是「平台是否装饰」的唯一事实来源。**X11 永不画自绘标题栏**（Gio 在 X11 恒要求服务端装饰并报告 `Decorated == true`，自绘会重复）。
 - 自绘标题栏承载侧栏按钮 / logo+品牌 / 搜索胶囊 / 设置 / 头像 / 分隔线 / 最小化·最大化·关闭（高度见上节，`windowcontrols.go` 用 clip 自绘，字体无窗口字形）。
-- KDE Wayland 上无法自动识别：KWin 对强制无边框的窗口在 `xdg-decoration` 仍回 `server_side`（源码注释 *Faked as server_side mode*），协议层探测不到。因此只提供 `clientDecorations` 显式开关，操作步骤见 [§7.2](#72-使用者配置)。
+- Wayland 上由 `internal/waylanddeco` 让合成器回答「客户端装饰」：Gio 建窗时只注册 `zxdg_toplevel_decoration_v1` 的 `configure` 监听，从不发送 `set_mode`，装饰模式由合成器默认决定（KWin 对强制无边框的窗口回 `server_side`，源码注释 *Faked as server_side mode*）。该包用 `#cgo LDFLAGS: -Wl,--wrap=wl_proxy_add_listener` 在链接期包装符号：生成的 `zxdg_toplevel_decoration_v1_add_listener` 是 static inline，最终落到非变参的 `wl_proxy_add_listener`，包装函数按 proxy 的 interface 名认出装饰对象后立即补发 `set_mode(client_side)`，时序仍在首次 `wl_surface.commit` 之前。`vendor/` 不改动，去掉这个包即回到原行为。
 - 拖动只把 `system.ActionInputOp(system.ActionMove)` 登记在空白抓手区（clip 包裹、绘制顺序在按钮之后）；按在搜索框/按钮上不能被 move 消费。
 - 光标主题解析顺序：`XCURSOR_THEME`/`XCURSOR_SIZE`（用户显式设置）→ XDG portal `org.freedesktop.portal.Settings`（`org.gnome.desktop.interface`，750ms 超时）→ KDE `kreadconfig6`（回退 `kreadconfig5`）→ GNOME `gsettings get`（750ms 超时）。导出前必须校验 `<theme>/cursors` 真实存在，否则 Wayland `wl_cursor_theme_load` 失败会导致无法建窗。
 - 门户必须排在 KDE 之前：`org.gnome.desktop.interface` 由 `xdg-desktop-portal-gtk` 转发 dconf 实现，Flatpak 内也靠它透视宿主设置；KDE 的 portal 只注册 `org.freedesktop.appearance` 与 `org.kde.*`，查询该命名空间会失败并自然落到 KDE 来源，因此不做会话判断。
@@ -164,14 +164,14 @@
 - `gsettings` 放最后兜底：它在任何桌面都会返回 schema 默认值（`Adwaita`），只有门户与 KDE 都没结果时才轮到它，避免把其他桌面的真实设置盖掉。Flatpak 内 `gsettings`/`kreadconfig6` 读不到宿主配置，这是从纯 D-Bus 门户改为 CLI 的已知代价。
 - 未导出尺寸时 Gio 的 Wayland 后端自己用 32（`os_wayland.go`），KDE 未设置时是 24，所以 `kreadconfig6` 读不到值时两侧尺寸可能差一档。
 - 应用自己导出的值会被下一次解析读到（误判为「用户设置」并且不再回查 portal），因此 `cursor` 包用 `lastExport` 在读取 env 时屏蔽自写值；`Apply` 只在每次建窗前调用一次。运行中换主题需重开窗口。
-- **CSD 下没有边缘缩放**：Gio v0.10.3 的 Wayland 后端只监听 `zxdg_toplevel_decoration_v1` 的 `configure`，从不发送 `set_mode`；KWin 对强制无边框窗口答复 `server_side`（源码注释 *Faked as server_side mode*），于是 `Config.Decorated == true`。缩放热区 `systemGesture()` 首行即 `if Mode != Windowed || Decorated { return nil, 0 }`，所以既没有缩放光标也不会发出 `xdg_toplevel.resize`。应用只拿得到 `io/system` 的 `ActionMove`（`ActionInputOp` 注释：only ActionMove is supported），拿不到 `wl_surface`/`xdg_toplevel`，不改 vendor 无法实现；替代操作见 [§7.3](#73-可感知限制)。
+- **边缘缩放挂在 `Config.Decorated` 上**：Gio 的缩放热区 `systemGesture()` 首行即 `if Mode != Windowed || Decorated { return nil, 0 }`，只有合成器确认客户端装饰时才有缩放光标与 `xdg_toplevel.resize`。`internal/waylanddeco` 的 `set_mode(client_side)` 就是让合成器回 `configure(client_side)` 的那一步；应用自己拿不到 `wl_surface`/`xdg_toplevel`（`io/system` 只暴露 `ActionMove`），也不需要拿。
 - **最小化后的模式同步**：Gio 的 Wayland 后端把 `Mode` 置为 `Minimized` 后只靠 `wl_surface.enter` 清除，而窗口在同一 output 恢复不会触发 enter；`Configure` 又会丢弃 `prev.Mode == Minimized` 时的一切模式切换，于是恢复后最大化按钮、标题栏拖动与缩放热区全部失效。应用不做可视化补偿：`performWindowActions`（`app_lifecycle.go`）在执行动作后，按纯函数 `windowSteps` 的判断在最小化时补一次 `app.Windowed`，复位这条僵死记录（协议层窗口仍然是最小化的）。代价是幂等的最小化前已最大化情形需要点两次最大化：第一次只把状态同步回合成器本已保持的最大化。
 
 ### 7.2 使用者配置
 
-- **跟随系统（默认）**：平台报告「不装饰」时应用自绘单行标题栏（GNOME Wayland、Windows、macOS）；平台已装饰时保持系统边框（KDE 默认的 Breeze 标题栏）。
-- **KDE Wayland 需要两步**：① 在 *系统设置 → 窗口管理 → 窗口规则* 新建规则（窗口类 `yauzin`，即二进制名），把「无标题栏和边框」设为「强制」；② 在应用 *设置 → 通用* 打开「使用客户端标题栏」。切换后立即生效，无需重启。第二步不能省：`xdg-decoration` 协议没有「无装饰」取值，KWin 对强制无边框的窗口仍报告服务端装饰，应用无法自动分辨（原因见 §7.1）。
-- **X11 无法使用客户端标题栏**，该开关无效。
+- **Wayland 恒用自绘标题栏**：`internal/waylanddeco` 让合成器确认客户端装饰，KWin 与 Mutter 都不再画边框，**不需要任何窗口规则，也没有应用内开关**。
+- **平台自己装饰时保持系统边框**：X11（Gio 恒要求服务端装饰）、Windows、macOS 由平台画标题栏（原因见 §7.1）。
+- **X11 无法使用客户端标题栏**。
 - **光标主题覆盖**：环境变量优先级最高，可绕过自动解析直接指定；运行中更换系统主题后，从托盘关闭再打开窗口即可生效。
 
   ```bash
@@ -181,7 +181,6 @@
 ### 7.3 可感知限制（Gio v0.10.3）
 
 - Wayland 后端不解析 `xdg_toplevel` 状态：由窗口管理器（快捷键 / 边框双击）最大化或还原时，标题栏的最大化图标不会同步；应用内的最大化按钮可以正常切换。
-- 同时使用 KDE Wayland 的「无标题栏和边框」规则与「使用客户端标题栏」时，窗口无法用鼠标拖边缘缩放：边缘没有缩放光标，拖动也没有反应（机制见 §7.1 末条）。替代操作：用 KWin 的 `Alt+F8` 缩放快捷键，或关闭「使用客户端标题栏」改用系统边框（可正常拖拽缩放）。
 
 ## 8. 正文与 HTML 安全
 
@@ -209,7 +208,6 @@
 | 字段 | 含义 |
 | --- | --- |
 | `language` | 语言标签，空/`auto` 表示跟随系统 |
-| `clientDecorations` | Wayland 下强制自绘标题栏 |
 | `showPerfMonitor` | 顶栏显示性能读数 |
 | `proxy` | 出站邮件请求使用的代理（`http`/`https`/`socks5`，空表示直连） |
 | `logLevel` | 控制台日志级别（`error`/`warn`/`info`/`debug`，空或未知表示 `info`） |
@@ -395,7 +393,7 @@ internal/ui/app_data.go        账号、文件夹、分页与加载（含先检�
 internal/ui/app_poll.go        1 分钟轮询入口（进程生命周期，检查走 app_check.go）
 internal/ui/app_thread.go      会话打开与批量动作
 internal/ui/app_overlay.go     帧骨架、指针区域与浮层编排
-internal/ui/app_settings.go    设置读写与语言/装饰/性能/日志级别/代理（全局与单账号）、账号删除
+internal/ui/app_settings.go    设置读写与语言/性能/日志级别/代理（全局与单账号）、账号删除
 internal/ui/errors.go          错误分类 → i18n 键映射
 internal/ui/keys.go            键盘路由、列表光标与快捷键
 internal/ui/shell.go           顶栏 + 侧栏/内容区两栏布局
@@ -440,6 +438,7 @@ internal/logging/              进程级 slog level var 与控制台 text handle
 internal/cursor/               系统光标主题解析（门户 / kreadconfig6 / gsettings）
 internal/i18n/                 中英文翻译与系统 locale
 internal/tray/                 系统托盘（自实现 StatusNotifierItem + DBusMenu）
+internal/waylanddeco/          Wayland 客户端装饰（链接期包装 wl_proxy_add_listener 补发 set_mode）
 internal/singleinstance/       D-Bus 单实例（会话总线名 me.zhsj.yauzin）
 internal/mailto/               mailto URI 解析（收件人、抄送、密送、主题、正文、in-reply-to）
 artwork/                       图标设计母版（SVG）、512px 桌面图标与截图，均不进二进制

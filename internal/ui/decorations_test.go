@@ -10,30 +10,21 @@ import (
 	"gioui.org/layout"
 )
 
-// TestClientSide covers the decoration decision: the platform decides when the
-// user follows the system, while the setting forces a title bar on Wayland only.
+// TestClientSide covers the decoration decision: it follows the platform, so
+// the app draws the title bar exactly when Config.Decorated says the platform
+// does not. The Wayland shim is what makes the compositor answer that way.
 func TestClientSide(t *testing.T) {
 	tests := []struct {
 		name      string
 		decorated bool
-		csd       bool
-		wayland   bool
 		want      bool
 	}{
-		{"platform undecorated", false, false, false, true},
-		{"platform decorated, follow system", true, false, true, false},
-		{"platform decorated, client title bar on wayland", true, true, true, true},
-		{"platform decorated, client title bar on x11", true, true, false, false},
-		{"platform undecorated, follow system on wayland", false, false, true, true},
+		{"platform undecorated", false, true},
+		{"platform decorated", true, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.wayland {
-				t.Setenv("WAYLAND_DISPLAY", "wayland-0")
-			} else {
-				t.Setenv("WAYLAND_DISPLAY", "")
-			}
-			a := &App{decorated: tt.decorated, csd: tt.csd}
+			a := &App{decorated: tt.decorated}
 			if got := a.clientSide(); got != tt.want {
 				t.Fatalf("clientSide() = %v, want %v", got, tt.want)
 			}

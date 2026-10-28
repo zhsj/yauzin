@@ -234,9 +234,10 @@ func (a *App) attach(w *app.Window) {
 	// Gio reads the cursor theme when it creates the window, so re-resolve it
 	// here to follow theme changes made while the app sat in the tray.
 	applyCursorTheme()
-	// Assume the platform decorates the new window until it reports otherwise.
-	// That avoids drawing a title bar for the first frame on compositors that
-	// will add their own frame, which is the common case on KDE.
+	// Assume the platform decorates the new window until it reports otherwise:
+	// that keeps the first frame free of a title bar, and the ConfigEvent of
+	// the first frames corrects it wherever the platform leaves the
+	// decorations to the app.
 	a.decorated = true
 	a.maximized = false
 	w.Option(
@@ -244,9 +245,10 @@ func (a *App) attach(w *app.Window) {
 		app.Size(unit.Dp(1200), unit.Dp(840)),
 		app.MinSize(unit.Dp(560), unit.Dp(420)),
 		// Leave decoration to the app so Config.Decorated tells the truth. The
-		// title bar is drawn by the app in windowcontrols.go and topbar.go.
-		// Platforms that decorate regardless (X11, KWin by default) keep their
-		// own frame and the app draws nothing.
+		// title bar is drawn by the app in windowcontrols.go and topbar.go;
+		// platforms that decorate regardless (X11, Windows, macOS) keep their
+		// own frame and the app draws nothing. On Wayland the compositor
+		// answers client-side because internal/waylanddeco requests it.
 		app.Decorated(false),
 	)
 	a.winMu.Lock()

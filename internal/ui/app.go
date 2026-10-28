@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"image"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -120,10 +119,6 @@ type App struct {
 	// maximized mirrors the window mode, so the title bar can show the right
 	// maximize glyph and toggle it.
 	maximized bool
-	// csd forces the client-side title bar even though the platform reports
-	// server-side decorations. Window managers that hide their frame without
-	// saying so (KWin answers server-side for its "no border" rule) need it.
-	csd bool
 	// windowActions collects the title bar requests of the current frame; they
 	// run after the frame so a close cannot tear the window down mid-layout.
 	windowActions system.Action
@@ -236,11 +231,12 @@ func (a *App) headerHeight() unit.Dp {
 	return topBarHeight
 }
 
-// clientSide reports whether the application draws the window title bar. The
-// setting only applies on Wayland: Gio always asks the X11 window manager to
-// decorate, so a bar drawn there would duplicate the frame.
+// clientSide reports whether the application draws the window title bar. It
+// follows the platform alone: the Wayland shim asks the compositor for
+// client-side decorations and Gio always leaves X11 to the window manager, so
+// Config.Decorated answers the question on both.
 func (a *App) clientSide() bool {
-	return !a.decorated || (a.csd && os.Getenv("WAYLAND_DISPLAY") != "")
+	return !a.decorated
 }
 
 // appOptions is the single assembly point for the backends. newApp fills it
@@ -451,7 +447,6 @@ func newAppWith(pref prefs.Settings, opts appOptions) *App {
 		tokens:        []string{""},
 		expanded:      map[string]bool{},
 		decorated:     true,
-		csd:           pref.ClientDecorations,
 		status:        &statusBar{},
 		cursorThread:  -1,
 		openCh:        make(chan struct{}, 1),

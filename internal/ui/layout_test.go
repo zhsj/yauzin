@@ -135,11 +135,10 @@ func TestStatusOverlayIgnoresMinimum(t *testing.T) {
 // doubles as the window decoration, so it must fit both the controls and the
 // window buttons at the smallest supported window width.
 func TestClientTitleBarFrame(t *testing.T) {
-	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
 	a := testApp(t)
-	a.csd = true
+	a.decorated = false
 	if !a.clientSide() {
-		t.Fatal("the setting must force a client-side title bar on Wayland")
+		t.Fatal("an undecorated platform must give the app the title bar")
 	}
 	if got := a.headerHeight(); got != topBarHeightCSD {
 		t.Fatalf("title bar height = %v, want %v", got, topBarHeightCSD)
@@ -166,7 +165,6 @@ func TestClientTitleBarFrame(t *testing.T) {
 // which put the bottom of the reader (its reply row) below the window edge and
 // out of reach of the scroll.
 func TestMailboxFitsBelowClientTitleBar(t *testing.T) {
-	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
 	a := testApp(t)
 	a.selectedThread = "t0"
 	a.thread = mail.ThreadSummary{ID: "t0", Subject: "Subject", MessageCount: 1}
@@ -178,8 +176,8 @@ func TestMailboxFitsBelowClientTitleBar(t *testing.T) {
 
 	// viewport is the height the reader's list is given, measured by asking for
 	// more scroll than exists and reading back the clamped position.
-	viewport := func(csd bool) int {
-		a.csd = csd
+	viewport := func(clientSide bool) int {
+		a.decorated = !clientSide
 		var ops op.Ops
 		gtx := testGtx(&ops, testWindow)
 		a.layout(gtx)

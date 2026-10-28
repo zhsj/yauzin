@@ -22,8 +22,6 @@
   "settings.tabShortcuts": "Shortcuts",
   "settings.appearance": "Appearance",
   "settings.language": "Interface language",
-  "settings.decorationSwitch": "Use client-side title bar",
-  "settings.decorationHint": "Draw the title bar in the app. Wayland only; on KDE add a “No titlebar and frame” window rule first.",
   "settings.accounts": "Accounts",
   "settings.perfMonitor": "Show performance monitor",
   "settings.perfHint": "Shows CPU, memory, goroutine count and frame rate in the top bar.",

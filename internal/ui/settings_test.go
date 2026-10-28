@@ -402,8 +402,8 @@ func TestSettingsLogLevelDropdown(t *testing.T) {
 }
 
 // TestSettingsSwitchKeepsLanguageListOpen pins the panel state across a switch
-// toggle: turning client-side decorations on used to rebuild the whole panel,
-// which closed the expanded language list and dropped the proxy draft.
+// toggle: flipping a boolean setting used to rebuild the whole panel, which
+// closed the expanded language list and dropped the proxy draft.
 func TestSettingsSwitchKeepsLanguageListOpen(t *testing.T) {
 	t.Setenv("YAUZIN_CONFIG_DIR", t.TempDir())
 
@@ -425,12 +425,12 @@ func TestSettingsSwitchKeepsLanguageListOpen(t *testing.T) {
 	ops.Reset()
 
 	s.proxy.SetText("http://127.0.0.1:9")
-	want := !a.csd
-	s.decoRow.click.Click()
+	want := !a.perf.isVisible()
+	s.perfRows[0].click.Click()
 	s.Layout(gtx, a)
 
-	if a.csd != want {
-		t.Fatalf("client-side decorations = %v after the click, want %v", a.csd, want)
+	if got := a.perf.isVisible(); got != want {
+		t.Fatalf("performance monitor = %v after the click, want %v", got, want)
 	}
 	if !s.langOpen {
 		t.Fatal("toggling a switch closed the language candidates")
@@ -438,8 +438,8 @@ func TestSettingsSwitchKeepsLanguageListOpen(t *testing.T) {
 	if a.overlay != s {
 		t.Fatalf("overlay = %T after the toggle, want the same settings panel", a.overlay)
 	}
-	if got := s.decoRow.switchCtl.on; got != a.csd {
-		t.Fatalf("switch shows %v, want the state that took effect: %v", got, a.csd)
+	if got := s.perfRows[0].switchCtl.on; got != a.perf.isVisible() {
+		t.Fatalf("switch shows %v, want the state that took effect: %v", got, a.perf.isVisible())
 	}
 	if got := s.proxy.Text(); got != "http://127.0.0.1:9" {
 		t.Fatalf("proxy draft = %q after the toggle, want it untouched", got)

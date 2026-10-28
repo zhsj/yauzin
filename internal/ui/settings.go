@@ -52,7 +52,6 @@ type settingsView struct {
 	// names the account whose delete row a first click has armed.
 	expanded      string
 	confirmDelete string
-	decoRow       *settingsRow
 	// The network section: one proxy address shared by the accounts that opt
 	// into it. proxySaved is the stored value, so the save button can stay
 	// inactive until the field differs from it; proxyErr holds the form
@@ -353,23 +352,8 @@ func newSettingsView(a *App) *settingsView {
 		},
 	}
 
-	// Boolean settings render as switch rows; switching off falls back to
-	// the system behaviour on both. The explanation sits on the row itself so
-	// it never turns into a paragraph floating between two groups.
-	deco := &settingsRow{
-		title:     i18n.T("settings.decorationSwitch"),
-		subtitle:  i18n.T("settings.decorationHint"),
-		switchCtl: newToggleSwitch(a.csd, nil),
-	}
-	deco.onTap = func() {
-		a.setClientDecorations(!a.csd)
-		// The row is the hit target, so the switch never flips on its own:
-		// mirror the state that actually took effect, which also covers a
-		// setter that returned early.
-		deco.switchCtl.on = a.csd
-	}
-	s.decoRow = deco
-
+	// Boolean settings render as switch rows, with the explanation on the row
+	// itself so it never turns into a paragraph floating between two groups.
 	perf := &settingsRow{
 		title:     i18n.T("settings.perfMonitor"),
 		subtitle:  i18n.T("settings.perfHint"),
@@ -624,9 +608,6 @@ func (s *settingsView) appearanceCard(th *theme) layout.Widget {
 	if s.langOpen {
 		items = append(items, rowWidgets(s.langRows, th)...)
 	}
-	items = append(items, func(gtx layout.Context) layout.Dimensions {
-		return s.decoRow.Layout(gtx, th)
-	})
 	items = append(items, rowWidgets(s.perfRows, th)...)
 	return settingsCard(items)
 }

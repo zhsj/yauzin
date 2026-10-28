@@ -18,11 +18,6 @@ type Settings struct {
 	// Language holds the interface language tag, or "auto" to follow the
 	// system locale.
 	Language string `json:"language,omitempty"`
-	// ClientDecorations draws the window title bar in the application instead
-	// of leaving it to the window manager. It is needed on window managers that
-	// hide their frame without telling the client (KWin answers server-side
-	// decoration for its "no border" rule).
-	ClientDecorations bool `json:"clientDecorations,omitempty"`
 	// ShowPerfMonitor displays the compact CPU/memory/goroutine/FPS readout in
 	// the top bar. Sampling only runs while it is visible.
 	ShowPerfMonitor bool `json:"showPerfMonitor,omitempty"`
