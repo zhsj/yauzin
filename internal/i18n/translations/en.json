@@ -226,6 +226,7 @@
   "toast.accountUpdated": "Updated {{.Name}}",
   "toast.accountRemoved": "Removed {{.Name}}",
   "toast.accountRemoveFailed": "Could not delete the account",
+  "toast.accountUnavailable": "This account is not available.",
   "toast.smtpAdded": "Added sending account {{.Name}}",
   "toast.smtpUpdated": "Updated sending account {{.Name}}",
   "toast.smtpRemoved": "Removed sending account {{.Name}}",

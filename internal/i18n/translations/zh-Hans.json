@@ -223,6 +223,7 @@
   "toast.accountUpdated": "已更新 {{.Name}}",
   "toast.accountRemoved": "已删除 {{.Name}}",
   "toast.accountRemoveFailed": "无法删除该账号",
+  "toast.accountUnavailable": "当前账号不可用",
   "toast.smtpAdded": "已添加发信账号 {{.Name}}",
   "toast.smtpUpdated": "已保存发信账号 {{.Name}}",
   "toast.smtpRemoved": "已删除发信账号 {{.Name}}",
