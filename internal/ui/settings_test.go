@@ -255,8 +255,8 @@ func TestSettingsRowDisabledIgnoresClicks(t *testing.T) {
 // once, in one section per group.
 func TestShortcutSections(t *testing.T) {
 	sections := shortcutSections()
-	if len(sections) != 3 {
-		t.Fatalf("sections = %d, want 3", len(sections))
+	if len(sections) != 4 {
+		t.Fatalf("sections = %d, want 4", len(sections))
 	}
 	seen := map[shortcutGroup]bool{}
 	total := 0

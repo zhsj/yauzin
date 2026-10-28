@@ -26,6 +26,12 @@ const (
 	keyEscape
 	keyCloseWindow
 	keyQuit
+	keyScrollUp
+	keyScrollDown
+	keyPageUp
+	keyPageDown
+	keyTop
+	keyBottom
 )
 
 // shortcutGroup orders the sections of the shortcuts page. The constants are
@@ -35,6 +41,7 @@ type shortcutGroup int
 const (
 	groupGlobal shortcutGroup = iota
 	groupList
+	groupScroll
 	groupReader
 )
 
@@ -45,6 +52,8 @@ func (g shortcutGroup) title() string {
 	switch g {
 	case groupList:
 		return i18n.T("shortcut.groupList")
+	case groupScroll:
+		return i18n.T("shortcut.groupScroll")
 	case groupReader:
 		return i18n.T("shortcut.groupReader")
 	default:
@@ -94,10 +103,16 @@ var shortcutTable = []shortcut{
 	{"shortcut.read", groupGlobal, keyRead, false, 0, []key.Name{"U"}, []string{"U"}},
 	{"shortcut.closeWindow", groupGlobal, keyCloseWindow, true, key.ModShortcut, []key.Name{"W"}, []string{"Ctrl", "W"}},
 	{"shortcut.quit", groupGlobal, keyQuit, true, key.ModShortcut, []key.Name{"Q"}, []string{"Ctrl", "Q"}},
-	{"shortcut.next", groupList, keyNext, false, 0, []key.Name{"J", key.NameDownArrow}, []string{"J", "↓"}},
-	{"shortcut.prev", groupList, keyPrev, false, 0, []key.Name{"K", key.NameUpArrow}, []string{"K", "↑"}},
+	{"shortcut.next", groupList, keyNext, false, 0, []key.Name{"J"}, []string{"J"}},
+	{"shortcut.prev", groupList, keyPrev, false, 0, []key.Name{"K"}, []string{"K"}},
 	{"shortcut.open", groupList, keyOpen, false, 0, []key.Name{key.NameEnter, key.NameReturn}, []string{"Enter"}},
 	{"shortcut.select", groupList, keyToggle, false, 0, []key.Name{"X"}, []string{"X"}},
+	{"shortcut.up", groupScroll, keyScrollUp, false, 0, []key.Name{key.NameUpArrow}, []string{"↑"}},
+	{"shortcut.down", groupScroll, keyScrollDown, false, 0, []key.Name{key.NameDownArrow}, []string{"↓"}},
+	{"shortcut.pageUp", groupScroll, keyPageUp, false, 0, []key.Name{key.NamePageUp}, []string{"PgUp"}},
+	{"shortcut.pageDown", groupScroll, keyPageDown, false, 0, []key.Name{key.NamePageDown}, []string{"PgDn"}},
+	{"shortcut.top", groupScroll, keyTop, false, 0, []key.Name{key.NameHome}, []string{"Home"}},
+	{"shortcut.bottom", groupScroll, keyBottom, false, 0, []key.Name{key.NameEnd}, []string{"End"}},
 	{"shortcut.reply", groupReader, keyReply, false, 0, []key.Name{"R"}, []string{"R"}},
 	{"shortcut.forward", groupReader, keyForward, false, 0, []key.Name{"F"}, []string{"F"}},
 }
@@ -134,6 +149,18 @@ func (sc shortcut) title() string {
 		return i18n.T("shortcut.open")
 	case "shortcut.select":
 		return i18n.T("shortcut.select")
+	case "shortcut.up":
+		return i18n.T("shortcut.up")
+	case "shortcut.down":
+		return i18n.T("shortcut.down")
+	case "shortcut.pageUp":
+		return i18n.T("shortcut.pageUp")
+	case "shortcut.pageDown":
+		return i18n.T("shortcut.pageDown")
+	case "shortcut.top":
+		return i18n.T("shortcut.top")
+	case "shortcut.bottom":
+		return i18n.T("shortcut.bottom")
 	case "shortcut.reply":
 		return i18n.T("shortcut.reply")
 	case "shortcut.forward":
@@ -216,7 +243,7 @@ func (a *App) handleKeys(gtx layout.Context) {
 		a.listKeys(bits)
 		return
 	}
-	a.readerKeys(bits)
+	a.readerKeys(gtx, bits)
 }
 
 // trackSearchFocus mirrors the focus state of the search editor, which is the
@@ -303,10 +330,22 @@ func (a *App) escape(gtx layout.Context) {
 // listKeys acts on the row under the keyboard cursor.
 func (a *App) listKeys(bits uint32) {
 	switch {
-	case bits&keyNext != 0:
+	case bits&(keyNext|keyScrollDown) != 0:
 		a.moveCursor(1)
-	case bits&keyPrev != 0:
+	case bits&(keyPrev|keyScrollUp) != 0:
 		a.moveCursor(-1)
+	}
+	if bits&keyPageDown != 0 {
+		a.moveCursor(a.pageCursorStep())
+	}
+	if bits&keyPageUp != 0 {
+		a.moveCursor(-a.pageCursorStep())
+	}
+	if bits&keyTop != 0 {
+		a.setCursor(0)
+	}
+	if bits&keyBottom != 0 {
+		a.setCursor(len(a.list.threads) - 1)
 	}
 	if bits&keyOpen != 0 {
 		if sum, ok := a.list.thread(a.cursorID()); ok {
@@ -336,8 +375,18 @@ func (a *App) listKeys(bits uint32) {
 	}
 }
 
-// readerKeys acts on the open conversation.
-func (a *App) readerKeys(bits uint32) {
+// readerKeys acts on the open conversation. J/K move to the neighbouring
+// conversation of the page; the arrow and paging keys scroll the body, which is
+// the only way to read long mail without the pointer.
+func (a *App) readerKeys(gtx layout.Context, bits uint32) {
+	if bits&keyNext != 0 {
+		a.openAdjacentThread(1)
+		return
+	}
+	if bits&keyPrev != 0 {
+		a.openAdjacentThread(-1)
+		return
+	}
 	if bits&keyReply != 0 {
 		if m := a.reader.newestForReply; m != nil {
 			a.openCompose(composeReply, m)
@@ -362,29 +411,82 @@ func (a *App) readerKeys(bits uint32) {
 	if bits&keyRead != 0 {
 		a.toggleThreadRead()
 	}
+	switch {
+	case bits&keyScrollUp != 0:
+		a.reader.scrollBy(-gtx.Dp(readerScrollStep))
+	case bits&keyScrollDown != 0:
+		a.reader.scrollBy(gtx.Dp(readerScrollStep))
+	case bits&keyPageUp != 0:
+		a.reader.scrollPage(gtx, -1)
+	case bits&keyPageDown != 0:
+		a.reader.scrollPage(gtx, 1)
+	}
+	if bits&keyTop != 0 {
+		a.reader.scrollToEdge(false)
+	}
+	if bits&keyBottom != 0 {
+		a.reader.scrollToEdge(true)
+	}
+}
+
+// openAdjacentThread opens the conversation delta rows away from the one being
+// read and moves the keyboard cursor with it, so the list highlights the row the
+// reader went to. Conversations opened outside the list (a mailto draft) have no
+// neighbours and leave the reader alone, as does the edge of the page.
+func (a *App) openAdjacentThread(delta int) {
+	for i := range a.list.threads {
+		if a.list.threads[i].ID != a.thread.ID {
+			continue
+		}
+		if next := i + delta; next >= 0 && next < len(a.list.threads) {
+			a.setCursor(next)
+			a.openThread(a.list.threads[next])
+		}
+		return
+	}
+}
+
+// pageCursorStep is how many rows one PageUp/PageDown moves the keyboard
+// cursor: as many as the list showed on the previous frame, so the row just
+// below the edge becomes the one under the cursor.
+func (a *App) pageCursorStep() int {
+	if n := a.list.list.Position.Count; n > 1 {
+		return n
+	}
+	return 1
 }
 
 // moveCursor moves the keyboard cursor by delta rows and asks the list to
 // reveal it.
 func (a *App) moveCursor(delta int) {
+	if len(a.list.threads) == 0 {
+		return
+	}
+	if a.cursorThread < 0 {
+		// The first move lands on the first row, from either direction.
+		a.setCursor(0)
+		return
+	}
+	a.setCursor(a.cursorThread + delta)
+}
+
+// setCursor moves the keyboard cursor to row i, clamped to the page, and asks
+// the list to reveal it.
+func (a *App) setCursor(i int) {
 	n := len(a.list.threads)
 	if n == 0 {
 		return
 	}
-	next := a.cursorThread + delta
-	if a.cursorThread < 0 {
-		next = 0
+	if i < 0 {
+		i = 0
 	}
-	if next < 0 {
-		next = 0
+	if i >= n {
+		i = n - 1
 	}
-	if next >= n {
-		next = n - 1
-	}
-	if next == a.cursorThread {
+	if i == a.cursorThread {
 		return
 	}
-	a.cursorThread = next
+	a.cursorThread = i
 	a.cursorMoved = true
 	a.invalidate()
 }

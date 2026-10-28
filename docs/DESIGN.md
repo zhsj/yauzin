@@ -108,12 +108,14 @@
 ### 4.5 键盘
 
 - 所有按键在 `internal/ui/keys.go` 的单一入口路由：先镜像搜索框焦点，再分发全局层（Ctrl+W 关窗口、Ctrl+Q 退出进程），然后按「状态条 → 浮层 → 阅读器」的 Esc 顺序处理，最后才分发其余快捷键。
-- 键表 `shortcutTable` 同时驱动分发与「设置 → 快捷键」页：每条记录带分组、位、修饰键 (`mods`)、`global` 标志、Gio 键名与键帽文本，`readShortcuts(gtx, global)` 只读其中一半，设置页遍历整张表，新增按键只需改一处。列表与阅读器都生效的 E / Delete / S / U 归入「全局」组，帮助页因此不出现重复行；Esc 也在表内，按位在浮层/搜索门禁之前处理。
+- 键表 `shortcutTable` 同时驱动分发与「设置 → 快捷键」页：每条记录带分组、位、修饰键 (`mods`)、`global` 标志、Gio 键名与键帽文本，`readShortcuts(gtx, global)` 只读其中一半，设置页遍历整张表，新增按键只需改一处。列表与阅读器都生效的 E / Delete / S / U 归入「全局」组，帮助页因此不出现重复行；方向键与 PgUp/PgDn/Home/End 归入「滚动」组；Esc 也在表内，按位在浮层/搜索门禁之前处理。
 - `global` 行（Ctrl+W / Ctrl+Q）要求修饰键，因此在两道门禁之前读取，写信浮窗、设置页、搜索框聚焦时同样可用；Ctrl+W 置位 `windowActions` 的 `ActionClose`（与标题栏关闭按钮同一条路径），Ctrl+Q 调 `requestQuit()`，同帧同时按下以退出优先。
 - 搜索框焦点用 `gtx.Focused(&a.top.search)` 每帧采样，**不能**用 `gtx.Event(key.FocusFilter{...})` 去读：`FocusFilter` 同时匹配目标的 `EditEvent`/`SnippetEvent`/`SelectionEvent`/`CompositionEvent`，而 `Router.Event` 命中即从该帧删除事件，读焦点会把编辑器的文本输入一起吃掉（表现为能聚焦、光标会闪、但打不出字）。
 - 读快捷键是破坏性的，因此裸键只在没有编辑器持有键盘时才读：搜索框聚焦时只读 Esc（其余字符、退格、回车全部留给编辑器，回车才能触发 `Editor.Submit`），浮层打开时同样只处理 Esc。未读取的事件在帧末由 `Router.Frame` 直接丢弃，不会残留到编辑器失焦后才触发。全局层是例外：它只要修饰键组合，而 `widget.Editor` 只绑定 Ctrl+Z/C/V/X/A、Ctrl+Backspace/Delete、Home/End 与方向键，Ctrl+W / Ctrl+Q 不会被编辑器消费。
 - 字母键名是 Gio 的大写形式（`J`/`K`/`C`…），普通字母过滤不带修饰键，所以 `Ctrl+C` 不会被当成「写信」；反过来 `key.Filter.Required` 的匹配要求事件修饰键是该集合的子集，`Ctrl+Shift+W` 也不会触发「关闭窗口」。
 - 列表有一个键盘光标（`cursorThread`，页/文件夹切换时清空），行高亮复用选中色；移出视口时通过设置 `layout.List.Position.First` 拉回可见区域。动作快捷键复用与鼠标相同的 `App` 方法，不另开一条数据通路。
+- 「滚动」组在两个视图中语义随上下文：列表里 ↑/↓ 与 J/K 逐行移动光标，PgUp/PgDn 一步移动上一帧可见行数（`layout.List.Position.Count`），Home/End 跳到首/末行；阅读器里 ↑/↓ 每次滚动 `readerScrollStep`（约三行正文），PgUp/PgDn 滚动「上一帧可视高度 − `readerPageOverlap`」，Home/End 回到正文首/末条。J/K 在阅读器里切换相邻会话（`openAdjacentThread` 同步列表光标，到页首/页尾即停，不循环），因此键表把方向键从原来的 `J`/`↓` 共用行里拆了出来。
+- 阅读器滚动直接改 `layout.List.Position.Offset`：`layout.List` 只处理指针滚轮，`ScrollBy` 以条目为单位、对高度差异极大的消息卡会跳，所以按像素偏移滚动。键盘在布局之前读取，翻页高度取上一帧在 `layout.Flexed` 子树记录的 `readerView.viewH`，首帧为 0 时回退窗口高度；跨卡与两端由 `layout.List` 自行纠正（负偏移回补上一条，末尾夹到底部），`openThread` 的 `reader.reset()` 负责切会话时回到顶部。
 - 焦点归属由 App 自己声明：打开会话、切文件夹、关闭浮层都会请求把焦点交还窗口根，避免搜索框在别处继续吃字符；`/` 主动把焦点交给搜索框。写信浮窗没有发送快捷键（Ctrl+Enter 不发送），打开后按模式分派首帧焦点：回复给正文，新邮件与转发给「收件人」。因此 `showOverlay` 不替写信浮窗排队 `blurRequested`：那条失焦要等下一帧才执行，正好落在浮窗刚拿到焦点之后，会把焦点抢回窗口根（表现为光标闪一帧、随后打不出字）。设置、菜单、账号对话框这类不自行聚焦的浮层仍然排队失焦。
 
 ### 4.4 窗口生命周期

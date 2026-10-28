@@ -3,9 +3,20 @@ package ui
 import (
 	"gioui.org/font"
 	"gioui.org/layout"
+	"gioui.org/unit"
 
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
+)
+
+const (
+	// readerScrollStep is the distance of one Up/Down press: about three lines
+	// of body text, so a key reads as a small nudge through a long message
+	// instead of a jump between cards.
+	readerScrollStep unit.Dp = 60
+	// readerPageOverlap stays on screen after a PageUp/PageDown, so the line
+	// the reader was at is still there to pick the reading back up.
+	readerPageOverlap unit.Dp = 40
 )
 
 // readerView renders one conversation: a toolbar, the subject headline and one
@@ -17,6 +28,11 @@ type readerView struct {
 	list  layout.List
 	cards map[string]*messageCard
 	atts  map[string]*pillButton
+
+	// viewH is the height of the scrolling area on the last frame. The keys are
+	// read before layout, so a PageUp/PageDown step comes from the frame that
+	// was just drawn.
+	viewH int
 
 	back    *iconButton
 	archive *iconButton
@@ -102,6 +118,7 @@ func (r *readerView) Layout(gtx layout.Context) layout.Dimensions {
 			})
 		}),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			r.viewH = gtx.Constraints.Max.Y
 			return r.list.Layout(gtx, len(a.msgs), func(gtx layout.Context, i int) layout.Dimensions {
 				msg := a.msgs[i]
 				card := r.cardFor(msg.ID)
@@ -162,6 +179,46 @@ func (r *readerView) reset() {
 	r.cards = map[string]*messageCard{}
 	r.atts = map[string]*pillButton{}
 	r.list.Position = layout.Position{}
+}
+
+// scrollBy moves the conversation by dy pixels, positive scrolling down. The
+// offset is edited in place because layout.List only listens to the pointer: the
+// next Layout turns an offset past a card into a new First, walks back over the
+// previous card when the offset goes negative, and clamps both ends.
+func (r *readerView) scrollBy(dy int) {
+	if dy == 0 || len(r.app.msgs) == 0 {
+		return
+	}
+	r.list.Position.Offset += dy
+	r.app.invalidate()
+}
+
+// scrollPage moves one screenful less the overlap, so the text that was at the
+// bottom edge stays visible after the jump.
+func (r *readerView) scrollPage(gtx layout.Context, dir int) {
+	h := r.viewH
+	if h <= 0 {
+		// The keys run before the first layout of a freshly opened conversation,
+		// so no viewport has been measured yet: the window height is the closest
+		// estimate available.
+		h = gtx.Constraints.Max.Y
+	}
+	if step := h - gtx.Dp(readerPageOverlap); step > 0 {
+		r.scrollBy(dir * step)
+	}
+}
+
+// scrollToEdge jumps to the first or the last card. The last one is put at the
+// top and the list pulls the offset back to the bottom edge on the next frame.
+func (r *readerView) scrollToEdge(end bool) {
+	if len(r.app.msgs) == 0 {
+		return
+	}
+	r.list.Position.First, r.list.Position.Offset = 0, 0
+	if end {
+		r.list.Position.First = len(r.app.msgs) - 1
+	}
+	r.app.invalidate()
 }
 
 // attButton returns the download chip of one attachment. The cache key carries

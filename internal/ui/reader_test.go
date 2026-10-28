@@ -2,9 +2,14 @@ package ui
 
 import (
 	"image"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"gioui.org/io/input"
+	"gioui.org/io/key"
+	"gioui.org/layout"
 
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
@@ -226,5 +231,118 @@ func TestReaderCachesArePerMessageAndResettable(t *testing.T) {
 	a.reader.reset()
 	if len(a.reader.cards) != 0 || len(a.reader.atts) != 0 {
 		t.Fatalf("reset left %d cards and %d chips behind", len(a.reader.cards), len(a.reader.atts))
+	}
+}
+
+// openReaderTest puts the app in the reader of the first conversation of a
+// three-row page and returns a frame with the key filters registered.
+func openReaderTest(t *testing.T) (*App, *input.Router, layout.Context) {
+	t.Helper()
+	a := testApp(t)
+	a.list.setThreads(cursorThreads(3))
+	a.thread = a.list.threads[0]
+	a.selectedThread = a.thread.ID
+	for i := 0; i < 3; i++ {
+		a.msgs = append(a.msgs, &mail.Message{
+			MessageSummary: mail.MessageSummary{ID: "m" + strconv.Itoa(i)},
+			TextBody:       "a body long enough to stand in for real mail",
+		})
+	}
+	router, ops, gtx := newRouterFrame(testWindow)
+	runFrame(a, router, ops, gtx)
+	return a, router, gtx
+}
+
+// TestReaderScrollKeys pins the scroll layer: the arrows move a small step, the
+// paging keys a screenful less the overlap, and Home/End go to the edges. Each
+// key is read before the next frame lays the list out, which is exactly the
+// window in which the offset is still observable.
+func TestReaderScrollKeys(t *testing.T) {
+	a, router, gtx := openReaderTest(t)
+
+	line := gtx.Dp(readerScrollStep)
+	page := a.reader.viewH - gtx.Dp(readerPageOverlap)
+	if page <= line {
+		t.Fatalf("page step = %dpx, want more than the %dpx line step", page, line)
+	}
+
+	router.Queue(key.Event{Name: key.NameDownArrow, State: key.Press})
+	a.handleKeys(gtx)
+	if got := a.reader.list.Position.Offset; got != line {
+		t.Fatalf("offset = %d after Down, want %d", got, line)
+	}
+
+	router.Queue(key.Event{Name: key.NameUpArrow, State: key.Press})
+	a.handleKeys(gtx)
+	if got := a.reader.list.Position.Offset; got != 0 {
+		t.Fatalf("offset = %d after Up, want the top", got)
+	}
+
+	router.Queue(key.Event{Name: key.NamePageDown, State: key.Press})
+	a.handleKeys(gtx)
+	if got := a.reader.list.Position.Offset; got != page {
+		t.Fatalf("offset = %d after PgDn, want %d", got, page)
+	}
+
+	router.Queue(key.Event{Name: key.NamePageUp, State: key.Press})
+	a.handleKeys(gtx)
+	if got := a.reader.list.Position.Offset; got != 0 {
+		t.Fatalf("offset = %d after PgUp, want the top", got)
+	}
+
+	router.Queue(key.Event{Name: key.NameEnd, State: key.Press})
+	a.handleKeys(gtx)
+	if pos := a.reader.list.Position; pos.First != len(a.msgs)-1 || pos.Offset != 0 {
+		t.Fatalf("position = %+v after End, want the last card at the top", pos)
+	}
+
+	router.Queue(key.Event{Name: key.NameHome, State: key.Press})
+	a.handleKeys(gtx)
+	if pos := a.reader.list.Position; pos.First != 0 || pos.Offset != 0 {
+		t.Fatalf("position = %+v after Home, want the first card", pos)
+	}
+}
+
+// TestReaderJKNavigatesConversations checks the other half of the split: J and
+// K open the neighbouring conversation of the page and move the list cursor
+// with it, stopping at the edges instead of wrapping.
+func TestReaderJKNavigatesConversations(t *testing.T) {
+	a := testApp(t)
+	useService(a, &fakeService{})
+	a.list.setThreads(cursorThreads(3))
+	a.thread = a.list.threads[0]
+	a.selectedThread = a.thread.ID
+	a.msgs = []*mail.Message{{MessageSummary: mail.MessageSummary{ID: "m0"}}}
+
+	router, ops, gtx := newRouterFrame(testWindow)
+	runFrame(a, router, ops, gtx)
+
+	router.Queue(key.Event{Name: "J", State: key.Press})
+	a.handleKeys(gtx)
+	if a.selectedThread != "t1" || a.cursorThread != 1 {
+		t.Fatalf("after J: thread = %q, cursor = %d, want t1 at row 1",
+			a.selectedThread, a.cursorThread)
+	}
+
+	router.Queue(key.Event{Name: "K", State: key.Press})
+	a.handleKeys(gtx)
+	if a.selectedThread != "t0" || a.cursorThread != 0 {
+		t.Fatalf("after K: thread = %q, cursor = %d, want t0 at row 0",
+			a.selectedThread, a.cursorThread)
+	}
+
+	// The top of the page has no previous conversation to open.
+	router.Queue(key.Event{Name: "K", State: key.Press})
+	a.handleKeys(gtx)
+	if a.selectedThread != "t0" {
+		t.Fatalf("K at the top opened %q, want to stay on t0", a.selectedThread)
+	}
+
+	a.thread = a.list.threads[len(a.list.threads)-1]
+	a.selectedThread = a.thread.ID
+	router.Queue(key.Event{Name: "J", State: key.Press})
+	a.handleKeys(gtx)
+	if a.selectedThread != a.thread.ID {
+		t.Fatalf("J at the bottom opened %q, want to stay on %q", a.selectedThread, a.thread.ID)
 	}
 }

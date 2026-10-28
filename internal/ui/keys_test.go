@@ -15,7 +15,7 @@ import (
 // shortcuts page rely on: one row per action, one bit per row, readable caps,
 // display order by group, and a translation for every label.
 func TestShortcutTableIsConsistent(t *testing.T) {
-	if got, want := len(shortcutTable), 15; got != want {
+	if got, want := len(shortcutTable), 21; got != want {
 		t.Fatalf("shortcut table has %d rows, want %d", got, want)
 	}
 	bits := map[uint32]string{}
@@ -72,8 +72,40 @@ func TestShortcutTableIsConsistent(t *testing.T) {
 			t.Errorf("no translation for %s", s.action)
 		}
 	}
-	if len(groups) != 3 {
-		t.Errorf("shortcut table covers %d groups, want 3", len(groups))
+	if len(groups) != 4 {
+		t.Errorf("shortcut table covers %d groups, want 4", len(groups))
+	}
+}
+
+// TestArrowsScrollAndJKNavigate pins the split of the two pairs: the reader
+// scrolls on the arrows and opens the neighbouring conversation on J/K, so the
+// two may not share a row.
+func TestArrowsScrollAndJKNavigate(t *testing.T) {
+	want := map[string][]key.Name{
+		"shortcut.next": {"J"},
+		"shortcut.prev": {"K"},
+		"shortcut.up":   {key.NameUpArrow},
+		"shortcut.down": {key.NameDownArrow},
+	}
+	for _, s := range shortcutTable {
+		names, ok := want[s.action]
+		if !ok {
+			continue
+		}
+		if len(s.names) != len(names) {
+			t.Errorf("%s is bound to %v, want %v", s.action, s.names, names)
+			continue
+		}
+		for i := range names {
+			if s.names[i] != names[i] {
+				t.Errorf("%s is bound to %v, want %v", s.action, s.names, names)
+				break
+			}
+		}
+		delete(want, s.action)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing shortcut rows: %v", want)
 	}
 }
 
@@ -223,5 +255,52 @@ func TestPageChangeDropsTheCursor(t *testing.T) {
 	a.goToPage(2)
 	if a.cursorThread != -1 {
 		t.Fatalf("cursor index = %d after a page change, want -1", a.cursorThread)
+	}
+}
+
+// TestListPageAndEdgeKeys checks the paging keys on the list: PageUp/PageDown
+// move the cursor by the rows the last frame showed, Home/End jump to the
+// edges, and the arrows keep moving one row. The first frame is what registers
+// the key filters and measures the visible rows.
+func TestListPageAndEdgeKeys(t *testing.T) {
+	a := testApp(t)
+	a.list.setThreads(cursorThreads(40))
+	router, ops, gtx := newRouterFrame(testWindow)
+	runFrame(a, router, ops, gtx)
+
+	step := a.list.list.Position.Count
+	if step < 2 {
+		t.Fatalf("the list showed %d rows, want at least 2 to page by", step)
+	}
+	a.cursorThread = 10
+
+	router.Queue(key.Event{Name: key.NamePageDown, State: key.Press})
+	a.handleKeys(gtx)
+	if got := a.cursorThread; got != 10+step {
+		t.Fatalf("cursor = %d after PgDn, want %d", got, 10+step)
+	}
+
+	router.Queue(key.Event{Name: key.NamePageUp, State: key.Press})
+	a.handleKeys(gtx)
+	if got := a.cursorThread; got != 10 {
+		t.Fatalf("cursor = %d after PgUp, want 10", got)
+	}
+
+	router.Queue(key.Event{Name: key.NameEnd, State: key.Press})
+	a.handleKeys(gtx)
+	if got, want := a.cursorThread, len(a.list.threads)-1; got != want {
+		t.Fatalf("cursor = %d after End, want %d", got, want)
+	}
+
+	router.Queue(key.Event{Name: key.NameHome, State: key.Press})
+	a.handleKeys(gtx)
+	if got := a.cursorThread; got != 0 {
+		t.Fatalf("cursor = %d after Home, want 0", got)
+	}
+
+	router.Queue(key.Event{Name: key.NameDownArrow, State: key.Press})
+	a.handleKeys(gtx)
+	if got := a.cursorThread; got != 1 {
+		t.Fatalf("cursor = %d after Down, want 1", got)
 	}
 }
