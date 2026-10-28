@@ -1,7 +1,13 @@
 package i18n
 
-import "testing"
+import (
+	"sort"
+	"testing"
+)
 
+// TestCatalogKeyParity keeps every catalog on the same key set as English: a
+// missing key would fall back to English silently, and an extra one is a
+// message the source no longer knows about.
 func TestCatalogKeyParity(t *testing.T) {
 	source := catalogIDs[DefaultLanguage]
 	if len(source) == 0 {
@@ -12,10 +18,24 @@ func TestCatalogKeyParity(t *testing.T) {
 			continue
 		}
 		ids := catalogIDs[lang.Tag]
+		var missing, extra []string
 		for id := range source {
 			if !ids[id] {
-				t.Errorf("%s is missing key %q", lang.Tag, id)
+				missing = append(missing, id)
 			}
+		}
+		for id := range ids {
+			if !source[id] {
+				extra = append(extra, id)
+			}
+		}
+		sort.Strings(missing)
+		sort.Strings(extra)
+		for _, id := range missing {
+			t.Errorf("%s is missing key %q", lang.Tag, id)
+		}
+		for _, id := range extra {
+			t.Errorf("%s has extra key %q", lang.Tag, id)
 		}
 	}
 }
