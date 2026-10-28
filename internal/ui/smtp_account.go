@@ -21,16 +21,15 @@ import (
 // port that mode conventionally uses. The order is the order of the form.
 type securityChoice struct {
 	value string
-	label string
 	port  string
 }
 
 // securityChoices lists the transport encryptions from the most common to the
 // one that should stay an exception.
 var securityChoices = []securityChoice{
-	{value: string(smtp.SecuritySTARTTLS), label: "settings.smtpSecuritySTARTTLS", port: "587"},
-	{value: string(smtp.SecurityTLS), label: "settings.smtpSecurityTLS", port: "465"},
-	{value: string(smtp.SecurityNone), label: "settings.smtpSecurityNone", port: "25"},
+	{value: string(smtp.SecuritySTARTTLS), port: "587"},
+	{value: string(smtp.SecurityTLS), port: "465"},
+	{value: string(smtp.SecurityNone), port: "25"},
 }
 
 // securityPort returns the conventional port of one mode, empty for an unknown
@@ -44,14 +43,19 @@ func securityPort(value string) string {
 	return ""
 }
 
-// securityLabel translates the label of one mode.
+// securityLabel translates the label of one mode. The literal keys let the
+// catalog check see every message the form can show.
 func securityLabel(value string) string {
-	for _, c := range securityChoices {
-		if c.value == value {
-			return i18n.T(c.label)
-		}
+	switch value {
+	case string(smtp.SecuritySTARTTLS):
+		return i18n.T("settings.smtpSecuritySTARTTLS")
+	case string(smtp.SecurityTLS):
+		return i18n.T("settings.smtpSecurityTLS")
+	case string(smtp.SecurityNone):
+		return i18n.T("settings.smtpSecurityNone")
+	default:
+		return value
 	}
-	return value
 }
 
 // smtpDialog adds or edits one sending account. It only writes accounts.json:
@@ -141,14 +145,14 @@ func newSMTPDialog(a *App, edit *accounts.Entry) *smtpDialog {
 	for _, c := range securityChoices {
 		choice := c
 		d.secRows = append(d.secRows, &settingsRow{
-			title:  i18n.T(choice.label),
+			title:  securityLabel(choice.value),
 			active: choice.value == d.security,
 			indent: true,
 			onTap:  func() { d.setSecurity(choice.value) },
 		})
 	}
-	d.bccSwitch = newFormSwitch(bcc, "settings.smtpBccTitle", "settings.smtpBccHint")
-	proxySwitch := newFormSwitch(useProxy, "settings.accountUseProxy", "")
+	d.bccSwitch = newFormSwitch(bcc, i18n.T("settings.smtpBccTitle"), i18n.T("settings.smtpBccHint"))
+	proxySwitch := newFormSwitch(useProxy, i18n.T("settings.accountUseProxy"), "")
 	if !d.hasProxy {
 		proxySwitch.disabled = true
 		proxySwitch.subtitle = i18n.T("settings.proxyUnset")
@@ -227,11 +231,11 @@ func (d *smtpDialog) submit() {
 	if name == "" {
 		name = entry.Email
 	}
-	toast := "toast.smtpAdded"
 	if d.edit != nil {
-		toast = "toast.smtpUpdated"
+		a.notify(i18n.T("toast.smtpUpdated", map[string]string{"Name": name}), false)
+	} else {
+		a.notify(i18n.T("toast.smtpAdded", map[string]string{"Name": name}), false)
 	}
-	a.notify(i18n.T(toast, map[string]string{"Name": name}), false)
 	a.backToAccounts()
 }
 
@@ -539,11 +543,11 @@ type formSwitch struct {
 	disabled bool
 }
 
-func newFormSwitch(on bool, titleKey, subtitleKey string) *formSwitch {
-	f := &formSwitch{title: i18n.T(titleKey)}
-	if subtitleKey != "" {
-		f.subtitle = i18n.T(subtitleKey)
-	}
+// newFormSwitch builds a switch row from already translated text. The settings
+// panel is rebuilt when the language changes, so translating at construction
+// cannot leave an old language behind.
+func newFormSwitch(on bool, title, subtitle string) *formSwitch {
+	f := &formSwitch{title: title, subtitle: subtitle}
 	f.sw = newToggleSwitch(on, nil)
 	return f
 }

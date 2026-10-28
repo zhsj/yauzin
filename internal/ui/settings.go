@@ -112,26 +112,23 @@ type settingsRow struct {
 	onTap     func()
 }
 
-// logLevels lists the selectable console levels from quietest to noisiest,
-// paired with the i18n key of their label.
-var logLevels = []struct {
-	name  string
-	label string
-}{
-	{logging.LevelError, "settings.logLevelError"},
-	{logging.LevelWarn, "settings.logLevelWarn"},
-	{logging.LevelInfo, "settings.logLevelInfo"},
-	{logging.LevelDebug, "settings.logLevelDebug"},
-}
+// logLevels lists the selectable console levels from quietest to noisiest.
+var logLevels = []string{logging.LevelError, logging.LevelWarn, logging.LevelInfo, logging.LevelDebug}
 
-// logLevelLabel translates the label of a normalized level name.
+// logLevelLabel translates the name of a normalized level. The keys are
+// written out here rather than kept in a table so that every message the page
+// can show is a literal the catalog check can see.
 func logLevelLabel(name string) string {
-	for _, l := range logLevels {
-		if l.name == name {
-			return i18n.T(l.label)
-		}
+	switch name {
+	case logging.LevelError:
+		return i18n.T("settings.logLevelError")
+	case logging.LevelWarn:
+		return i18n.T("settings.logLevelWarn")
+	case logging.LevelDebug:
+		return i18n.T("settings.logLevelDebug")
+	default:
+		return i18n.T("settings.logLevelInfo")
 	}
-	return i18n.T("settings.logLevelInfo")
 }
 
 // rowDetails is the block a row expands into. The account rows and the sending
@@ -331,15 +328,15 @@ func newSettingsView(a *App) *settingsView {
 	for i := range logLevels {
 		level := logLevels[i]
 		s.logRows = append(s.logRows, &settingsRow{
-			title:  i18n.T(level.label),
-			active: level.name == a.logLevel,
+			title:  logLevelLabel(level),
+			active: level == a.logLevel,
 			indent: true,
 			onTap: func() {
-				a.setLogLevel(level.name)
+				a.setLogLevel(level)
 				s.logOpen = false
 				s.logRow.value = logLevelLabel(a.logLevel)
 				for j, row := range s.logRows {
-					row.active = logLevels[j].name == a.logLevel
+					row.active = logLevels[j] == a.logLevel
 				}
 			},
 		})
@@ -569,7 +566,7 @@ func (s *settingsView) pageContent(gtx layout.Context) layout.Dimensions {
 		for i := range sections {
 			sec := sections[i]
 			children = append(children,
-				layout.Rigid(sectionHeading(th, i18n.T(sec.group.sectionID()))),
+				layout.Rigid(sectionHeading(th, sec.group.title())),
 				layout.Rigid(settingsCard([]layout.Widget{shortcutRows(sec.rows, th)})),
 			)
 		}
@@ -831,7 +828,7 @@ func shortcutRow(gtx layout.Context, th *theme, sc shortcut) layout.Dimensions {
 			// The action takes the slack and truncates instead of pushing the
 			// caps off the row when a translation is long.
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-				return th.text(gtx, i18n.T(sc.action), 14, colText, font.Normal, 1)
+				return th.text(gtx, sc.title(), 14, colText, font.Normal, 1)
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return keyCaps(gtx, th, sc.caps)

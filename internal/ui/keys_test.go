@@ -8,7 +8,6 @@ import (
 	"gioui.org/io/system"
 	"gioui.org/layout"
 
-	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
 )
 
@@ -69,7 +68,7 @@ func TestShortcutTableIsConsistent(t *testing.T) {
 		prev = s.group
 		groups[s.group] = true
 
-		if got := i18n.T(s.action); got == s.action || got == "" {
+		if got := s.title(); got == s.action || got == "" {
 			t.Errorf("no translation for %s", s.action)
 		}
 	}

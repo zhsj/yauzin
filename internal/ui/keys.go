@@ -4,6 +4,8 @@ import (
 	"gioui.org/io/key"
 	"gioui.org/io/system"
 	"gioui.org/layout"
+
+	"github.com/zhsj/yauzin/internal/i18n"
 )
 
 // Shortcut bits. They are collected once per frame so no shortcut can leave an
@@ -36,15 +38,17 @@ const (
 	groupReader
 )
 
-// sectionID is the i18n key of the section heading this group is shown under.
-func (g shortcutGroup) sectionID() string {
+// title is the section heading this group is shown under. The translations
+// are called with literal keys so the catalog check can see every message the
+// shortcuts page can show.
+func (g shortcutGroup) title() string {
 	switch g {
 	case groupList:
-		return "shortcut.groupList"
+		return i18n.T("shortcut.groupList")
 	case groupReader:
-		return "shortcut.groupReader"
+		return i18n.T("shortcut.groupReader")
 	default:
-		return "shortcut.groupGlobal"
+		return i18n.T("shortcut.groupGlobal")
 	}
 }
 
@@ -96,6 +100,47 @@ var shortcutTable = []shortcut{
 	{"shortcut.select", groupList, keyToggle, false, 0, []key.Name{"X"}, []string{"X"}},
 	{"shortcut.reply", groupReader, keyReply, false, 0, []key.Name{"R"}, []string{"R"}},
 	{"shortcut.forward", groupReader, keyForward, false, 0, []key.Name{"F"}, []string{"F"}},
+}
+
+// title translates the action shown on the shortcuts page. The literal keys
+// are spelled out so the catalog check can see every message the page can
+// show; a new row without an entry here falls back to its identifier and the
+// consistency test catches it.
+func (sc shortcut) title() string {
+	switch sc.action {
+	case "shortcut.search":
+		return i18n.T("shortcut.search")
+	case "shortcut.compose":
+		return i18n.T("shortcut.compose")
+	case "shortcut.close":
+		return i18n.T("shortcut.close")
+	case "shortcut.archive":
+		return i18n.T("shortcut.archive")
+	case "shortcut.delete":
+		return i18n.T("shortcut.delete")
+	case "shortcut.star":
+		return i18n.T("shortcut.star")
+	case "shortcut.read":
+		return i18n.T("shortcut.read")
+	case "shortcut.closeWindow":
+		return i18n.T("shortcut.closeWindow")
+	case "shortcut.quit":
+		return i18n.T("shortcut.quit")
+	case "shortcut.next":
+		return i18n.T("shortcut.next")
+	case "shortcut.prev":
+		return i18n.T("shortcut.prev")
+	case "shortcut.open":
+		return i18n.T("shortcut.open")
+	case "shortcut.select":
+		return i18n.T("shortcut.select")
+	case "shortcut.reply":
+		return i18n.T("shortcut.reply")
+	case "shortcut.forward":
+		return i18n.T("shortcut.forward")
+	default:
+		return sc.action
+	}
 }
 
 // handleKeys routes the keyboard before anything is laid out. The rules, in
