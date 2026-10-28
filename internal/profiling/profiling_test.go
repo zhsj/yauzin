@@ -4,62 +4,9 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"testing"
 	"time"
 )
-
-// TestPort pins the translation of the variable into a port: anything that is
-// not a plain number in range keeps the server off, because guessing what an
-// address-shaped value meant is how a heap snapshot ends up on the network.
-func TestPort(t *testing.T) {
-	tests := []struct {
-		name    string
-		value   string
-		unset   bool
-		want    int
-		wantOK  bool
-		wantErr bool
-	}{
-		{name: "unset", unset: true},
-		{name: "empty", value: ""},
-		{name: "port", value: "6060", want: 6060, wantOK: true},
-		{name: "lowest port", value: "1", want: 1, wantOK: true},
-		{name: "highest port", value: "65535", want: 65535, wantOK: true},
-		{name: "surrounding space", value: " 6060 ", want: 6060, wantOK: true},
-		{name: "zero", value: "0", wantErr: true},
-		{name: "above range", value: "65536", wantErr: true},
-		{name: "negative", value: "-1", wantErr: true},
-		{name: "not a number", value: "abc", wantErr: true},
-		{name: "host and port", value: "127.0.0.1:6060", wantErr: true},
-		{name: "wildcard", value: "0.0.0.0:6060", wantErr: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.unset {
-				// Setenv registers the restore of the original value; the
-				// unset that follows it is what this case is about.
-				t.Setenv(Env, "0")
-				if err := os.Unsetenv(Env); err != nil {
-					t.Fatalf("unset %s: %v", Env, err)
-				}
-			} else {
-				t.Setenv(Env, tt.value)
-			}
-
-			port, ok, err := Port()
-			if gotErr := err != nil; gotErr != tt.wantErr {
-				t.Fatalf("Port() error = %v, wantErr %t", err, tt.wantErr)
-			}
-			if ok != tt.wantOK {
-				t.Fatalf("Port() ok = %t, want %t", ok, tt.wantOK)
-			}
-			if port != tt.want {
-				t.Fatalf("Port() = %d, want %d", port, tt.want)
-			}
-		})
-	}
-}
 
 // TestStartServesProfiles checks the endpoints on a real listener: the heap
 // profile is what the server exists for, and an index that answers while the

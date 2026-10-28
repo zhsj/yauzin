@@ -1,10 +1,10 @@
 // Package profiling serves the Go runtime profiles over HTTP.
 //
-// The server is off unless YAUZIN_PPROF_PORT names a port, and it always
-// listens on the loopback address: a heap snapshot describes everything the
-// process holds, so it must not be reachable from the network. The port is
-// the only thing the environment chooses, which keeps the setting free of
-// address parsing and of any way to pick a routable interface.
+// The server is off unless internal/env reports a port from
+// YAUZIN_PPROF_PORT, and it always listens on the loopback address: a heap
+// snapshot describes everything the process holds, so it must not be
+// reachable from the network. This package only listens; reading the
+// variable and validating the port belong to internal/env.
 //
 // The server is a debugging aid, never part of startup: callers log a failure
 // and carry on.
@@ -15,31 +15,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
-	"os"
 	"strconv"
-	"strings"
 )
-
-// Env is the variable that enables the server. Its value is a port number.
-const Env = "YAUZIN_PPROF_PORT"
 
 // host is the only address the server binds to.
 const host = "127.0.0.1"
-
-// Port reads Env and returns the port to listen on. ok is false when the
-// variable is unset or empty, which leaves the server off. err reports a value
-// that is not a port number in 1..65535.
-func Port() (port int, ok bool, err error) {
-	raw := strings.TrimSpace(os.Getenv(Env))
-	if raw == "" {
-		return 0, false, nil
-	}
-	port, err = strconv.Atoi(raw)
-	if err != nil || port < 1 || port > 65535 {
-		return 0, false, fmt.Errorf("%s=%q is not a port number in 1..65535", Env, raw)
-	}
-	return port, true, nil
-}
 
 // Start listens on the loopback address and serves /debug/pprof/* in the
 // background. The listener is bound before Start returns, so a port that is

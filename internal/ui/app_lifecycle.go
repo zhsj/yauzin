@@ -18,6 +18,7 @@ import (
 	"gioui.org/x/explorer"
 
 	"github.com/zhsj/yauzin/internal/cursor"
+	"github.com/zhsj/yauzin/internal/env"
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/logging"
 	"github.com/zhsj/yauzin/internal/mail"
@@ -88,7 +89,7 @@ func Run(args []string) {
 
 	// Profiling is opt-in and never part of startup: a port that is invalid
 	// or busy only costs the endpoints, not the app.
-	if port, ok, err := profiling.Port(); err != nil {
+	if port, ok, err := env.PprofPort(); err != nil {
 		slog.Warn("invalid profile port", "err", err)
 	} else if ok {
 		if addr, err := profiling.Start(port); err != nil {

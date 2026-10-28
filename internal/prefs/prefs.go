@@ -11,6 +11,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/zhsj/yauzin/internal/env"
 )
 
 // Settings is the persisted UI state.
@@ -64,10 +66,10 @@ func Save(s Settings) error {
 }
 
 // Dir returns the directory holding settings.json and accounts.json.
-// YAUZIN_CONFIG_DIR overrides the platform default, which is useful for
-// portable setups and tests.
+// YAUZIN_CONFIG_DIR (read through internal/env) overrides the platform
+// default, which is useful for portable setups and tests.
 func Dir() string {
-	if dir := os.Getenv("YAUZIN_CONFIG_DIR"); dir != "" {
+	if dir := env.ConfigDir(); dir != "" {
 		return dir
 	}
 	base, err := os.UserConfigDir()
