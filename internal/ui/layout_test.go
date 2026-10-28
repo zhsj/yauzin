@@ -30,6 +30,32 @@ func testApp(t *testing.T) *App {
 	})
 }
 
+// TestLayoutWithoutAccounts covers a release build on its first run: no
+// mailbox and no backend, yet every panel must lay out instead of panicking on
+// the missing account. The settings overlay is where the first one is added.
+func TestLayoutWithoutAccounts(t *testing.T) {
+	a := newAppWith(prefs.Settings{}, appOptions{})
+
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+	a.layout(gtx)
+	ops.Reset()
+
+	a.startInitialLoad()
+	a.layout(gtx)
+	ops.Reset()
+
+	a.overlay = newSettingsView(a)
+	a.layout(gtx)
+	ops.Reset()
+
+	a.overlay = newMenuOverlay(a, image.Rect(1100, 40, 1132, 72), menuAlignEnd, []menuItem{
+		{Label: "Manage accounts"},
+	})
+	a.layout(gtx)
+	ops.Reset()
+}
+
 func TestLayoutFrames(t *testing.T) {
 	a := testApp(t)
 	a.folders = []mail.Folder{

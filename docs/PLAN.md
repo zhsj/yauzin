@@ -11,7 +11,7 @@
 - 键盘导航（列表光标、快捷键、单一按键路由）与焦点移交。
 - 变更后保持列表滚动位置；搜索框清除按钮；文档与错误映射测试。
 - 状态条通知只保留最后一条（`show`/`clear` 停掉旧消退定时器）；`post` 的补帧重试共用单个槽位。
-- 后端装配点收敛到 `appOptions`，`newApp()` 的零配置默认仍是 demo + mock。
+- 后端装配点收敛到 `appOptions`；演示账号由 `YAUZIN_DEV` 控制，发布构建默认没有账号。
 - `mail.Service` 去掉未使用的单封 `Get`，正文只按会话读取。
 - Gmail 接入：`internal/accounts` 保存 OAuth 凭据与令牌，`internal/mail/gmail` 实现文件夹/会话列表/会话全局搜索（独立缓存）/会话正文（PKCE 回环授权）与写操作（标记/归档/删除/发信），只剩 `SaveAttachment` 返回 `ErrUnsupported`。
 - 通用代理设置：`settings.json` 的 `proxy`，账号条目只记 `useProxy`；保存后按新代理重建对应后端。

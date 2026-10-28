@@ -18,7 +18,9 @@
 
 依赖方向单向：`cmd` → `internal/ui` → 领域包；`internal/ui` 只依赖 `mail.Service` 接口，不依赖任何具体后端。各文件职责见 [§15 目录结构](#15-目录结构)，契约与不变量见下文。
 
-- **后端装配点**：`internal/ui/app.go` 的 `appOptions{accounts, newService, store, proxy, factory, sendSMTP}` 是唯一装配后端的地方（`sendSMTP` 是发信账号的出站 SMTP 发送函数，默认由 `smtp.New` + 代理组装，测试注入替身）。`newApp()` 读取 `settings.json` 与 `accounts.json`，账号列表 = 已存 Gmail 账号 + 始终保留的 demo 账号（`demo-gmail`，仍由 `internal/mail/mock` 服务）；`newAppWith(pref, opts)` 接受已解析的设置与注入的工厂，测试经它构造 `App`，不触碰磁盘。UI 其余部分继续只认 `mail.Service`。
+- **后端装配点**：`internal/ui/app.go` 的 `appOptions{accounts, newService, dev, store, proxy, factory, sendSMTP}` 是唯一装配后端的地方（`sendSMTP` 是发信账号的出站 SMTP 发送函数，默认由 `smtp.New` + 代理组装，测试注入替身）。`newApp()` 读取 `settings.json` 与 `accounts.json`，账号列表 = 已存 Gmail 账号；开发模式（`YAUZIN_DEV`）下再在末尾追加演示账号（`demo-gmail`，由 `internal/mail/mock` 服务），它是唯一使用 mock 后端的账号。没有任何账号时窗口以空列表打开（不阻塞启动，设置页仍可添加）。`newAppWith(pref, opts)` 接受已解析的设置与注入的工厂，测试经它构造 `App`，不触碰磁盘。UI 其余部分继续只认 `mail.Service`。
+
+- **环境变量**：`internal/env` 是本应用 `YAUZIN_*` 变量的唯一读取点（叶子包，只依赖标准库），其它包不再直接 `os.Getenv` 这些名字。目前三个：`YAUZIN_CONFIG_DIR`（覆盖配置目录，见 §10）、`YAUZIN_PPROF_PORT`（pprof 端口，未设置或空即关闭，非法值只告警）、`YAUZIN_DEV`（非空即开启开发模式，追加演示账号）。locale、光标主题、XDG 等系统变量仍由 `i18n` / `cursor` / `ui` 各自解析，不属于本包。开发模式只在 `newApp()` 启动时读取一次，经 `appOptions.dev` 传入，测试不受环境变量影响。
 
 ## 3. 后端契约（`internal/mail`）
 
@@ -38,7 +40,7 @@
 ### 3.1 Gmail 接入（`internal/mail/gmail`）
 
 - **授权**：用户自带 Google Cloud「桌面应用」OAuth 客户端，在「设置 → 账号 → 添加账号」中填写 Client ID / Secret。流程是授权码 + PKCE（`oauth2.GenerateVerifier` / `S256ChallengeOption`），回调走 `http://127.0.0.1:<随机端口>/oauth2/callback` 的一次性本地服务；scope 为 `gmail.modify` + `userinfo.profile`（不加 `openid`：不需要 ID Token；也不申请 `https://mail.google.com/`，那条更宽的权限只为永久删除所需），并带 `access_type=offline` 与 `prompt=consent` 以取得 refresh token。没有 refresh token 视为授权失败。扩大 scope 会让 Google 重新显示授权页：升级前授权的账号令牌只带 `gmail.readonly`，读邮件照常，写操作会得到 403 `insufficientPermissions`（归为 `ErrUnauthorized`，界面提示「该账号需要重新授权」），「设置 → 账号 → 重新登录」一次即补齐。授权链接不再自动交给浏览器，而是显示在对话框里（只读可选中，另有「复制链接」「在浏览器中打开」按钮），回环回调仍要求浏览器在本机。姓名取自 `https://www.googleapis.com/oauth2/v3/userinfo`，属于尽力而为：旧授权没有 profile scope 时该请求失败只记告警，账号仍以邮箱显示，重新登录一次即补齐。授权码、令牌、client secret、含密码的代理地址一律不写日志。
-- **存储**：`accounts.json`（与 `settings.json` 同目录，0600，临时文件 + rename 原子写）保存 `oauth{provider, clientId, clientSecret}` 与每账号 `{id,kind,email,name,useProxy,token{accessToken,refreshToken,tokenType,expiresAt}}`；`provider`/`kind` 都写 `gmail`（`oauth.provider` 标明凭据属于哪个后端，`kind` 复现 `mail.Kind`）。`accounts.Store.Credentials(kind)` 只在 `provider` 匹配时返回客户端，`Upsert` 拒绝空 `kind`。文件是人可读的显式格式，不兼容旧版无 `provider`/`kind` 的文件：旧条目在启动时跳过、旧凭据不被读取，重新登录一次即写出新格式（不做迁移）。`id` 为 `gmail:` + 小写邮箱，重复登录同一邮箱即覆盖（重新授权）。`name` 来自 userinfo，为空时 UI 回退显示邮箱；重新登录取不到姓名时保留已存的值。账号行本身是手风琴开关：点击展开该账号的详情（再次点击或展开另一个账号即收起），演示账号无可配置项，不显示展开箭头。详情是一块浅灰子卡片，与账号行同属一个卡片项（两者之间没有分隔线）：第一行是「通过代理连接」开关，第二行是右对齐的描边小按钮「重新登录」「删除账号」（1dp 边框、8dp 圆角、32dp 高；危险操作为红框红字，悬停浅红底）。重新登录复用已存客户端凭据，若授权得到的邮箱与目标账号不一致则报错且不写盘。删除是两段式：首次点击把操作行原地替换为「确认删除该账号？」与「取消」「确认删除」，点「取消」或收起账号、切换设置页签、面板重建都会取消待确认状态，点「确认删除」才从 `accounts.json` 移除该条目与令牌（`oauth` 客户端凭据保留；demo 账号不在文件里，不提供删除）。删除当前使用的账号会让邮箱进入空状态（文件夹、列表、阅读器清空，顶栏回到品牌名），下一个账号由用户在顶栏账号菜单选择。设置页不再高亮当前账号：切换标记只保留在顶栏菜单里。一个 `*accounts.Store` 同时被 UI 与所有后端持有，后端刷新令牌后立即回写。文件损坏只告警并退化为「仅 demo 账号」，不阻止启动。
+- **存储**：`accounts.json`（与 `settings.json` 同目录，0600，临时文件 + rename 原子写）保存 `oauth{provider, clientId, clientSecret}` 与每账号 `{id,kind,email,name,useProxy,token{accessToken,refreshToken,tokenType,expiresAt}}`；`provider`/`kind` 都写 `gmail`（`oauth.provider` 标明凭据属于哪个后端，`kind` 复现 `mail.Kind`）。`accounts.Store.Credentials(kind)` 只在 `provider` 匹配时返回客户端，`Upsert` 拒绝空 `kind`。文件是人可读的显式格式，不兼容旧版无 `provider`/`kind` 的文件：旧条目在启动时跳过、旧凭据不被读取，重新登录一次即写出新格式（不做迁移）。`id` 为 `gmail:` + 小写邮箱，重复登录同一邮箱即覆盖（重新授权）。`name` 来自 userinfo，为空时 UI 回退显示邮箱；重新登录取不到姓名时保留已存的值。账号行本身是手风琴开关：点击展开该账号的详情（再次点击或展开另一个账号即收起），演示账号无可配置项，不显示展开箭头。详情是一块浅灰子卡片，与账号行同属一个卡片项（两者之间没有分隔线）：第一行是「通过代理连接」开关，第二行是右对齐的描边小按钮「重新登录」「删除账号」（1dp 边框、8dp 圆角、32dp 高；危险操作为红框红字，悬停浅红底）。重新登录复用已存客户端凭据，若授权得到的邮箱与目标账号不一致则报错且不写盘。删除是两段式：首次点击把操作行原地替换为「确认删除该账号？」与「取消」「确认删除」，点「取消」或收起账号、切换设置页签、面板重建都会取消待确认状态，点「确认删除」才从 `accounts.json` 移除该条目与令牌（`oauth` 客户端凭据保留；demo 账号不在文件里，不提供删除）。删除当前使用的账号会让邮箱进入空状态（文件夹、列表、阅读器清空，顶栏回到品牌名），下一个账号由用户在顶栏账号菜单选择。设置页不再高亮当前账号：切换标记只保留在顶栏菜单里。一个 `*accounts.Store` 同时被 UI 与所有后端持有，后端刷新令牌后立即回写。文件损坏只告警并退化为无账号（开发模式下仍只剩 demo 账号），不阻止启动。
 - **代理**：代理地址是通用设置（`settings.json` 的 `proxy`，在「设置 → 通用 → 网络 → 代理」维护），账号条目只记 `useProxy`。开关在两处出现：添加账号/重新登录浮层里决定本次授权与该账号的初始选择；「设置 → 账号」里点击账号行展开后，浅灰子卡片的第一行「通过代理连接」可随时切换。切换只重写该账号的条目并只重建它自己的后端（开启与关闭都重建，先取消在途请求），正在浏览的邮箱会重新加载；写盘失败时开关按存储状态自动回退。未配置代理地址时该行禁用并提示先去通用页填写。保存代理后，使用代理的 Gmail 后端被关闭并重建（先取消在途请求），新 Transport 立即生效。`net/url` 只接受 `http` / `https` / `socks5` 且必须有 host 与端口；`socks5` 由 `http.Transport` 原生支持（`socks5h` 不接受：net/http 没有对应 dialer）。回环回调不经代理。
 - **请求日志**：Gmail API 的每次调用在 DEBUG 级别各记一行。单次 REST 为 `gmail request`，字段为 `account`（邮箱，去掉 `gmail:` 前缀）、`method`、`endpoint`（API path，不含 host 与 query）与 `status`；传输失败时改记 `err`、不记状态。batch 单独记一行 `gmail batch`，字段为 `account`、`endpoint`（内嵌调用共享的集合路径，如 `/gmail/v1/users/me/threads`）、`calls`（本批子请求数，满批 25）与 `status`/`err`；`endpoint` 由 `batchFetch` 显式传入而不是从 target 推断，因为 trash 的 target 含 message ID。每批一次 POST，401 重发各记一行。日志直接写在 `client.send` 与 `sendBatch` 的调用点，不包装 `http.RoundTripper`；由 `oauth2` 库发起的令牌刷新与登录授权交换不记请求日志。级别来自「设置 → 通用 → 日志」（`settings.json` 的 `logLevel`），默认 `info`，改后对运行中的后端立即生效。
 - **读取映射**：Gmail 系统标签 `INBOX/STARRED/SENT/SPAM/TRASH` 映射为 `inbox/starred/sent/spam/trash` 与对应 `FolderKind`（名称留给 UI 按 kind 翻译），侧栏顺序即 `systemFolders` 的顺序（垃圾邮件在已发送与垃圾箱之间，跟随 Gmail 网页），`DRAFT/IMPORTANT/UNREAD/CATEGORY_*` 不展示；用户标签保留 Gmail label ID 与名称；`labels.list` 返回的是部分资源（只有 id/name/type），因此未读数与颜色来自一次 **batch** 请求：`POST /batch/gmail/v1`（multipart/mixed）里每个子请求是 `labels.get?fields=messagesUnread,color/backgroundColor`，**单批 25 个子请求**、超出则分片，子请求用 `Content-ID` 索引回填，响应乱序也能对应；全部批次完成后一次性返回，补齐对应标签的未读数/颜色。一次文件夹加载因此是 `1 + ceil(L/25)` 个 HTTP 请求；单个子请求失败（标签刚被删除）只告警并按 0 显示，全部失败才报错。列表用 `threads.list`，随后用同样的一次 **batch** 请求补全本页每个会话的 `threads.get?format=metadata`（参与者、未读数、星标、附件标记与最新时间），同样**每批 25**、按 `Content-ID` 回填并按 list 顺序输出，全部批次完成后一次性返回；子请求 404（会话在两次调用之间被删除）只丢弃该行，其它子请求失败或整批失败则该次调用报错，空页不发 batch。一次列表加载因此是 `1 + ceil(N/25)` 个 HTTP 请求。搜索走同一个 `threads.list`，只带 `q`、`maxResults` 与 `fields`（不带 `labelIds`），因此也是 `1 + ceil(N/25)` 个请求。**batch 按账号串行**：`client` 持有一个容量 1、可被 ctx 取消的信号量，从发起到响应体读闭一直持有（含整批 401 重发），因此侧栏的 labels batch 与列表的 threads batch 不会叠加——Gmail 会并发执行 batch 内的子请求并按用户计并发，叠加正是触发 429 的原因。`Total` 取 `resultSizeEstimate`，缺省或用空时为 -1。浏览垃圾邮件与垃圾箱时 `threads.list` 额外带 `includeSpamTrash=true`（`hidesByDefault` 判定）：该参数默认 false 会把 SPAM/TRASH 排除在结果集外，只靠 `labelIds` 会得到空页；搜索与其它文件夹不发送它，因此语义不变。表头计数来自 `labels.get`（不受该参数影响），所以这两个文件夹的计数与列表可能不一致，这正是排查时的第一个线索。`threads.list` 的 `labelIds` 是会话内消息标签的并集，只被部分移入垃圾箱的会话会整条出现在垃圾箱列表里，与网页版按邮件展示略有差别。mock 用独立的 `stored.spam` 表达垃圾邮件（与 `trash` 分开）：垃圾邮件不出现在收件箱、标签与搜索结果里，删除后进垃圾箱并去掉 spam 标记；垃圾邮件文件夹的行只描述它自己的垃圾邮件。正文用 `format=full` 递归解析 MIME：首个 `text/plain` 与首个 `text/html` 作正文，带 `filename` 的部件只留元数据（附件下载不在本期范围）。正文一律按 UTF-8 解释：Gmail 已在服务端完成 transfer 与字符集转换，返回的字节就是 UTF-8（原件 `charset=iso-8859-1`、quoted-printable 的 `Gr=FC=DFe` 也返回 UTF-8 的 `Grüße`），而部件头仍保留原始 `charset`，所以不按头部再转一次，否则 `Grüße` 会被当成 latin-1 解成 `GrÃ¼ÃŸe`。
@@ -203,7 +205,7 @@
 
 ## 10. 持久化
 
-`internal/prefs` 以 0600 + 临时文件 + rename 原子替换写入 `os.UserConfigDir()/yauzin/settings.json`（`YAUZIN_CONFIG_DIR` 可覆盖目录）。字段：
+`internal/prefs` 以 0600 + 临时文件 + rename 原子替换写入 `os.UserConfigDir()/yauzin/settings.json`（`YAUZIN_CONFIG_DIR` 可覆盖目录，该变量由 `internal/env` 统一读取）。字段：
 
 | 字段 | 含义 |
 | --- | --- |
@@ -330,7 +332,7 @@ docker run --rm --user $(id -u):$(id -g) \
 纯 Go 包测试与格式化检查不需要容器，直接在本地（沙箱）跑：
 
 ```bash
-go test -vet=all ./internal/prefs ./internal/i18n ./internal/mail/... ./internal/tray ./internal/cursor
+go test -vet=all ./internal/env ./internal/prefs ./internal/i18n ./internal/mail/... ./internal/tray ./internal/cursor
 
 gofmt -l internal/ cmd/
 ~/go/bin/goimports -local github.com/zhsj/yauzin -l internal/ cmd/
@@ -433,6 +435,7 @@ internal/ui/filepicker.go      xdg-desktop-portal 文件选择/保存
 internal/ui/openurl.go         跨平台打开链接/文件
 internal/ui/htmlfile.go        HTML 临时文件与 CSP 注入
 internal/ui/htmlsource.go      原始邮件页（元信息 + 转义源码）
+internal/env/                  YAUZIN_* 环境变量的唯一读取点（配置目录 / pprof 端口 / 开发模式）
 internal/prefs/                设置持久化
 internal/logging/              进程级 slog level var 与控制台 text handler（stderr）
 internal/cursor/               系统光标主题解析（门户 / kreadconfig6 / gsettings）

@@ -24,6 +24,7 @@ import (
 	"gioui.org/x/explorer"
 
 	"github.com/zhsj/yauzin/internal/accounts"
+	"github.com/zhsj/yauzin/internal/env"
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/inboxwatch"
 	"github.com/zhsj/yauzin/internal/logging"
@@ -240,13 +241,17 @@ func (a *App) clientSide() bool {
 }
 
 // appOptions is the single assembly point for the backends. newApp fills it
-// from accounts.json (stored Gmail accounts plus the shipped demo one), and
-// newService builds the backend of each. The zero value keeps the demo account
-// served by the mock. A newService that returns nil leaves the account without
-// a backend, which is how tests install their own fake.
+// from accounts.json, and newService builds the backend of each. The zero value
+// is an app without accounts and with the mock backend as the fallback. A
+// newService that returns nil leaves the account without a backend, which is
+// how tests install their own fake.
 type appOptions struct {
 	accounts   []mail.Account
 	newService func(mail.Account) mail.Service
+	// dev installs the shipped demo mailbox. It is off in a release build so
+	// the window never opens on data that does not belong to the user; only
+	// newApp turns it on, from YAUZIN_DEV.
+	dev bool
 	// The real-account assembly: the shared credential store, the proxy the
 	// accounts may use and the factory that reflects proxy changes. They are
 	// nil for the zero options and for test apps.
@@ -264,11 +269,13 @@ type appOptions struct {
 	sendSMTP func(ctx context.Context, entry accounts.Entry, draft mail.Draft) error
 }
 
-// demoAccountID identifies the shipped demo mailbox, which is always served by
-// the mock backend so the app opens with something to show.
+// demoAccountID identifies the shipped demo mailbox, which exists only in
+// development mode. It is always served by the mock backend, so the app can
+// open with something to show without credentials.
 const demoAccountID = "demo-gmail"
 
-// demoAccounts is the account list of a zero configuration app.
+// demoAccounts is the account list a development build adds to the stored
+// ones.
 func demoAccounts() []mail.Account {
 	return []mail.Account{
 		{ID: demoAccountID, Kind: mail.KindGmail, Name: "Ada Chen", Email: "ada.chen@gmail.com"},
@@ -277,13 +284,27 @@ func demoAccounts() []mail.Account {
 
 // withDefaults fills the empty fields of opts.
 func (o appOptions) withDefaults() appOptions {
-	if len(o.accounts) == 0 {
-		o.accounts = demoAccounts()
+	if o.dev {
+		o.accounts = withDemoAccount(o.accounts)
 	}
 	if o.newService == nil {
 		o.newService = func(acc mail.Account) mail.Service { return mock.New(acc) }
 	}
 	return o
+}
+
+// withDemoAccount appends the demo mailbox after the real ones unless it is
+// already listed. The copy keeps a list shared between apps, as the tests
+// usually do, from growing behind its owner's back.
+func withDemoAccount(list []mail.Account) []mail.Account {
+	for _, acc := range list {
+		if acc.ID == demoAccountID {
+			return list
+		}
+	}
+	out := make([]mail.Account, 0, len(list)+1)
+	out = append(out, list...)
+	return append(out, demoAccounts()...)
 }
 
 func newApp() *App {
@@ -298,6 +319,14 @@ func newApp() *App {
 	logging.SetLevel(pref.LogLevel)
 	i18n.SetLanguage(resolveLanguage(pref.Language))
 
+	// The development mode is a launch flag, not a setting: it is read once
+	// here and carried through appOptions, so nothing below depends on the
+	// environment and the tests can pick either mode.
+	dev := env.Dev()
+	if dev {
+		slog.Info("development mode", "account", demoAccountID)
+	}
+
 	store, err := accounts.Open(prefs.Dir())
 	if err != nil {
 		// A broken accounts file costs the stored accounts, not the startup.
@@ -307,6 +336,7 @@ func newApp() *App {
 	return newAppWith(pref, appOptions{
 		accounts:     configuredAccounts(store),
 		newService:   factory.newService,
+		dev:          dev,
 		store:        store,
 		proxy:        pref.Proxy,
 		factory:      factory,
@@ -314,13 +344,14 @@ func newApp() *App {
 	})
 }
 
-// configuredAccounts lists the stored accounts followed by the demo one. An
-// account without a refresh token cannot be read, so it is skipped with a
-// warning instead of failing on the first request. The same applies to an
-// entry without a kind: it predates the typed format and cannot be handed to a
-// backend, so the user signs in again to write a new one.
+// configuredAccounts lists the stored mailboxes. An account without a refresh
+// token cannot be read, so it is skipped with a warning instead of failing on
+// the first request. The same applies to an entry without a kind: it predates
+// the typed format and cannot be handed to a backend, so the user signs in
+// again to write a new one. The demo mailbox is not part of this list:
+// withDefaults adds it in development mode.
 func configuredAccounts(store *accounts.Store) []mail.Account {
-	out := make([]mail.Account, 0, len(store.List())+1)
+	out := make([]mail.Account, 0, len(store.List()))
 	for _, e := range store.List() {
 		if e.Kind == "" {
 			slog.Warn("skip account without a kind", "account", e.ID)
@@ -337,7 +368,7 @@ func configuredAccounts(store *accounts.Store) []mail.Account {
 		}
 		out = append(out, mail.Account{ID: e.ID, Kind: e.Kind, Name: e.Name, Email: e.Email})
 	}
-	return append(out, demoAccounts()...)
+	return out
 }
 
 // serviceFactory builds the backend of one account and follows the proxy
@@ -411,8 +442,12 @@ func (a *App) sendViaSMTP(ctx context.Context, entry accounts.Entry, draft mail.
 // otherwise. A removed account keeps its ID in the settings file on purpose, so
 // falling back here is the normal path after a deletion; an account whose
 // backend could not be built must not be restored either, or the window would
-// open on a mailbox that cannot be read.
+// open on a mailbox that cannot be read. No account at all is a release build
+// on its first run, and it opens on an empty list until one is added.
 func restoredAccount(id string, accounts []mail.Account, services map[string]mail.Service) string {
+	if len(accounts) == 0 {
+		return ""
+	}
 	if id != "" {
 		for _, acc := range accounts {
 			if acc.ID != id {
