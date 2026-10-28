@@ -7,6 +7,10 @@ import (
 
 	"github.com/zhsj/yauzin/internal/singleinstance"
 	"github.com/zhsj/yauzin/internal/ui"
+
+	// Imported for its link-time side effect: it makes Gio ask the Wayland
+	// compositor for client-side decorations before the window is mapped.
+	_ "github.com/zhsj/yauzin/internal/waylanddeco"
 )
 
 func main() {
