@@ -212,10 +212,14 @@
 
   "attachment.name": "attachment",
 
-  "download.title": "Tasks",
-  "download.savedTo": "Saved to {{.Path}}",
-  "download.failed": "Failed: {{.Error}}",
-  "download.failedPartial": "Failed: {{.Error}} — the target file may be incomplete",
+  "task.title": "Tasks",
+  "task.savedTo": "Saved to {{.Path}}",
+  "task.failed": "Failed: {{.Error}}",
+  "task.failedPartial": "Failed: {{.Error}} — the target file may be incomplete",
+  "task.sending": "Sending…",
+  "task.sent": "Sent",
+  "task.cancel": "Cancel task",
+  "task.remove": "Remove task",
 
   "error.notFound": "That mail no longer exists.",
   "error.unsupported": "This account does not support that action.",

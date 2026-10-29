@@ -209,10 +209,14 @@
 
   "attachment.name": "附件",
 
-  "download.title": "任务列表",
-  "download.savedTo": "已保存到 {{.Path}}",
-  "download.failed": "失败：{{.Error}}",
-  "download.failedPartial": "失败：{{.Error}}，目标文件可能不完整",
+  "task.title": "任务列表",
+  "task.savedTo": "已保存到 {{.Path}}",
+  "task.failed": "失败：{{.Error}}",
+  "task.failedPartial": "失败：{{.Error}}，目标文件可能不完整",
+  "task.sending": "正在发送…",
+  "task.sent": "已发送",
+  "task.cancel": "取消任务",
+  "task.remove": "删除任务",
 
   "error.notFound": "邮件不存在或已被删除",
   "error.unsupported": "当前账号不支持该操作",

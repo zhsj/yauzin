@@ -86,7 +86,7 @@ func (s *sidebarView) toggleLabel(id string) {
 func (s *sidebarView) Layout(gtx layout.Context) layout.Dimensions {
 	th := s.app.th
 	return layout.Inset{Top: 8, Right: 8, Bottom: 8, Left: 8}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		if s.app.downloads.empty() {
+		if s.app.tasks.empty() {
 			return s.navLayout(gtx, th)
 		}
 		// The task list is a fixed section at the bottom: the folders and
@@ -98,7 +98,7 @@ func (s *sidebarView) Layout(gtx layout.Context) layout.Dimensions {
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Left: 6, Right: 6}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return s.app.downloads.LayoutSection(gtx, th)
+					return s.app.tasks.LayoutSection(gtx, th)
 				})
 			}),
 		)

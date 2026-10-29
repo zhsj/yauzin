@@ -94,24 +94,35 @@ func (a *App) saveAttachment(msgID string, att mail.Attachment) {
 		return
 	}
 
-	task := a.downloads.begin(msgID+"\x00"+att.ID, att.Filename)
+	task := a.tasks.begin(taskDownload, msgID+"\x00"+att.ID, att.Filename)
 	if task == nil {
 		// The same attachment is already downloading: one transfer is enough.
 		return
 	}
 	id := task.id
+	// The parent context is what the row's dismiss control cancels. The
+	// transfer timeout is applied only after the dialog returns, so a slow
+	// dialog does not eat into the download budget.
+	ctx, cancel := context.WithCancel(context.Background())
+	a.tasks.setCancel(id, cancel)
 	report := func(pr mail.Progress) {
-		a.post(func() { a.downloads.progress(id, pr) })
+		a.post(func() { a.tasks.progress(id, pr) })
 	}
 	fail := func(err error, partial bool) {
 		logErr("save attachment", err)
 		a.post(func() {
-			a.downloads.fail(id, err, partial)
+			// The row was dismissed meanwhile: the user asked for the
+			// transfer to stop, so its failure is not news.
+			if a.tasks.find(id) == nil {
+				return
+			}
+			a.tasks.fail(id, err, partial)
 			a.notify(i18n.T("toast.saveFailed", map[string]string{"Error": errorText(err)}), true)
 		})
 	}
 
 	go func() {
+		defer cancel()
 		// The dialog comes first: the user picks the destination before any
 		// byte is downloaded, and the download timeout starts only afterwards.
 		w, err := exp.CreateFile(att.Filename)
@@ -119,21 +130,30 @@ func (a *App) saveAttachment(msgID string, att mail.Attachment) {
 			if errors.Is(err, explorer.ErrUserDecline) {
 				// A cancelled dialog is not a failure: nothing was downloaded
 				// and no task is left behind.
-				a.post(func() { a.downloads.cancel(id) })
+				a.post(func() { a.tasks.drop(id) })
 				return
 			}
 			logErr("open save dialog", err)
 			msg := i18n.T("compose.attachUnavailable")
 			a.post(func() {
-				a.downloads.fail(id, errors.New(msg), false)
+				if a.tasks.find(id) == nil {
+					return
+				}
+				a.tasks.fail(id, errors.New(msg), false)
 				a.notify(msg, true)
 			})
 			return
 		}
+		if ctx.Err() != nil {
+			// Dismissed while the dialog was open: the portal already created
+			// the file, but there is no task left to report a transfer into it.
+			_ = w.Close()
+			return
+		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), timeoutAttach)
-		defer cancel()
-		saveErr := svc.SaveAttachment(ctx, msgID, att.ID, w, report)
+		dl, stop := context.WithTimeout(ctx, timeoutAttach)
+		defer stop()
+		saveErr := svc.SaveAttachment(dl, msgID, att.ID, w, report)
 		// Closing commits the portal write; a close error is the only sign the
 		// file never made it, so it counts as a failed save.
 		closeErr := w.Close()
@@ -148,7 +168,7 @@ func (a *App) saveAttachment(msgID string, att mail.Attachment) {
 			fail(closeErr, true)
 			return
 		}
-		a.post(func() { a.downloads.finish(id, savedName(w, att.Filename)) })
+		a.post(func() { a.tasks.finish(id, savedName(w, att.Filename)) })
 	}()
 }
 

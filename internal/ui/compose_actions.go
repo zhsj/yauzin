@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"strings"
 
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
@@ -59,6 +60,11 @@ func (c *composeView) send() {
 
 	c.sending = true
 	c.errMsg = ""
+	// A send is a background job like a download: the task row in the sidebar
+	// reports it, and keeps reporting after the draft is gone.
+	name := subjectOrPlaceholder(strings.Join(strings.Fields(draft.Subject), " "))
+	task := c.app.tasks.begin(taskSend, "", name)
+	taskID := task.id
 	// The account the draft belongs to. Sending may outlive a switch, so the
 	// completion still has to reset this composer, but only the original
 	// mailbox is refreshed afterwards.
@@ -70,9 +76,10 @@ func (c *composeView) send() {
 			c.removeStaged()
 		}
 	}
-	c.app.async("send", timeoutSend, nil,
+	cancel := c.app.async("send", timeoutSend, nil,
 		deliver,
 		func() {
+			c.app.tasks.finish(taskID, "")
 			finish()
 			// Only close the layer this window owns: the user may have opened
 			// settings or another draft in the meantime.
@@ -89,7 +96,14 @@ func (c *composeView) send() {
 			}
 		},
 		func(err error) {
+			// A dismissed task means the user cancelled the send: the draft
+			// keeps its content and the failure is not reported.
+			cancelled := c.app.tasks.find(taskID) == nil
+			c.app.tasks.fail(taskID, err, false)
 			finish()
+			if cancelled {
+				return
+			}
 			msg := i18n.T("compose.sendFailed", map[string]string{"Error": errorText(err)})
 			if c.app.overlay == c {
 				c.errMsg = msg
@@ -99,6 +113,12 @@ func (c *composeView) send() {
 			// longer show the error.
 			c.app.notify(msg, true)
 		})
+	c.app.tasks.setCancel(taskID, func() {
+		// Cancelling the work also releases the composer: it stays open with
+		// the draft untouched so the message can be sent again.
+		cancel()
+		c.sending = false
+	})
 }
 
 // addAttachment is called on the UI goroutine after the file picker returns.
