@@ -259,10 +259,10 @@ func (c *messageCard) expanded(gtx layout.Context, msg *mail.Message) layout.Dim
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 					return column(gtx,
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return c.name.Line(gtx, th, msg.ID, senderName(msg.From), textMain, colText, font.Bold)
+							return c.name.Line(gtx, c.reader, msg.ID, senderName(msg.From), textMain, colText, font.Bold)
 						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return c.addr.Line(gtx, th, msg.ID, msg.From.Email, textMeta, colMuted, font.Normal)
+							return c.addr.Line(gtx, c.reader, msg.ID, msg.From.Email, textMeta, colMuted, font.Normal)
 						}),
 					)
 				}),
@@ -330,12 +330,11 @@ func (c *messageCard) foldTarget(gtx layout.Context, th *theme, click *widget.Cl
 // surface that gets bodyLineHeight: a placeholder hint is a single line, so it
 // keeps the default spacing.
 func (c *messageCard) body(gtx layout.Context, msg *mail.Message) layout.Dimensions {
-	th := c.reader.app.th
 	body := strings.TrimSpace(msg.TextBody)
 	if body == "" {
-		return c.bodyText.Wrap(gtx, th, msg.ID, i18n.T("reader.noPlainText"), textMain, 0, colMuted, font.Normal)
+		return c.bodyText.Wrap(gtx, c.reader, msg.ID, i18n.T("reader.noPlainText"), textMain, 0, colMuted, font.Normal)
 	}
-	return c.bodyText.Wrap(gtx, th, msg.ID, body, textMain, bodyLineHeight, colText, font.Normal)
+	return c.bodyText.Wrap(gtx, c.reader, msg.ID, body, textMain, bodyLineHeight, colText, font.Normal)
 }
 
 func (c *messageCard) attachments(gtx layout.Context, msg *mail.Message) layout.Dimensions {

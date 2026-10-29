@@ -155,6 +155,7 @@
 11. **转圈自驱帧**：列表工具栏刷新按钮的 `spinning` 在绘制时 `gtx.Execute(op.InvalidateCmd{})` 请求下一帧，`spinStart` 只在旋转期间非零（停止时归零，下次从正立开始）。`listToolbar.setLoading` 是唯一切换点，并给 45s 看门狗（`loadingUntil`，`Layout` 里过期即清除）：任何遗漏的清除路径最多多转一个看门狗周期，不会留下永久 60fps。转圈期间按钮吞点击，避免连点叠出多次 reload；不要用 `setDisabled` 表达转圈，它会把字形压到 35% 不透明度。
 12. **可选文字与可点区域共存**：`widget.Selectable` 的点击/拖拽手势只认主键与触摸（`gesture.Click` / `gesture.Drag` 内部过滤），右键既不会清空选区也不会被它消费；要抓右键必须自己声明区域并在读事件时判断 `e.Buttons`，`pointer.Filter` 没有按键维度。该区域必须是 pass-through（`pointer.PassOp`）且声明在文字之后，否则会挡住下层的选区手势。父级 `Clickable` 与文字同时收到点击，所以「整行可点 + 文字可选」无法靠事件顺序区分：展开的邮件卡把可点区域拆到非文字部分（头像 / 时间 / 箭头），点击发件人姓名与地址只定位光标。选区状态由 `textSelection` 按 owner（消息或会话 ID）重建，见 `internal/ui/textselection.go`。
 13. **失去焦点的选区仍要可见，剪贴板写入要等一帧**：`Selectable` 默认只在获得焦点时绘制高亮，而右键菜单会通过 `showOverlay` 排队 `blurRequested` 把焦点交还窗口根；阅读器因此在 `textSelection.Select` 统一置 `PaintSelectionWhenUnfocused`，菜单打开后选区仍然可见。剪贴板写入不能发生在 `menuItem.OnTap` 里（没有 `layout.Context`）：`App.copyText` 只把文本放进 `clipPending`，`App.layout` 开头的 `flushClipboard` 在下一帧执行 `clipboard.WriteCmd`。
+14. **一个阅读器只有一处选区**：`Selectable` 不提供选区变化回调，所以 `textSelection` 每帧比较 `sel.Selection()` 的 `(start, end)` 与上一帧记录（`seenStart`/`seenEnd`），范围变化即上报 `readerView.retireSelections`，由后者把标题与所有卡片的其余 run `ClearSelection()`。另外在读 `pointer.Press` 时，主键（或 `pointer.Touch`）按下也要清空其它 run，这样"点一下别处"就取消旧高亮；右键不能清，否则菜单拿不到选区。清空必须主动遍历 `r.cards`，不能等下一次布局：折叠或滚出视口的卡片不会被绘制，但 `replySelection` 仍会读到它。清掉非空选区后用 `invalidateAfterTap` 请求一帧，因为先绘制的 run 已经带着旧高亮画完了。
 
 ## 7. 窗口装饰（CSD）与光标
 
@@ -192,6 +193,7 @@
 
 - 阅读器只渲染 `text/plain`（可选中复制），HTML 与原文都从每封邮件卡片头部的「更多」菜单打开，回复/转发旁不再有浏览器按钮。选区按 `msg.ID` 变化时重建/清空，避免跨邮件残留；回复时该邮件自身的选区会成为引用内容（见 §4.3）。
 - **可选文字**：会话主题（归属会话 ID）与展开卡片里的发件人姓名、邮箱地址（归属消息 ID）都用 `theme.selectableText` / `selectableLine` 绘制，可拖选与 Ctrl+C；姓名与地址是单行省略号，卡片头部行高不变。选区高亮在失焦时仍绘制（见 §6.13）。切换会话由 `readerView.reset()` 清空，切换消息由 owner 变化重建。
+- **单一选区**：整个阅读器同一时刻只有一处选区。在标题、某封邮件的姓名、地址或正文里开始新的选择，会清掉其它所有位置的选区（含同一会话其它邮件、折叠或滚出视口的卡片），点击另一段文字（即使只是定位光标）也会取消旧高亮；右键不清空，以便菜单作用于该段选区。实现见 §6.14。
 - **选区右键菜单**：主题、姓名、地址、正文共用 `App.selectionMenuItems`，菜单锚点是窗口指针位置（`App.pointer`）。恒有「复制」；选区去掉首尾空白后是完整的 `http://` / `https://` 地址（`webURL`：`url.Parse` 成功且 host 非空）时多出「在浏览器中打开」，交给 `openPath`；其它 scheme（`file:`、`javascript:`、`mailto:` 等）一律不提供该项。没有选区时右键不弹菜单。
 - **折叠区域**：展开卡片不再整行可点——点击发件人姓名/地址只定位光标；折叠由头像、时间与右上箭头三个小 `Clickable` 承担（`messageCard.foldTarget`）。折叠状态的摘要行保持整行可点。
 - 菜单三项：`安全预览`（注入严格 CSP）、`完整预览（不安全）`（只声明 charset，不加策略，脚本与远程资源可用，风险写在文案里且不再二次确认）、`查看原始邮件`（`RawMessage` → 原文页）。前两项仅在有 HTML 正文时出现，第三项恒有。菜单项文案不复用旧键 `reader.openInBrowser`。

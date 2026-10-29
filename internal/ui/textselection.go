@@ -27,6 +27,11 @@ import (
 type textSelection struct {
 	owner string
 	sel   widget.Selectable
+	// seenStart and seenEnd are the selection range this run last reported.
+	// They are what tells a new selection made here from the one the reader
+	// already retired the other runs for: Gio's Selectable has no callback for
+	// it, so the range is compared frame by frame.
+	seenStart, seenEnd int
 	// pressed records a secondary-button press routed to this run during the
 	// frame being laid out. Take consumes it.
 	pressed bool
@@ -39,10 +44,39 @@ func (s *textSelection) Select(owner string) *widget.Selectable {
 	if s.owner != owner {
 		s.owner = owner
 		s.sel = widget.Selectable{}
+		s.seenStart, s.seenEnd = 0, 0
 		s.pressed = false
 	}
 	s.sel.PaintSelectionWhenUnfocused = true
 	return &s.sel
+}
+
+// clear drops the selection of this run and forgets the range it reported, so
+// selecting the same fragment again counts as a new selection. It reports
+// whether anything was selected.
+func (s *textSelection) clear() bool {
+	had := s.sel.SelectionLen() > 0
+	if had {
+		s.sel.ClearSelection()
+	}
+	s.seenStart, s.seenEnd = 0, 0
+	return had
+}
+
+// retireOthers hands the reader the selection this run has when it differs
+// from the one reported last frame. The reader keeps one selection, so the
+// runs that held the previous fragment are cleared.
+func (s *textSelection) retireOthers(gtx layout.Context, r *readerView) {
+	start, end := s.sel.Selection()
+	if start == end {
+		s.seenStart, s.seenEnd = start, end
+		return
+	}
+	if start == s.seenStart && end == s.seenEnd {
+		return
+	}
+	s.seenStart, s.seenEnd = start, end
+	r.retireSelections(gtx, s)
 }
 
 // Selected returns the text selected in owner, or "" when the caller holds no
@@ -56,21 +90,24 @@ func (s *textSelection) Selected(owner string) string {
 }
 
 // Wrap draws wrapped selectable text of owner and declares the pointer area
-// that catches right clicks on it. lineHeight is the baseline distance; zero
+// that catches right clicks on it. The run belongs to r, which owns the one
+// selection the conversation keeps. lineHeight is the baseline distance; zero
 // keeps Gio's default of 1.2 times the text size.
-func (s *textSelection) Wrap(gtx layout.Context, th *theme, owner, txt string, size, lineHeight unit.Sp, col color.NRGBA, weight font.Weight) layout.Dimensions {
-	sel := s.ready(gtx, owner)
-	dims := th.selectableText(gtx, sel, txt, size, lineHeight, col, weight)
+func (s *textSelection) Wrap(gtx layout.Context, r *readerView, owner, txt string, size, lineHeight unit.Sp, col color.NRGBA, weight font.Weight) layout.Dimensions {
+	sel := s.ready(gtx, r, owner)
+	dims := r.app.th.selectableText(gtx, sel, txt, size, lineHeight, col, weight)
 	s.area(gtx, dims.Size)
+	s.retireOthers(gtx, r)
 	return dims
 }
 
 // Line is Wrap for a single truncated line, the way the head of a card shows
 // its sender.
-func (s *textSelection) Line(gtx layout.Context, th *theme, owner, txt string, size unit.Sp, col color.NRGBA, weight font.Weight) layout.Dimensions {
-	sel := s.ready(gtx, owner)
-	dims := th.selectableLine(gtx, sel, txt, size, col, weight)
+func (s *textSelection) Line(gtx layout.Context, r *readerView, owner, txt string, size unit.Sp, col color.NRGBA, weight font.Weight) layout.Dimensions {
+	sel := s.ready(gtx, r, owner)
+	dims := r.app.th.selectableLine(gtx, sel, txt, size, col, weight)
 	s.area(gtx, dims.Size)
+	s.retireOthers(gtx, r)
 	return dims
 }
 
@@ -87,7 +124,7 @@ func (s *textSelection) Take() (string, bool) {
 
 // ready prepares the selection state of owner and drains the presses routed to
 // this run since the last frame.
-func (s *textSelection) ready(gtx layout.Context, owner string) *widget.Selectable {
+func (s *textSelection) ready(gtx layout.Context, r *readerView, owner string) *widget.Selectable {
 	sel := s.Select(owner)
 	s.pressed = false
 	for {
@@ -97,6 +134,14 @@ func (s *textSelection) ready(gtx layout.Context, owner string) *widget.Selectab
 		}
 		pe, ok := ev.(pointer.Event)
 		if !ok {
+			continue
+		}
+		// A left click here replaces the selection of the conversation, even
+		// when it only places a caret: the reader keeps one selection, the way
+		// a single document does. A touch press carries no button, the same
+		// way Gio's click and drag gestures treat it.
+		if pe.Buttons&pointer.ButtonPrimary != 0 || pe.Source == pointer.Touch {
+			r.retireSelections(gtx, s)
 			continue
 		}
 		// Only a right click on something selected opens the menu: the entries

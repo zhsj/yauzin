@@ -104,7 +104,7 @@ func TestTextSelectionRightClickOnly(t *testing.T) {
 	at := f32.Pt(20, 12)
 	frame := func() {
 		ops.Reset()
-		s.Wrap(gtx, a.th, "m1", txt, textMain, 0, colText, font.Normal)
+		s.Wrap(gtx, a.reader, "m1", txt, textMain, 0, colText, font.Normal)
 		router.Frame(ops)
 	}
 	press := func(buttons pointer.Buttons) {
@@ -226,6 +226,140 @@ func TestRightClickOnTheBodyReportsTheFragment(t *testing.T) {
 	text, ok := card.selection()
 	if !ok || text != "https://example.com/a" {
 		t.Fatalf("body right click reported %q, %v; want the selected URL", text, ok)
+	}
+}
+
+// readerSelections builds a reader with a subject and two messages. Both cards
+// exist, so a test can give a fragment to a card that this frame does not lay
+// out.
+func readerSelections(t *testing.T) (*App, *messageCard, *messageCard) {
+	t.Helper()
+	a := testApp(t)
+	a.thread = mail.ThreadSummary{ID: "t1", Subject: "the subject"}
+	a.msgs = []*mail.Message{
+		{
+			MessageSummary: mail.MessageSummary{ID: "m1", From: mail.Address{Name: "Ada Lovelace", Email: "ada@example.com"}},
+			TextBody:       "first body",
+		},
+		{
+			MessageSummary: mail.MessageSummary{ID: "m2", From: mail.Address{Name: "Grace Hopper", Email: "grace@example.com"}},
+			TextBody:       "second body",
+		},
+	}
+	return a, a.reader.cardFor("m1"), a.reader.cardFor("m2")
+}
+
+// TestReaderKeepsOneSelection pins exclusivity across the conversation: a
+// fragment selected in the open card retires the one a collapsed card held,
+// which is never laid out and would otherwise stay hidden.
+func TestReaderKeepsOneSelection(t *testing.T) {
+	a, first, second := readerSelections(t)
+	a.expanded = map[string]bool{"m1": true}
+
+	sel := second.bodyText.Select("m2")
+	sel.SetText("second body")
+	sel.SetCaret(0, 6)
+	sel = first.name.Select("m1")
+	sel.SetText("Ada Lovelace")
+	sel.SetCaret(0, 3)
+
+	var ops op.Ops
+	a.reader.Layout(testGtx(&ops, image.Pt(900, 600)))
+
+	if got := first.name.Selected("m1"); got != "Ada" {
+		t.Fatalf("sender selection = %q, want the fragment selected last", got)
+	}
+	if got := second.bodyText.Selected("m2"); got != "" {
+		t.Fatalf("collapsed card kept %q, want its selection retired", got)
+	}
+}
+
+// TestSelectionInOneMessageRetiresTheOther covers two bodies in one frame:
+// whichever the frame lays out last wins, and only one survives.
+func TestSelectionInOneMessageRetiresTheOther(t *testing.T) {
+	a, first, second := readerSelections(t)
+	a.expanded = map[string]bool{"m1": true, "m2": true}
+
+	for _, c := range []struct {
+		card *messageCard
+		id   string
+		txt  string
+		end  int
+	}{
+		{first, "m1", "first body", 5},
+		{second, "m2", "second body", 6},
+	} {
+		sel := c.card.bodyText.Select(c.id)
+		sel.SetText(c.txt)
+		sel.SetCaret(0, c.end)
+	}
+
+	var ops op.Ops
+	a.reader.Layout(testGtx(&ops, image.Pt(900, 600)))
+
+	held := 0
+	for _, id := range []string{"m1", "m2"} {
+		card := a.reader.cards[id]
+		if card.bodyText.Selected(id) != "" {
+			held++
+		}
+	}
+	if held != 1 {
+		t.Fatalf("%d body selections survived the frame, want exactly one", held)
+	}
+}
+
+// TestSubjectSelectionRetiresTheBody covers the headline: selecting it drops
+// the fragment held by a message, and the other way round.
+func TestSubjectSelectionRetiresTheBody(t *testing.T) {
+	a, card, _ := readerSelections(t)
+	body := card.bodyText.Select("m1")
+	body.SetText("first body")
+	body.SetCaret(0, 5)
+
+	var ops op.Ops
+	gtx := testGtx(&ops, image.Pt(900, 600))
+	a.reader.Layout(gtx)
+	if got := card.bodyText.Selected("m1"); got != "first" {
+		t.Fatalf("body selection = %q, want it kept while the subject holds none", got)
+	}
+
+	subject := a.reader.subject.Select("t1")
+	subject.SetText("the subject")
+	subject.SetCaret(0, 3)
+	a.reader.Layout(gtx)
+
+	if got := a.reader.subject.Selected("t1"); got != "the" {
+		t.Fatalf("subject selection = %q, want the fragment selected last", got)
+	}
+	if got := card.bodyText.Selected("m1"); got != "" {
+		t.Fatalf("body kept %q after the subject was selected, want it retired", got)
+	}
+}
+
+// TestClickOnAnotherRunRetiresTheSelection pins the click rule: a plain left
+// click on a run without dragging still drops the selection held elsewhere.
+func TestClickOnAnotherRunRetiresTheSelection(t *testing.T) {
+	_, card, msg, router, ops, gtx := selectionCard(t)
+	draw := func() {
+		ops.Reset()
+		card.Layout(gtx, msg)
+		router.Frame(ops)
+	}
+
+	card.bodyText.sel.SetCaret(0, 8) // "the body"
+	draw()
+	if got := card.bodyText.Selected(msg.ID); got != "the body" {
+		t.Fatalf("body selection = %q, want the fragment before the click", got)
+	}
+
+	at := f32.Pt(64, 18) // the sender name
+	router.Queue(pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Position: at, Buttons: pointer.ButtonPrimary})
+	router.Queue(pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: at})
+	draw()
+
+	if got := card.bodyText.Selected(msg.ID); got != "" {
+		t.Fatalf("body kept %q after a click on the sender, want it retired", got)
 	}
 }
 

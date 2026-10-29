@@ -112,7 +112,7 @@ func (r *readerView) Layout(gtx layout.Context) layout.Dimensions {
 			return layout.Inset{Top: 6, Bottom: 10, Left: 18, Right: 18}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						dims := r.subject.Wrap(gtx, a.th, a.thread.ID, subjectOrPlaceholder(a.thread.Subject), textTitle, 0, colText, font.Bold)
+						dims := r.subject.Wrap(gtx, r, a.thread.ID, subjectOrPlaceholder(a.thread.Subject), textTitle, 0, colText, font.Bold)
 						// The menu is opened after the headline was drawn: it
 						// belongs to the App, which lays it out below this view.
 						if text, ok := r.subject.Take(); ok {
@@ -182,6 +182,32 @@ func (r *readerView) cardFor(id string) *messageCard {
 // given ID, or "" when nothing is selected there or the card is not built.
 func (r *readerView) replySelection(id string) string {
 	return r.cards[id].selectedText()
+}
+
+// retireSelections drops every selection of the conversation except keep's. A
+// reader holds one selection at a time: a fragment selected in one message is
+// replaced by the next one, the way a single document behaves. The runs are
+// cleared directly instead of waiting for their next layout, because a card
+// scrolled out of view or folded away would otherwise keep a selection that
+// reply quoting still finds.
+func (r *readerView) retireSelections(gtx layout.Context, keep *textSelection) {
+	dropped := false
+	if &r.subject != keep {
+		dropped = r.subject.clear() || dropped
+	}
+	for _, c := range r.cards {
+		for _, s := range [...]*textSelection{&c.name, &c.addr, &c.bodyText} {
+			if s == keep {
+				continue
+			}
+			dropped = s.clear() || dropped
+		}
+	}
+	if dropped {
+		// Runs laid out earlier in this frame were painted with their
+		// highlight already; the frame that removes it has to be requested.
+		invalidateAfterTap(gtx)
+	}
 }
 
 // reset forgets the per-message state of the previous conversation, so the
