@@ -77,6 +77,17 @@ func (s *Service) Archive(ctx context.Context, ids []string) error {
 	return s.modifyMessages(ctx, ids, nil, []string{labelInbox})
 }
 
+// MarkSpam files the messages under the spam label and takes them out of the
+// inbox, or does the reverse when spam is false. Both directions are one label
+// swap, so the conversation is reachable from exactly one of the two folders
+// afterwards.
+func (s *Service) MarkSpam(ctx context.Context, ids []string, spam bool) error {
+	if spam {
+		return s.modifyMessages(ctx, ids, []string{labelSpam}, []string{labelInbox})
+	}
+	return s.modifyMessages(ctx, ids, []string{labelInbox}, []string{labelSpam})
+}
+
 // Delete moves the messages to the trash. Gmail has no batch trash call, so the
 // per-message calls ride one multipart batch per batchLimit messages; a message
 // that is already gone counts as done, because the trash is where the caller

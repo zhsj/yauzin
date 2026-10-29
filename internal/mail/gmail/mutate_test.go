@@ -260,6 +260,9 @@ func TestWriteWithoutIDsSendsNothing(t *testing.T) {
 	if err := svc.Delete(ctx, nil); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
+	if err := svc.MarkSpam(ctx, []string{"", "  "}, true); err != nil {
+		t.Fatalf("MarkSpam: %v", err)
+	}
 }
 
 func TestArchiveRemovesTheInboxLabel(t *testing.T) {
@@ -272,6 +275,38 @@ func TestArchiveRemovesTheInboxLabel(t *testing.T) {
 	got := mods.calls()[0]
 	if !slices.Equal(got.RemoveLabelIDs, []string{labelInbox}) || len(got.AddLabelIDs) != 0 {
 		t.Fatalf("remove = %v add = %v, want INBOX removed", got.RemoveLabelIDs, got.AddLabelIDs)
+	}
+}
+
+func TestMarkSpamSwapsTheInboxAndSpamLabels(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		spam   bool
+		add    []string
+		remove []string
+	}{
+		{name: "mark spam", spam: true, add: []string{labelSpam}, remove: []string{labelInbox}},
+		{name: "not spam", spam: false, add: []string{labelInbox}, remove: []string{labelSpam}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mods := &modifyRecorder{}
+			svc := newMutationService(t, &writeBatchServer{}, mods)
+			if err := svc.MarkSpam(context.Background(), []string{"m1", "m2"}, tc.spam); err != nil {
+				t.Fatalf("MarkSpam: %v", err)
+			}
+			calls := mods.calls()
+			if len(calls) != 1 {
+				t.Fatalf("batchModify calls = %d, want 1", len(calls))
+			}
+			got := calls[0]
+			if !slices.Equal(got.IDs, []string{"m1", "m2"}) {
+				t.Fatalf("ids = %v", got.IDs)
+			}
+			if !slices.Equal(got.AddLabelIDs, tc.add) || !slices.Equal(got.RemoveLabelIDs, tc.remove) {
+				t.Fatalf("add = %v remove = %v, want add=%v remove=%v",
+					got.AddLabelIDs, got.RemoveLabelIDs, tc.add, tc.remove)
+			}
+		})
 	}
 }
 

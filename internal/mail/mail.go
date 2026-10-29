@@ -332,6 +332,12 @@ type Service interface {
 	// Archive takes the messages out of the inbox and leaves them in every
 	// other folder and label.
 	Archive(ctx context.Context, ids []string) error
+	// MarkSpam files the messages as spam when spam is true, and returns them
+	// to the inbox when it is false. Filing takes the messages out of the
+	// inbox; clearing the mark puts them back. The IDs are message IDs, like
+	// SetFlag: a caller that wants a whole conversation changed passes all of
+	// its messages.
+	MarkSpam(ctx context.Context, ids []string, spam bool) error
 	// Delete moves the messages to the trash. It never deletes permanently.
 	Delete(ctx context.Context, ids []string) error
 	Send(ctx context.Context, draft Draft) error

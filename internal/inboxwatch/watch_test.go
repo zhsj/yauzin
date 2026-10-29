@@ -48,6 +48,7 @@ func (f *fakeService) GetThread(context.Context, string) ([]*mail.Message, error
 }
 func (f *fakeService) SetFlag(context.Context, []string, mail.Flag, bool) error { return nil }
 func (f *fakeService) Archive(context.Context, []string) error                  { return nil }
+func (f *fakeService) MarkSpam(context.Context, []string, bool) error           { return nil }
 func (f *fakeService) Delete(context.Context, []string) error                   { return nil }
 func (f *fakeService) Send(context.Context, mail.Draft) error                   { return nil }
 func (f *fakeService) SaveAttachment(context.Context, string, string, string) (string, error) {

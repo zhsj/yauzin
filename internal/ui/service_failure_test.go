@@ -40,7 +40,8 @@ type fakeService struct {
 	searchErr   error
 	searchCalls []mail.SearchRequest
 
-	setFlagCalls []setFlagCall
+	setFlagCalls  []setFlagCall
+	markSpamCalls []markSpamCall
 
 	// sent keeps the drafts Send received, so a composer test can assert on
 	// the identity and recipients the UI handed to the backend.
@@ -78,6 +79,13 @@ type setFlagCall struct {
 	ids  []string
 	flag mail.Flag
 	on   bool
+}
+
+// markSpamCall is one MarkSpam the UI issued: the messages it named and the
+// direction it asked for.
+type markSpamCall struct {
+	ids  []string
+	spam bool
 }
 
 func (f *fakeService) Folders(ctx context.Context) ([]mail.Folder, error) {
@@ -167,6 +175,13 @@ func (f *fakeService) SetFlag(_ context.Context, ids []string, flag mail.Flag, o
 }
 
 func (f *fakeService) Archive(context.Context, []string) error { return nil }
+
+func (f *fakeService) MarkSpam(_ context.Context, ids []string, spam bool) error {
+	f.mu.Lock()
+	f.markSpamCalls = append(f.markSpamCalls, markSpamCall{ids: append([]string{}, ids...), spam: spam})
+	f.mu.Unlock()
+	return nil
+}
 
 func (f *fakeService) Delete(context.Context, []string) error { return nil }
 

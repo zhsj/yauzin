@@ -580,8 +580,9 @@ func matchFolder(e *stored, folderID string) bool {
 	case "starred":
 		return e.msg.Starred && !e.trash
 	case "sent":
-		// Deleting a sent message has to take it out of Sent as well.
-		return e.sent && !e.trash
+		// Deleting a sent message has to take it out of Sent as well, and so
+		// does filing it as spam: Gmail keeps spam out of every other folder.
+		return e.sent && !e.trash && !e.spam
 	case "spam":
 		return e.spam && !e.trash
 	case "trash":
@@ -717,6 +718,20 @@ func (s *Service) SetFlag(ctx context.Context, ids []string, flag mail.Flag, on 
 func (s *Service) Archive(ctx context.Context, ids []string) error {
 	return s.withStore(ctx, func() {
 		s.eachStored(ids, func(e *stored) { e.archived = true })
+	})
+}
+
+// MarkSpam implements mail.Service. Filing a message as spam takes it out of
+// the inbox and out of every label; clearing the mark puts it back in the
+// inbox, so the two directions are each other's undo.
+func (s *Service) MarkSpam(ctx context.Context, ids []string, spam bool) error {
+	return s.withStore(ctx, func() {
+		s.eachStored(ids, func(e *stored) {
+			e.spam = spam
+			// A message the user just cleared belongs in the inbox, not in an
+			// archive it may have been put in earlier.
+			e.archived = false
+		})
 	})
 }
 

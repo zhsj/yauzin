@@ -475,6 +475,117 @@ func TestSpamIsAFolderOfItsOwn(t *testing.T) {
 	}
 }
 
+// TestMarkSpamMovesTheThreadBetweenInboxAndSpam covers both directions of the
+// spam mark: filing leaves the current folder and clearing puts the
+// conversation back in the inbox, where the undo is visible.
+func TestMarkSpamMovesTheThreadBetweenInboxAndSpam(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+
+	inbox, err := s.ListThreads(ctx, mail.ListRequest{FolderID: "inbox", Limit: 200})
+	if err != nil {
+		t.Fatalf("list inbox: %v", err)
+	}
+	target := inbox.Threads[0]
+	inboxTotal := inbox.Total
+
+	if err := s.MarkSpam(ctx, target.MessageIDs, true); err != nil {
+		t.Fatalf("mark spam: %v", err)
+	}
+	inbox, err = s.ListThreads(ctx, mail.ListRequest{FolderID: "inbox", Limit: 200})
+	if err != nil {
+		t.Fatalf("list inbox after mark: %v", err)
+	}
+	if inbox.Total != inboxTotal-1 {
+		t.Fatalf("inbox holds %d conversations after the mark, want %d", inbox.Total, inboxTotal-1)
+	}
+	for _, th := range inbox.Threads {
+		if th.ID == target.ID {
+			t.Fatalf("thread %s marked as spam is still in the inbox", target.ID)
+		}
+	}
+	spam, err := s.ListThreads(ctx, mail.ListRequest{FolderID: "spam", Limit: 200})
+	if err != nil {
+		t.Fatalf("list spam: %v", err)
+	}
+	if !containsThread(spam, target.ID) {
+		t.Fatalf("thread %s marked as spam is missing from Spam", target.ID)
+	}
+	found, err := s.SearchThreads(ctx, mail.SearchRequest{Query: target.Subject})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if containsThread(found, target.ID) {
+		t.Fatalf("thread %s marked as spam is reachable by search", target.ID)
+	}
+
+	if err := s.MarkSpam(ctx, target.MessageIDs, false); err != nil {
+		t.Fatalf("clear spam: %v", err)
+	}
+	spam, err = s.ListThreads(ctx, mail.ListRequest{FolderID: "spam", Limit: 200})
+	if err != nil {
+		t.Fatalf("list spam after clear: %v", err)
+	}
+	if containsThread(spam, target.ID) {
+		t.Fatalf("thread %s cleared of spam is still in Spam", target.ID)
+	}
+	inbox, err = s.ListThreads(ctx, mail.ListRequest{FolderID: "inbox", Limit: 200})
+	if err != nil {
+		t.Fatalf("list inbox after clear: %v", err)
+	}
+	if inbox.Total != inboxTotal || !containsThread(inbox, target.ID) {
+		t.Fatalf("thread %s did not return to the inbox", target.ID)
+	}
+}
+
+// TestMarkSpamRemovesSentMessageFromSent pins the folder exclusion Gmail gives
+// spam: a conversation filed as spam leaves every other folder, Sent included.
+func TestMarkSpamRemovesSentMessageFromSent(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+
+	if err := s.Send(ctx, mail.Draft{
+		To:      []mail.Address{{Name: "Bob", Email: "bob@example.com"}},
+		Subject: "hello",
+		Body:    "body",
+	}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	sent, err := s.ListThreads(ctx, mail.ListRequest{FolderID: "sent", Limit: 200})
+	if err != nil {
+		t.Fatalf("list sent: %v", err)
+	}
+	target := sent.Threads[0]
+
+	if err := s.MarkSpam(ctx, target.MessageIDs, true); err != nil {
+		t.Fatalf("mark spam: %v", err)
+	}
+	sent, err = s.ListThreads(ctx, mail.ListRequest{FolderID: "sent", Limit: 200})
+	if err != nil {
+		t.Fatalf("list sent after mark: %v", err)
+	}
+	if containsThread(sent, target.ID) {
+		t.Fatalf("thread %s marked as spam is still in Sent", target.ID)
+	}
+	spam, err := s.ListThreads(ctx, mail.ListRequest{FolderID: "spam", Limit: 200})
+	if err != nil {
+		t.Fatalf("list spam: %v", err)
+	}
+	if !containsThread(spam, target.ID) {
+		t.Fatalf("thread %s marked as spam is missing from Spam", target.ID)
+	}
+}
+
+// containsThread reports whether a page holds the conversation.
+func containsThread(page mail.ThreadPage, id string) bool {
+	for _, th := range page.Threads {
+		if th.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 func TestSearchThreadsRequiresAQuery(t *testing.T) {
 	s := newTestService(t)
 	for _, query := range []string{"", "   "} {
