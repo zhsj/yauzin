@@ -126,9 +126,9 @@ func messageHTMLName(id, src string) string {
 }
 
 // messageHTMLNameSuffix is messageHTMLName with a mode marker. The safe
-// preview, the unrestricted one and the source page of one message must not
-// overwrite each other, so their marks sit between the content hash and the
-// extension. An empty mode keeps the original name.
+// preview and the unrestricted one of one message must not overwrite each
+// other, so their marks sit between the content hash and the extension. An
+// empty mode keeps the original name.
 func messageHTMLNameSuffix(id, src, mode string) string {
 	name := unsafeFileChars.ReplaceAllString(id, "_")
 	name = strings.Trim(name, "._")

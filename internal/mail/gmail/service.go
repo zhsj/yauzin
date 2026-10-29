@@ -10,6 +10,7 @@ package gmail
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -488,31 +489,45 @@ func (s *Service) GetThread(ctx context.Context, threadID string) ([]*mail.Messa
 	return out, nil
 }
 
-// RawMessage returns the RFC 822 source of one message.
+// SaveMessage writes the RFC 822 source of one message to w.
 //
 // format=raw is the only way to see the headers Gmail parsed away, so this is a
-// read of its own instead of a field on GetThread: the reader only asks for it
-// when the user opens the original.
-func (s *Service) RawMessage(ctx context.Context, messageID string) ([]byte, error) {
-	if strings.TrimSpace(messageID) == "" {
-		return nil, mail.ErrInvalidArgument
+// read of its own instead of a field on GetThread. The source arrives as one
+// base64url string in the JSON response, which the streamed scanner decodes
+// into w as it arrives: neither the encoded text nor the message ever sits in
+// memory as a whole.
+func (s *Service) SaveMessage(ctx context.Context, messageID string, w io.Writer, progress func(mail.Progress)) error {
+	if strings.TrimSpace(messageID) == "" || w == nil {
+		return mail.ErrInvalidArgument
 	}
 	q := url.Values{}
 	q.Set("format", "raw")
-	var m Message
-	if err := s.c.do(ctx, "messages.get", "GET", "/users/me/messages/"+url.PathEscape(messageID), q, &m); err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(m.Raw) == "" {
-		// A message the account can no longer see answers with the same shape
-		// and no source, so an empty raw is reported as missing.
-		return nil, mail.ErrNotFound
-	}
-	raw, err := decodeBase64URL(m.Raw)
+	var written int64
+	err := s.c.doStream(ctx, "messages.get", "/users/me/messages/"+url.PathEscape(messageID), q, progress, func(r io.Reader) error {
+		field, err := scanStringField(r, rawField)
+		if err != nil {
+			// A message the account can no longer see answers with the same
+			// shape and no source, so a missing raw is reported as missing.
+			return err
+		}
+		n, err := copyToTarget(w, base64.NewDecoder(base64.URLEncoding, newPaddingReader(field)))
+		written = n
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return mail.ErrNotFound
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("gmail messages.get: undecodable raw message: %w", err)
+		return err
 	}
-	return raw, nil
+	slog.Debug("gmail message saved",
+		"account", s.acc.Email,
+		"message", messageID,
+		"bytes", written)
+	return nil
 }
 
 // Close releases the idle connections this account owns.

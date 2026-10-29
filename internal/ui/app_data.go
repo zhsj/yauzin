@@ -428,56 +428,6 @@ func (a *App) openHTMLInBrowser(m *mail.Message, mode previewMode) {
 	}
 }
 
-// openMessageSource fetches the original message and shows it as a page in the
-// browser. The source is read on demand and written off the UI goroutine: the
-// reader never keeps it, and a large message must not stall the frame.
-func (a *App) openMessageSource(m *mail.Message) {
-	svc := a.service()
-	if m == nil || svc == nil {
-		return
-	}
-	dir, err := a.tempDir()
-	if err != nil {
-		logErr("temp dir", err)
-		a.notify(i18n.T("toast.openFailed", map[string]string{"Error": err.Error()}), true)
-		return
-	}
-	id, meta := m.ID, a.sourceMeta(m)
-	var path string
-	a.async("raw message", timeoutThread, nil,
-		func(ctx context.Context) error {
-			raw, err := svc.RawMessage(ctx, id)
-			if err != nil {
-				return err
-			}
-			path, err = writeMessageSource(dir, id, meta, raw)
-			return err
-		},
-		func() {
-			if err := openPath(path); err != nil {
-				logErr("open source", err)
-				a.notify(i18n.T("toast.openFailed", map[string]string{"Error": err.Error()}), true)
-			}
-		},
-		func(err error) {
-			a.notify(i18n.T("toast.openFailed", map[string]string{"Error": errorText(err)}), true)
-		})
-}
-
-// sourceMeta collects the header block of the original message page. The
-// values are display strings: the page only escapes them.
-func (a *App) sourceMeta(m *mail.Message) sourceMeta {
-	return sourceMeta{
-		MessageID: m.ID,
-		Account:   a.accountName(),
-		From:      m.From.String(),
-		To:        mail.FormatAddressList(m.To),
-		Cc:        mail.FormatAddressList(m.Cc),
-		Subject:   m.Subject,
-		Date:      formatFullTime(m.Date),
-	}
-}
-
 func logErr(op string, err error) {
 	slog.Error("mail operation failed", "op", op, "err", err)
 }

@@ -849,12 +849,12 @@ func (s *Service) SaveAttachment(ctx context.Context, messageID, attachmentID st
 	}
 
 	body := []byte(fmt.Sprintf("Yauzin 演示附件\n\n所属邮件：%s\n文件名：%s\n\n接入真实后端后，这里会是原始附件内容。\n", subject, filename))
-	return writeDemoAttachment(w, body, progress)
+	return writeDemoStream(w, body, progress)
 }
 
-// writeDemoAttachment writes the demo payload in a few chunks, so the progress
+// writeDemoStream writes a demo payload in a few chunks, so the progress
 // callback reports more than the final size.
-func writeDemoAttachment(w io.Writer, data []byte, progress func(mail.Progress)) error {
+func writeDemoStream(w io.Writer, data []byte, progress func(mail.Progress)) error {
 	total := int64(len(data))
 	step := max((len(data)+3)/4, 1)
 	for off := 0; off < len(data); off += step {
@@ -873,27 +873,31 @@ func writeDemoAttachment(w io.Writer, data []byte, progress func(mail.Progress))
 	return nil
 }
 
-// RawMessage implements mail.Service. The demo data keeps no source, so the
-// RFC 822 document is rendered from the parsed message: the headers a real
-// backend would return, plus the plain-text part.
-func (s *Service) RawMessage(ctx context.Context, messageID string) ([]byte, error) {
+// SaveMessage implements mail.Service. The demo data keeps no source, so the
+// RFC 822 document is rendered from the parsed message - the headers a real
+// backend would return, plus the plain-text part - and streamed into w the way
+// a real download arrives.
+func (s *Service) SaveMessage(ctx context.Context, messageID string, w io.Writer, progress func(mail.Progress)) error {
 	if strings.TrimSpace(messageID) == "" {
-		return nil, fmt.Errorf("%w: empty message ID", mail.ErrInvalidArgument)
+		return fmt.Errorf("%w: empty message ID", mail.ErrInvalidArgument)
+	}
+	if w == nil {
+		return mail.ErrInvalidArgument
 	}
 	if err := s.wait(ctx); err != nil {
-		return nil, err
+		return err
 	}
 	s.mu.Lock()
 	var msg *mail.Message
 	s.eachStored([]string{messageID}, func(e *stored) { msg = e.msg })
 	s.mu.Unlock()
 	if msg == nil {
-		return nil, mail.ErrNotFound
+		return mail.ErrNotFound
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return err
 	}
-	return []byte(sourceOf(msg)), nil
+	return writeDemoStream(w, []byte(sourceOf(msg)), progress)
 }
 
 // sourceOf renders one message as RFC 822 text. Header order and CRLF line

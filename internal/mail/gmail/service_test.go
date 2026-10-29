@@ -860,10 +860,11 @@ func TestGetThreadRejectsEmptyID(t *testing.T) {
 	}
 }
 
-// TestRawMessageDecodesSource pins the raw read: it asks for format=raw on the
-// message itself and turns the base64url field back into the stored bytes, in
-// both the padded and the unpadded spelling the API uses.
-func TestRawMessageDecodesSource(t *testing.T) {
+// TestSaveMessageStreamsSource pins the raw download: it asks for format=raw on
+// the message itself, writes the base64url field back to the target as the
+// stored bytes in both the padded and the unpadded spelling the API uses, and
+// reports progress up to the completed transfer.
+func TestSaveMessageStreamsSource(t *testing.T) {
 	const source = "Message-ID: <m1@example.com>\r\nSubject: Hello\r\n\r\nbody"
 	for _, tc := range []struct {
 		name string
@@ -882,24 +883,40 @@ func TestRawMessageDecodesSource(t *testing.T) {
 				writeJSON(t, w, `{"id":"m1","raw":"`+tc.raw+`"}`)
 			}))
 
-			raw, err := svc.RawMessage(context.Background(), "m1")
+			var out strings.Builder
+			var updates []mail.Progress
+			err := svc.SaveMessage(context.Background(), "m1", &out, func(p mail.Progress) {
+				updates = append(updates, p)
+			})
 			if err != nil {
-				t.Fatalf("RawMessage: %v", err)
+				t.Fatalf("SaveMessage: %v", err)
 			}
-			if string(raw) != source {
-				t.Fatalf("source = %q, want %q", raw, source)
+			if got := out.String(); got != source {
+				t.Fatalf("source = %q, want %q", got, source)
 			}
 			if want := "/users/me/messages/m1"; gotPath != want {
 				t.Fatalf("path = %q, want %q", gotPath, want)
+			}
+			if len(updates) == 0 {
+				t.Fatal("no progress was reported")
+			}
+			for i := 1; i < len(updates); i++ {
+				if updates[i].Done < updates[i-1].Done {
+					t.Fatalf("progress went backwards: %v after %v", updates[i], updates[i-1])
+				}
+			}
+			if last := updates[len(updates)-1]; last.Total <= 0 || last.Done != last.Total {
+				t.Fatalf("last progress %v, want Done == Total > 0", last)
 			}
 		})
 	}
 }
 
-func TestRawMessageErrorCategories(t *testing.T) {
+func TestSaveMessageErrorCategories(t *testing.T) {
 	t.Run("empty id", func(t *testing.T) {
 		svc, _ := newTestService(t, http.NotFoundHandler())
-		if _, err := svc.RawMessage(context.Background(), " "); !errors.Is(err, mail.ErrInvalidArgument) {
+		var out strings.Builder
+		if err := svc.SaveMessage(context.Background(), " ", &out, nil); !errors.Is(err, mail.ErrInvalidArgument) {
 			t.Fatalf("error = %v, want ErrInvalidArgument", err)
 		}
 	})
@@ -907,7 +924,8 @@ func TestRawMessageErrorCategories(t *testing.T) {
 		svc, _ := newTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(t, w, `{"id":"m1"}`)
 		}))
-		if _, err := svc.RawMessage(context.Background(), "m1"); !errors.Is(err, mail.ErrNotFound) {
+		var out strings.Builder
+		if err := svc.SaveMessage(context.Background(), "m1", &out, nil); !errors.Is(err, mail.ErrNotFound) {
 			t.Fatalf("error = %v, want ErrNotFound", err)
 		}
 	})
@@ -915,7 +933,8 @@ func TestRawMessageErrorCategories(t *testing.T) {
 		svc, _ := newTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			writeErrorJSON(t, w, http.StatusNotFound, `{"error":{"code":404,"message":"nope"}}`)
 		}))
-		if _, err := svc.RawMessage(context.Background(), "m1"); !errors.Is(err, mail.ErrNotFound) {
+		var out strings.Builder
+		if err := svc.SaveMessage(context.Background(), "m1", &out, nil); !errors.Is(err, mail.ErrNotFound) {
 			t.Fatalf("error = %v, want ErrNotFound", err)
 		}
 	})

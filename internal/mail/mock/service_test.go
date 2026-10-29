@@ -784,10 +784,10 @@ func TestDeleteIgnoresUnknownIDs(t *testing.T) {
 	}
 }
 
-// TestRawMessageRendersSource covers the demo backend's raw read: the source
-// carries the headers the reader's "view original" page shows, including the
-// message ID, and the text part.
-func TestRawMessageRendersSource(t *testing.T) {
+// TestSaveMessageRendersSource covers the demo backend's message download: the
+// source carries the headers a real backend would return, including the message
+// ID, and the text part, and the stream reports progress up to the end.
+func TestSaveMessageRendersSource(t *testing.T) {
 	s := newTestService(t)
 	ctx := context.Background()
 
@@ -804,11 +804,14 @@ func TestRawMessageRendersSource(t *testing.T) {
 	}
 	msg := msgs[0]
 
-	raw, err := s.RawMessage(ctx, msg.ID)
-	if err != nil {
-		t.Fatalf("raw message: %v", err)
+	var out bytes.Buffer
+	var updates []mail.Progress
+	if err := s.SaveMessage(ctx, msg.ID, &out, func(p mail.Progress) {
+		updates = append(updates, p)
+	}); err != nil {
+		t.Fatalf("save message: %v", err)
 	}
-	text := string(raw)
+	text := out.String()
 	// Line endings are CRLF on the wire, so compare the body with them folded.
 	folded := strings.ReplaceAll(text, "\r\n", "\n")
 	for _, want := range []string{
@@ -826,8 +829,19 @@ func TestRawMessageRendersSource(t *testing.T) {
 			t.Fatalf("source misses %q:\n%s", want, text)
 		}
 	}
+	if len(updates) == 0 {
+		t.Fatal("no progress was reported")
+	}
+	for i := 1; i < len(updates); i++ {
+		if updates[i].Done < updates[i-1].Done {
+			t.Fatalf("progress went backwards: %v after %v", updates[i], updates[i-1])
+		}
+	}
+	if last := updates[len(updates)-1]; last.Total <= 0 || last.Done != last.Total {
+		t.Fatalf("last progress %v, want Done == Total > 0", last)
+	}
 
-	if _, err := s.RawMessage(ctx, "no-such-message"); !errors.Is(err, mail.ErrNotFound) {
+	if err := s.SaveMessage(ctx, "no-such-message", io.Discard, nil); !errors.Is(err, mail.ErrNotFound) {
 		t.Fatalf("unknown message returned %v, want ErrNotFound", err)
 	}
 }
@@ -924,17 +938,17 @@ func TestSentMessageKeepsThreadHeaders(t *testing.T) {
 		t.Fatalf("Date = %v, want %v", got.Date, when)
 	}
 
-	raw, err := s.RawMessage(ctx, got.ID)
-	if err != nil {
-		t.Fatalf("raw message: %v", err)
+	var source bytes.Buffer
+	if err := s.SaveMessage(ctx, got.ID, &source, nil); err != nil {
+		t.Fatalf("save message: %v", err)
 	}
 	for _, want := range []string{
 		"Message-ID: <fixed@example.com>",
 		"In-Reply-To: <parent@example.com>",
 		"References: <root@example.com> <parent@example.com>",
 	} {
-		if !strings.Contains(string(raw), want) {
-			t.Fatalf("source misses %q:\n%s", want, raw)
+		if !strings.Contains(source.String(), want) {
+			t.Fatalf("source misses %q:\n%s", want, source.String())
 		}
 	}
 }

@@ -8,12 +8,16 @@ import (
 	"github.com/zhsj/yauzin/internal/mail"
 )
 
-// dataField is the only member of MessagePartBody that carries the payload.
-const dataField = "data"
+// Members that carry a base64url payload in the API's documents: data is the
+// content of a MessagePartBody, raw the RFC 822 source of a Message.
+const (
+	dataField = "data"
+	rawField  = "raw"
+)
 
 // jsonScanBuffer bounds what the field scanner holds while it walks a response,
 // and is the largest chunk a streamed field is read in. The memory one save
-// needs is therefore flat however large the attachment is.
+// needs is therefore flat however large the payload is.
 const jsonScanBuffer = 4 << 10
 
 // scanDataField returns a reader over the base64url text of the "data" member
@@ -24,13 +28,20 @@ const jsonScanBuffer = 4 << 10
 // hold the whole attachment in memory twice - once as the JSON string, once as
 // the decoded bytes - so the save scans to the member instead and decodes what
 // it gets while the response is still arriving.
+func scanDataField(r io.Reader) (io.Reader, error) {
+	return scanStringField(r, dataField)
+}
+
+// scanStringField returns a reader over the base64url text of the member named
+// key of a JSON document, leaving the rest of the document unread. It is what
+// scanDataField uses, and what a message download uses for its "raw" member.
 //
 // The scan is a minimal state machine over JSON string tokens rather than a
 // parser: keys are strings followed by ':', values are strings, and the
 // base64url alphabet holds no quote or backslash, so the value needs no
 // unescaping. A document without the member (a part whose content lives in the
-// payload) is reported as mail.ErrNotFound.
-func scanDataField(r io.Reader) (io.Reader, error) {
+// payload, or a message whose source is gone) is reported as mail.ErrNotFound.
+func scanStringField(r io.Reader, key string) (io.Reader, error) {
 	br, ok := r.(*bufio.Reader)
 	if !ok {
 		br = bufio.NewReaderSize(r, jsonScanBuffer)
@@ -39,11 +50,11 @@ func scanDataField(r io.Reader) (io.Reader, error) {
 		if err := skipToQuote(br); err != nil {
 			return nil, fieldErr(err)
 		}
-		key, size, err := readString(br, len(dataField))
+		name, size, err := readString(br, len(key))
 		if err != nil {
 			return nil, fieldErr(err)
 		}
-		if string(key) != dataField || size != len(dataField) {
+		if string(name) != key || size != len(key) {
 			continue
 		}
 		b, err := nextByte(br)
@@ -51,7 +62,7 @@ func scanDataField(r io.Reader) (io.Reader, error) {
 			return nil, fieldErr(err)
 		}
 		if b != ':' {
-			// A value that happens to read "data", not the key.
+			// A value that happens to read like the key, not the key.
 			continue
 		}
 		if b, err = nextByte(br); err != nil {

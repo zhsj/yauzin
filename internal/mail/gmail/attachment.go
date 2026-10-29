@@ -99,9 +99,9 @@ func (s *Service) saveBlob(ctx context.Context, messageID, attachmentID string, 
 	return written, err
 }
 
-// copyToTarget streams decoded attachment content into the target with a fixed
-// buffer, so a save costs the same memory however large the file is. io.Copy
-// would do, but the error has to say whether reading or writing broke: only the
+// copyToTarget streams a decoded payload into the target with a fixed buffer,
+// so a save costs the same memory however large the payload is. io.Copy would
+// do, but the error has to say whether reading or writing broke: only the
 // latter is a write failure.
 func copyToTarget(w io.Writer, src io.Reader) (int64, error) {
 	buf := make([]byte, 32<<10)

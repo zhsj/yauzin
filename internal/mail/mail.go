@@ -364,11 +364,14 @@ type Service interface {
 	// the transfer advances, with Done never going backwards and a last call
 	// reporting the complete size. A write error from w ends the save.
 	SaveAttachment(ctx context.Context, messageID, attachmentID string, w io.Writer, progress func(Progress)) error
-	// RawMessage returns the message source as the backend stores it, for the
-	// reader's "view original" page. It is a separate read from GetThread: the
-	// parsed bodies are all the reader shows, so the source is only fetched
-	// when the user asks for it.
-	RawMessage(ctx context.Context, messageID string) ([]byte, error)
+	// SaveMessage writes the RFC 822 source of one message to w, so the reader
+	// can hand the user a .eml file without the whole message ever sitting in
+	// memory. It is a separate read from GetThread: the parsed bodies are all
+	// the reader shows, and the source is only fetched when the user downloads
+	// it. progress follows the same contract as SaveAttachment: nil is
+	// allowed, Done never goes backwards, and the last call reports the
+	// complete size.
+	SaveMessage(ctx context.Context, messageID string, w io.Writer, progress func(Progress)) error
 	Close() error
 }
 

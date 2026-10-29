@@ -142,7 +142,7 @@ func TestReplyIgnoresAnotherMessagesSelection(t *testing.T) {
 }
 
 // TestMessageCardMenuFollowsTheMessage pins which entries a card offers: the
-// previews need an HTML body, the source view is always there.
+// previews need an HTML body, the download is always there.
 func TestMessageCardMenuFollowsTheMessage(t *testing.T) {
 	a := testApp(t)
 	withHTML := &mail.Message{MessageSummary: mail.MessageSummary{ID: "m1"}, HTMLBody: "<p>hi</p>"}
@@ -156,7 +156,7 @@ func TestMessageCardMenuFollowsTheMessage(t *testing.T) {
 		i18n.T("reader.replyAll"),
 		i18n.T("reader.menu.safePreview"),
 		i18n.T("reader.menu.fullPreview"),
-		i18n.T("reader.menu.viewSource"),
+		i18n.T("reader.menu.downloadMessage"),
 	}
 	if len(items) != len(want) {
 		t.Fatalf("menu has %d entries, want %d", len(items), len(want))
@@ -171,8 +171,8 @@ func TestMessageCardMenuFollowsTheMessage(t *testing.T) {
 	}
 
 	items = card.menuItems(a, plain)
-	if len(items) != 2 || items[0].Label != i18n.T("reader.replyAll") || items[1].Label != i18n.T("reader.menu.viewSource") {
-		t.Fatalf("text-only menu = %+v, want reply-all and the source view", items)
+	if len(items) != 2 || items[0].Label != i18n.T("reader.replyAll") || items[1].Label != i18n.T("reader.menu.downloadMessage") {
+		t.Fatalf("text-only menu = %+v, want reply-all and the download", items)
 	}
 }
 

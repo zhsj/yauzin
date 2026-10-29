@@ -102,6 +102,23 @@ func TestScanDataField(t *testing.T) {
 	}
 }
 
+// TestScanStringFieldPicksTheNamedMember pins that a message download reads the
+// "raw" member even when the document carries other base64 payloads.
+func TestScanStringFieldPicksTheNamedMember(t *testing.T) {
+	body := `{"id":"m1","payload":{"body":{"data":"ZGF0YQ"}},"raw":"cmF3"}`
+	tail, err := scanStringField(strings.NewReader(body), rawField)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	got, err := io.ReadAll(tail)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != "cmF3" {
+		t.Fatalf("field = %q, want the raw member", got)
+	}
+}
+
 // TestScanDataFieldChunked pins that the scan does not depend on how the body
 // happens to be chunked: a reader that hands out one byte at a time is the
 // worst case a socket can produce.

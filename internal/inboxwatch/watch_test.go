@@ -56,8 +56,8 @@ func (f *fakeService) SaveAttachment(context.Context, string, string, io.Writer,
 	return mail.ErrUnsupported
 }
 
-func (f *fakeService) RawMessage(context.Context, string) ([]byte, error) {
-	return nil, mail.ErrUnsupported
+func (f *fakeService) SaveMessage(context.Context, string, io.Writer, func(mail.Progress)) error {
+	return mail.ErrUnsupported
 }
 func (f *fakeService) Close() error { return nil }
 

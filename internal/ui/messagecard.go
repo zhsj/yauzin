@@ -47,7 +47,7 @@ func (c *messageCard) actions(a *App) {
 }
 
 // menuItems lists the actions of one message: reply-all is always offered, the
-// two previews need an HTML body, and the source view works for every message.
+// two previews need an HTML body, and the download works for every message.
 // The composer takes the message from the reader when the item is clicked, so
 // a refresh that replaced the message object is still quoted correctly.
 func (c *messageCard) menuItems(a *App, m *mail.Message) []menuItem {
@@ -74,9 +74,9 @@ func (c *messageCard) menuItems(a *App, m *mail.Message) []menuItem {
 			}},
 		)
 	}
-	return append(items, menuItem{Label: i18n.T("reader.menu.viewSource"), Icon: iconSource, OnTap: func() {
+	return append(items, menuItem{Label: i18n.T("reader.menu.downloadMessage"), Icon: iconFile, OnTap: func() {
 		if msg := c.message(a); msg != nil {
-			a.openMessageSource(msg)
+			a.saveMessage(msg)
 		}
 	}})
 }

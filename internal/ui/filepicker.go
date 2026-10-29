@@ -6,6 +6,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"gioui.org/x/explorer"
 
@@ -69,15 +72,46 @@ func (a *App) saveAttachment(msgID string, att mail.Attachment) {
 		a.notify(i18n.T("toast.accountUnavailable"), true)
 		return
 	}
+	a.saveDownload("save attachment", msgID+"\x00"+att.ID, att.Filename, att.Filename,
+		func(ctx context.Context, w io.Writer, report func(mail.Progress)) error {
+			return svc.SaveAttachment(ctx, msgID, att.ID, w, report)
+		})
+}
+
+// saveMessage downloads one message as an .eml file. It goes through the same
+// task row as an attachment: the dialog picks the destination, the source
+// streams into it, and the row reports progress and the saved path.
+func (a *App) saveMessage(m *mail.Message) {
+	if m == nil {
+		return
+	}
+	svc := a.service()
+	if svc == nil {
+		a.notify(i18n.T("toast.accountUnavailable"), true)
+		return
+	}
+	id := m.ID
+	name := subjectOrPlaceholder(strings.Join(strings.Fields(m.Subject), " "))
+	a.saveDownload("save message", id, name, downloadFileName(m.Subject),
+		func(ctx context.Context, w io.Writer, report func(mail.Progress)) error {
+			return svc.SaveMessage(ctx, id, w, report)
+		})
+}
+
+// saveDownload runs one download into a file the user picks. op names the work
+// in the failure log; key identifies the work for taskPanel so a second click
+// while the same transfer runs is ignored; name is what the row shows and
+// filename is the default the save dialog offers.
+func (a *App) saveDownload(op, key, name, filename string, fetch func(context.Context, io.Writer, func(mail.Progress)) error) {
 	exp := a.windowExplorer()
 	if exp == nil {
 		a.notify(i18n.T("compose.attachUnavailable"), true)
 		return
 	}
 
-	task := a.tasks.begin(taskDownload, msgID+"\x00"+att.ID, att.Filename)
+	task := a.tasks.begin(taskDownload, key, name)
 	if task == nil {
-		// The same attachment is already downloading: one transfer is enough.
+		// The same download is already running: one transfer is enough.
 		return
 	}
 	id := task.id
@@ -90,7 +124,7 @@ func (a *App) saveAttachment(msgID string, att mail.Attachment) {
 		a.post(func() { a.tasks.progress(id, pr) })
 	}
 	fail := func(err error, partial bool) {
-		logErr("save attachment", err)
+		logErr(op, err)
 		a.post(func() {
 			// The row was dismissed meanwhile: the user asked for the
 			// transfer to stop, so its failure is not news.
@@ -106,7 +140,7 @@ func (a *App) saveAttachment(msgID string, att mail.Attachment) {
 		defer cancel()
 		// The dialog comes first: the user picks the destination before any
 		// byte is downloaded, and the download timeout starts only afterwards.
-		w, err := exp.CreateFile(att.Filename)
+		w, err := exp.CreateFile(filename)
 		if err != nil {
 			if errors.Is(err, explorer.ErrUserDecline) {
 				// A cancelled dialog is not a failure: nothing was downloaded
@@ -134,7 +168,7 @@ func (a *App) saveAttachment(msgID string, att mail.Attachment) {
 
 		dl, stop := context.WithTimeout(ctx, timeoutAttach)
 		defer stop()
-		saveErr := svc.SaveAttachment(dl, msgID, att.ID, w, report)
+		saveErr := fetch(dl, w, report)
 		// Closing commits the portal write; a close error is the only sign the
 		// file never made it, so it counts as a failed save.
 		closeErr := w.Close()
@@ -149,13 +183,46 @@ func (a *App) saveAttachment(msgID string, att mail.Attachment) {
 			fail(closeErr, true)
 			return
 		}
-		a.post(func() { a.tasks.finish(id, savedName(w, att.Filename)) })
+		a.post(func() { a.tasks.finish(id, savedName(w, filename)) })
 	}()
 }
 
+// downloadNameMaxBytes leaves room for the ".eml" extension within the usual
+// 255-byte file name limit.
+const downloadNameMaxBytes = 200
+
+// downloadFileName is the default name of a downloaded message: its subject
+// plus an .eml extension. The subject is user-visible, so non-ASCII letters
+// stay; only path separators and control characters are replaced, and the
+// leading and trailing dots and spaces a file system would hide are trimmed.
+// An empty subject falls back to message.eml.
+func downloadFileName(subject string) string {
+	var b strings.Builder
+	for _, r := range strings.Join(strings.Fields(subject), " ") {
+		if r == '/' || r == '\\' || unicode.IsControl(r) {
+			b.WriteRune('_')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	name := strings.Trim(b.String(), " .")
+	if len(name) > downloadNameMaxBytes {
+		// Cut on a rune boundary so the name stays valid UTF-8.
+		cut := downloadNameMaxBytes
+		for cut > 0 && !utf8.RuneStart(name[cut]) {
+			cut--
+		}
+		name = strings.Trim(name[:cut], " .")
+	}
+	if name == "" {
+		return "message.eml"
+	}
+	return name + ".eml"
+}
+
 // savedName is what the task row shows after a save: the real name of the
-// chosen file when the portal handed back an *os.File, the attachment's own
-// name otherwise.
+// chosen file when the portal handed back an *os.File, the suggested name
+// otherwise.
 func savedName(w io.WriteCloser, fallback string) string {
 	if namer, ok := w.(interface{ Name() string }); ok {
 		if name := filepath.Base(namer.Name()); name != "" && name != "." {

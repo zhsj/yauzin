@@ -21,7 +21,7 @@
 - 进程级 1 分钟变更检查（`internal/ui/app_poll.go`）：`internal/inboxwatch` 维护未读快照，`internal/notify` 发送 D-Bus 桌面通知；只更新托盘与通知，不刷新窗口。
 - 顶栏跨全部文件夹搜索，与文件夹浏览共用游标分页、代际校验与同一个列表请求槽位。
 - Gmail 读缓存（LRU）与 historyId 基线，全量加载统一「先检查再加载」。
-- 阅读器「更多」菜单：安全 / 完整 HTML 预览与原始邮件页，均在系统浏览器打开。
+- 阅读器「更多」菜单：安全 / 完整 HTML 预览在系统浏览器打开，原文可在同一菜单下载为 `.eml`。
 - 设置扩充：性能监视器、日志级别、代理（全局与按账号）、账号手风琴（重新登录 / 删除）与 `activeAccount` 记忆。
 - 系统字体 + emoji 回退、CSD 判定与系统光标主题解析（`internal/cursor`）。
 - 发信：Gmail `messages.send`（media 上传）与 SMTP 发信账号（`kind=smtp`，三种加密、代理、默认密送回 Gmail），写信浮层的发件人可在邮箱与各发信账号之间切换。
