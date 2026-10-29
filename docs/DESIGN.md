@@ -150,7 +150,7 @@
 6. **禁止跨帧重放录制宏**：`op.Record` 的宏在帧末以当前变换重放，跨帧重放会错位并触发 GPU `collectOps index out of range` panic。tooltip 队列 `th.tips` 每帧清空，只存放本帧录制的标签，帧末在无 clip 的窗口坐标系重放。
 7. **tooltip 锚点要冻结**：窗口指针坐标与按钮局部坐标分别取整会 ±1px 抖动；进入 hover 时算一次 `anchor` 并冻结，离开时重置。只给语义不直观的图标提示（归档 / 删除 / 标记已读 / 标记未读），其余按钮无提示。
 8. **光标必须 clip 到控件矩形**：`cursor.Apply` 作用于当前 clip，裸调用会让整片区域变手型。
-9. **字体**：`text.Shaper` 只建一次，界面族是 `Noto Sans, Noto Sans CJK <按语言>, sans-serif, emoji`（族顺序与 CJK 变体的理由见 [§14.1](#141-文本字体)）；图标字形尺寸按 (fill, size, pxPerSp) 缓存，避免每帧 shaping。
+9. **字体**：`text.Shaper` 只建一次，界面族是 `Noto Sans, Noto Sans CJK <按语言>, sans-serif, emoji`，字号只有六级阶梯（族顺序、CJK 变体与阶梯取值见 [§14.1](#141-文本字体)）；图标字形尺寸按 (fill, size, pxPerSp) 缓存，避免每帧 shaping。
 10. **不要在视图构造期长期缓存译文**：语言切换会重建视图，缓存的旧语言字符串不会自动更新。
 11. **转圈自驱帧**：列表工具栏刷新按钮的 `spinning` 在绘制时 `gtx.Execute(op.InvalidateCmd{})` 请求下一帧，`spinStart` 只在旋转期间非零（停止时归零，下次从正立开始）。`listToolbar.setLoading` 是唯一切换点，并给 45s 看门狗（`loadingUntil`，`Layout` 里过期即清除）：任何遗漏的清除路径最多多转一个看门狗周期，不会留下永久 60fps。转圈期间按钮吞点击，避免连点叠出多次 reload；不要用 `setDisabled` 表达转圈，它会把字形压到 35% 不透明度。
 
@@ -360,7 +360,11 @@ gofmt -l internal/ cmd/
 
 自查选族：`GIODEBUG=text ./yauzin` 会打印 `[text] loaded face ...`，汉字应解析到 `notosanscjksc`、拉丁到 `notosans`；出现 `notosanscjkjp` 说明族列表没生效或系统缺该变体。
 
-已知限制：Gio 把字形轮廓转成 `clip.Path` 在 GPU 上按几何覆盖率填充，没有 FreeType 的 hinting，也不做 gamma 校正，13–14px 下 1px 竖干只能拿到部分覆盖率，因此同字号下比浏览器（FreeType + hinting + gamma 校正）偏淡、偏软。`text.Parameters` 没有画质开关，应用层改不了，不要用放大字号或加深文字颜色的方式「补偿」——浏览器正文同为 Noto Sans 13px 时差距依旧存在。
+已知限制：Gio 把字形轮廓转成 `clip.Path` 在 GPU 上按几何覆盖率填充，没有 FreeType 的 hinting，并且在线性光空间做 alpha 混合（上游 `~eliasnaur/gio#70` 称为 "correct sRGB blending"，`vendor/gioui.org/gpu/gpu.go` 的 `f32color.LinearFromSRGB`），部分覆盖的像素因此比浏览器（在 sRGB 空间混合）更亮；13–16px 下 1px 竖干只能拿到部分覆盖率，同字号下看起来比浏览器偏淡、偏软。`text.Parameters` 没有画质开关，应用层改不了，不要用放大字号或加深文字颜色的方式「补偿」——浏览器正文同为 Noto Sans 13px 时差距依旧存在。上游在换渲染器，方向是把字形绘制搬回 CPU，届时才有望对齐。
+
+字号阶梯：界面文字只有六级，定义在 `internal/ui/typography.go`——`textTitle` 24sp（阅读页主题、标题栏品牌名）、`textHeading` 20sp（页面与对话框标题）、`textMain` 16sp（正文、侧边栏标签、列表行、按钮、输入框）、`textSecondary` 14sp（会话消息数、列表时间、工具栏状态）、`textMeta` 13sp（地址、完整时间戳、设置说明）、`textTiny` 12sp（标签 chip、性能条）。正文、侧边栏标签与列表行主题刻意留在 `textMain` 同一档，这是三者「一样大」的来源；新增文字必须复用其中一级，`typography_test.go` 用 `go/ast` 扫描拒绝给文本助手传整数字面量。图标字号（`theme.glyph` / `glyphIn`）不在这套阶梯里。
+
+阅读正文另外设置 1.5 倍行高（`bodyLineHeight = textMain * 3 / 2`，即 24sp）：Gio 默认的 1.2 倍对多行邮件过挤，而「没有纯文本正文」的占位提示只是单行，沿用默认。
 
 彩色 emoji 依赖字体自带位图（CBDT/CBLC、sbix）：Gio 只渲染位图与轮廓字形，COLR/CPAL 彩色字形不支持，仅有 COLR 字体的系统会显示空白 emoji。已知限制：go-text 的 `splitByFace` 让空白不触发换字体，紧跟在 emoji 后面的空格会沿用 emoji 字体的空格度量（约 1.245em，明显比正常的 0.26em 宽）；应用层不改文本无法规避，待上游修正。
 
