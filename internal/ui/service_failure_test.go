@@ -183,6 +183,13 @@ func (f *fakeService) MarkSpam(_ context.Context, ids []string, spam bool) error
 	return nil
 }
 
+// markCalls returns the spam changes the UI sent.
+func (f *fakeService) markCalls() []markSpamCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]markSpamCall(nil), f.markSpamCalls...)
+}
+
 func (f *fakeService) Delete(context.Context, []string) error { return nil }
 
 func (f *fakeService) Send(_ context.Context, draft mail.Draft) error {

@@ -311,6 +311,32 @@ func (a *App) folderTotal(id string) int {
 	return 0
 }
 
+// viewingKind reports whether the list is showing a folder of the given kind.
+// The folder list is the source of truth; the ID fallback covers the frame
+// before it arrives, where the built-in folders still carry their names as IDs.
+func (a *App) viewingKind(kind mail.FolderKind) bool {
+	for _, f := range a.folders {
+		if f.ID == a.activeFolder {
+			return f.Kind == kind
+		}
+	}
+	return a.activeFolder == string(kind)
+}
+
+// viewingSpam reports whether the list is showing the spam folder. Spam is
+// kept out of search and labels, so a page in that folder holds nothing but
+// spam, which is what lets one button serve both directions.
+func (a *App) viewingSpam() bool { return a.viewingKind(mail.FolderSpam) }
+
+// viewingTrash reports whether the list is showing the trash. The trash hides
+// the spam button: filing a message there as spam would change nothing.
+func (a *App) viewingTrash() bool { return a.viewingKind(mail.FolderTrash) }
+
+// showsSpamAction reports whether the current folder gets a spam button. It is
+// the one place the trash exclusion is decided, so the reader, the rows and the
+// bulk toolbar cannot disagree.
+func (a *App) showsSpamAction() bool { return !a.viewingTrash() }
+
 // activeAccount returns the mailbox in use. An empty activeAcc means no
 // mailbox is selected (the account was removed); it must not fall back to the
 // first one, or the header would name a mailbox the list never loaded.

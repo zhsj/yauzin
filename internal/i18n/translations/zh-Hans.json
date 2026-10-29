@@ -152,6 +152,8 @@
   "tooltip.delete": "删除",
   "tooltip.markRead": "标为已读",
   "tooltip.markUnread": "标为未读",
+  "tooltip.markSpam": "标记为垃圾邮件",
+  "tooltip.notSpam": "这不是垃圾邮件",
 
   "reader.emptyTitle": "选择一个会话开始阅读",
   "reader.emptyHint": "点击右侧列表中的会话，整段对话会显示在这里。",
@@ -220,7 +222,9 @@
   "toast.noThread": "请先打开一个会话",
   "toast.nothingToDo": "没有可操作的内容",
   "toast.markedRead": "已标为已读",
+  "toast.markedSpam": "已标记为垃圾邮件",
   "toast.markedUnread": "已标为未读",
+  "toast.notSpam": "已移回收件箱",
   "toast.pageMarkedRead": "本页已全部标为已读",
   "toast.pageMarkedUnread": "本页已全部标为未读",
   "toast.saveFailed": "保存失败：{{.Error}}",

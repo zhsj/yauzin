@@ -192,6 +192,32 @@ func (a *App) deleteThread() {
 		func(ctx context.Context, svc mail.Service, ids []string) error { return svc.Delete(ctx, ids) })
 }
 
+// toggleThreadSpam files the open conversation as spam, or returns it to the
+// inbox when it is spam already. The direction follows the folder on screen, so
+// the conversation always lands in the folder the user is not looking at.
+func (a *App) toggleThreadSpam() {
+	spam := !a.viewingSpam()
+	a.mutateThread("mark spam", spamToast(spam),
+		func(ctx context.Context, svc mail.Service, ids []string) error { return svc.MarkSpam(ctx, ids, spam) })
+}
+
+// spamToast names the result of a spam change. The keys are spelled out in the
+// branches because the catalog check wants literals, not a computed ID.
+func spamToast(spam bool) string {
+	if spam {
+		return i18n.T("toast.markedSpam")
+	}
+	return i18n.T("toast.notSpam")
+}
+
+// spamTip is the hover label of the spam button for the same direction.
+func spamTip(spam bool) string {
+	if spam {
+		return i18n.T("tooltip.markSpam")
+	}
+	return i18n.T("tooltip.notSpam")
+}
+
 func (a *App) mutateThread(op, success string, fn idsOp) {
 	svc := a.service()
 	if svc == nil {
@@ -257,6 +283,12 @@ func (a *App) deleteThreadByID(id string) {
 		func(ctx context.Context, svc mail.Service, ids []string) error { return svc.Delete(ctx, ids) })
 }
 
+func (a *App) toggleThreadSpamByID(id string) {
+	spam := !a.viewingSpam()
+	a.mutateIDs("mark spam", spamToast(spam), a.list.messageIDs([]string{id}),
+		func(ctx context.Context, svc mail.Service, ids []string) error { return svc.MarkSpam(ctx, ids, spam) })
+}
+
 // toggleThreadReadByID flips the read state of one row. markThreadRead takes
 // the target state, so an unread conversation turns read and a read one turns
 // unread, matching toggleThreadRead in the reader.
@@ -280,6 +312,12 @@ func (a *App) bulkArchive() {
 func (a *App) bulkDelete() {
 	a.mutateIDs("delete", i18n.T("toast.trashed"), a.bulkIDs(),
 		func(ctx context.Context, svc mail.Service, ids []string) error { return svc.Delete(ctx, ids) })
+}
+
+func (a *App) bulkToggleSpam() {
+	spam := !a.viewingSpam()
+	a.mutateIDs("mark spam", spamToast(spam), a.bulkIDs(),
+		func(ctx context.Context, svc mail.Service, ids []string) error { return svc.MarkSpam(ctx, ids, spam) })
 }
 
 func (a *App) bulkSetRead(read bool) {

@@ -154,6 +154,8 @@
   "tooltip.delete": "Delete",
   "tooltip.markRead": "Mark as read",
   "tooltip.markUnread": "Mark as unread",
+  "tooltip.markSpam": "Mark as spam",
+  "tooltip.notSpam": "Not spam",
 
   "reader.emptyTitle": "Select a conversation to start reading",
   "reader.emptyHint": "Pick a conversation from the list and the whole thread appears here.",
@@ -223,7 +225,9 @@
   "toast.noThread": "Open a conversation first.",
   "toast.nothingToDo": "Nothing to act on.",
   "toast.markedRead": "Marked as read",
+  "toast.markedSpam": "Marked as spam",
   "toast.markedUnread": "Marked as unread",
+  "toast.notSpam": "Moved to the inbox",
   "toast.pageMarkedRead": "Marked this page as read",
   "toast.pageMarkedUnread": "Marked this page as unread",
   "toast.saveFailed": "Could not save the attachment: {{.Error}}",
