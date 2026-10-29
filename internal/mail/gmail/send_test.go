@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -16,21 +17,8 @@ import (
 )
 
 func TestSendUploadsRawMessage(t *testing.T) {
-	var (
-		gotPath  string
-		gotQuery string
-		gotType  string
-		gotAuth  string
-		body     []byte
-	)
-	svc, _ := newTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotQuery = r.URL.Query().Get("uploadType")
-		gotType = r.Header.Get("Content-Type")
-		gotAuth = r.Header.Get("Authorization")
-		body, _ = io.ReadAll(r.Body)
-		writeJSON(t, w, `{"id":"sent-1","threadId":"thread-1"}`)
-	}))
+	rec := &uploadRecorder{t: t}
+	svc, _ := newTestService(t, rec.handler())
 
 	draft := mail.Draft{
 		From:    mail.Address{Name: "Ignored", Email: "other@example.com"},
@@ -43,20 +31,17 @@ func TestSendUploadsRawMessage(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	if want := "/upload/users/me/messages/send"; gotPath != want {
-		t.Fatalf("path = %q, want %q", gotPath, want)
+	if rec.initCalls != 1 || rec.putCalls != 1 {
+		t.Fatalf("init/put calls = %d/%d, want 1/1", rec.initCalls, rec.putCalls)
 	}
-	if gotQuery != "media" {
-		t.Fatalf("uploadType = %q, want media", gotQuery)
+	if rec.contentType != "message/rfc822" {
+		t.Fatalf("X-Upload-Content-Type = %q, want message/rfc822", rec.contentType)
 	}
-	if gotType != "message/rfc822" {
-		t.Fatalf("Content-Type = %q, want message/rfc822", gotType)
-	}
-	if gotAuth != "Bearer access-token" {
-		t.Fatalf("Authorization = %q", gotAuth)
+	if got, want := int64(rec.received.Len()), rec.total; got != want {
+		t.Fatalf("uploaded %d bytes, want the declared %d", got, want)
 	}
 
-	msg, err := netmail.ReadMessage(bytes.NewReader(body))
+	msg, err := netmail.ReadMessage(bytes.NewReader(rec.received.Bytes()))
 	if err != nil {
 		t.Fatalf("parse uploaded message: %v", err)
 	}
@@ -101,38 +86,37 @@ func TestSendMapsMissingScopeToUnauthorized(t *testing.T) {
 // TestSendIsNotUnsupported guards the capability the composer relies on: the
 // backend used to answer ErrUnsupported for every send.
 func TestSendIsNotUnsupported(t *testing.T) {
-	var hit int
-	svc, _ := newTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hit++
-		writeJSON(t, w, `{"id":"sent-1"}`)
-	}))
+	rec := &uploadRecorder{t: t}
+	svc, _ := newTestService(t, rec.handler())
 	if err := svc.Send(context.Background(), mail.Draft{
 		To:   []mail.Address{{Email: "to@example.com"}},
 		Body: "x",
 	}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if hit != 1 {
-		t.Fatalf("API calls = %d, want one", hit)
+	if rec.initCalls != 1 || rec.putCalls != 1 {
+		t.Fatalf("API calls = %d/%d, want a session and one chunk", rec.initCalls, rec.putCalls)
 	}
 }
 
-// TestSendRetriesRejectedToken covers the shared 401 path for the media upload:
-// the request is replayed with a refreshed token.
+// TestSendRetriesRejectedToken covers the shared 401 path: the session request
+// is replayed with a refreshed token.
 func TestSendRetriesRejectedToken(t *testing.T) {
 	var tokens []string
+	rec := &uploadRecorder{t: t}
+	rec.initFunc = func(w http.ResponseWriter, r *http.Request) bool {
+		tokens = append(tokens, r.Header.Get("Authorization"))
+		if len(tokens) == 1 {
+			writeErrorJSON(t, w, http.StatusUnauthorized, `{"error":{"code":401,"message":"Invalid Credentials"}}`)
+			return true
+		}
+		return false
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, `{"access_token":"fresh-token","token_type":"Bearer","expires_in":3600}`)
 	})
-	mux.HandleFunc("/upload/users/me/messages/send", func(w http.ResponseWriter, r *http.Request) {
-		tokens = append(tokens, r.Header.Get("Authorization"))
-		if len(tokens) == 1 {
-			writeErrorJSON(t, w, http.StatusUnauthorized, `{"error":{"code":401,"message":"Invalid Credentials"}}`)
-			return
-		}
-		writeJSON(t, w, `{"id":"sent-1"}`)
-	})
+	mux.HandleFunc("/", rec.handler())
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
@@ -153,9 +137,109 @@ func TestSendRetriesRejectedToken(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 	if len(tokens) != 2 {
-		t.Fatalf("requests = %d, want a retry", len(tokens))
+		t.Fatalf("session requests = %d, want a retry", len(tokens))
 	}
 	if tokens[1] != "Bearer fresh-token" {
 		t.Fatalf("retry Authorization = %q, want the refreshed token", tokens[1])
 	}
+}
+
+// TestSendMapsOversizeToInvalidArgument keeps the server's size rejection a
+// categorised failure instead of an opaque protocol error.
+func TestSendMapsOversizeToInvalidArgument(t *testing.T) {
+	svc, _ := newTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeErrorJSON(t, w, http.StatusRequestEntityTooLarge,
+			`{"error":{"code":413,"message":"Request payload size exceeds the limit"}}`)
+	}))
+	err := svc.Send(context.Background(), mail.Draft{
+		To:   []mail.Address{{Email: "to@example.com"}},
+		Body: "x",
+	})
+	if !errors.Is(err, mail.ErrInvalidArgument) {
+		t.Fatalf("Send = %v, want ErrInvalidArgument", err)
+	}
+}
+
+// uploadRecorder answers a resumable session, recording what arrives so tests
+// can reconstruct the message.
+type uploadRecorder struct {
+	t           *testing.T
+	initCalls   int
+	putCalls    int
+	statusCalls int
+	total       int64
+	contentType string
+	received    bytes.Buffer
+
+	// initFunc may answer the session request itself; true means it did.
+	initFunc func(w http.ResponseWriter, r *http.Request) bool
+	// putFunc may answer a data request itself; true means it did.
+	putFunc func(w http.ResponseWriter, r *http.Request, data []byte, start, end int64) bool
+}
+
+func (u *uploadRecorder) handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Query().Get("uploadType") == "resumable":
+			u.initCalls++
+			u.contentType = r.Header.Get("X-Upload-Content-Type")
+			u.total = parseInt64(u.t, r.Header.Get("X-Upload-Content-Length"))
+			if u.initFunc != nil && u.initFunc(w, r) {
+				return
+			}
+			w.Header().Set("Location", "/session/1")
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPut && r.URL.Path == "/session/1":
+			data, err := io.ReadAll(r.Body)
+			if err != nil {
+				u.t.Errorf("read chunk: %v", err)
+			}
+			if strings.HasPrefix(r.Header.Get("Content-Range"), "bytes */") {
+				u.statusCalls++
+				u.reportRange(w)
+				return
+			}
+			start, end := parseContentRange(u.t, r.Header.Get("Content-Range"))
+			u.putCalls++
+			if u.putFunc != nil && u.putFunc(w, r, data, start, end) {
+				return
+			}
+			_, _ = u.received.Write(data)
+			if end+1 < u.total {
+				u.reportRange(w)
+				return
+			}
+			writeJSON(u.t, w, `{"id":"sent-1","threadId":"thread-1"}`)
+		default:
+			u.t.Errorf("unexpected request %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}
+}
+
+// reportRange answers a 308 with everything stored so far.
+func (u *uploadRecorder) reportRange(w http.ResponseWriter) {
+	if u.received.Len() > 0 {
+		w.Header().Set("Range", fmt.Sprintf("bytes=0-%d", u.received.Len()-1))
+	}
+	w.WriteHeader(statusResumeIncomplete)
+}
+
+// parseContentRange reads "bytes start-end/total".
+func parseContentRange(t *testing.T, value string) (start, end int64) {
+	t.Helper()
+	var total int64
+	if _, err := fmt.Sscanf(value, "bytes %d-%d/%d", &start, &end, &total); err != nil {
+		t.Fatalf("Content-Range %q: %v", value, err)
+	}
+	return start, end
+}
+
+func parseInt64(t *testing.T, value string) int64 {
+	t.Helper()
+	var n int64
+	if _, err := fmt.Sscanf(value, "%d", &n); err != nil {
+		t.Fatalf("integer %q: %v", value, err)
+	}
+	return n
 }

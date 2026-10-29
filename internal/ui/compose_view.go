@@ -79,10 +79,6 @@ type composeView struct {
 	errMsg    string
 	focusInit bool
 
-	// discardPending is set when the draft was dismissed while a send was in
-	// flight, so the staged files outlive the goroutine that reads them.
-	discardPending bool
-
 	// card consumes clicks on the compose window itself so they never reach the
 	// mailbox behind it. Only the card area is registered, so the rest of the
 	// window stays interactive.

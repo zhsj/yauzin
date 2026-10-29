@@ -159,7 +159,7 @@ func (s *Sender) Send(ctx context.Context, draft mail.Draft) error {
 	}
 	// The blind recipients travel in the envelope only: the header would show
 	// them to every other recipient.
-	raw, err := rfc822.Build(draft, s.cfg.From, rfc822.Options{Date: s.now()})
+	msg, err := rfc822.Prepare(draft, s.cfg.From, rfc822.Options{Date: s.now()})
 	if err != nil {
 		return err
 	}
@@ -215,7 +215,9 @@ func (s *Sender) Send(ctx context.Context, draft mail.Draft) error {
 	if err != nil {
 		return fmt.Errorf("smtp: DATA: %w", err)
 	}
-	if _, err := w.Write(raw); err != nil {
+	// The message is streamed into DATA: attachments are read from disk a
+	// block at a time and never held in memory as a whole.
+	if _, err := msg.WriteTo(w); err != nil {
 		_ = w.Close()
 		return fmt.Errorf("smtp: write message: %w", err)
 	}

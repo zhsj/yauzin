@@ -9,9 +9,10 @@ import (
 
 // Send delivers the draft with users.messages.send.
 //
-// The message is uploaded as its raw RFC 822 source instead of the base64 field
-// of the JSON request: the media form avoids the extra third of payload and the
-// request size limit that comes with it.
+// The message is uploaded through a resumable session as its raw RFC 822
+// source, streamed from disk in fixed size chunks: the attachments never sit in
+// memory as a whole, and an interrupted transfer can continue from the offset
+// the server confirms instead of starting over.
 //
 // Gmail only accepts a From that belongs to the account, so the account address
 // wins over Draft.From. Sending as another identity goes through that
@@ -22,9 +23,9 @@ func (s *Service) Send(ctx context.Context, draft mail.Draft) error {
 	}
 	// The Bcc header has to be in the message: the API sees nothing but the raw
 	// source, and Gmail strips the header when it delivers.
-	raw, err := rfc822.Build(draft, mail.Address{Name: s.acc.Name, Email: s.acc.Email}, rfc822.Options{BccHeader: true})
+	msg, err := rfc822.Prepare(draft, mail.Address{Name: s.acc.Name, Email: s.acc.Email}, rfc822.Options{BccHeader: true})
 	if err != nil {
 		return err
 	}
-	return s.c.doMediaUpload(ctx, "messages.send", "/users/me/messages/send", "message/rfc822", raw, nil)
+	return s.c.doResumableUpload(ctx, "messages.send", "/users/me/messages/send", "message/rfc822", msg, nil)
 }

@@ -204,13 +204,12 @@
   "compose.sendFailed": "Could not send: {{.Error}}",
   "compose.duplicateAttachment": "That attachment is already added.",
   "compose.attachUnavailable": "The desktop file picker is not available.",
+  "compose.attachmentPathUnavailable": "The chosen file cannot be read from its original location.",
   "compose.headers": "Headers",
   "compose.headerDate": "Date",
   "compose.headerMessageID": "Message-ID",
   "compose.headerInReplyTo": "In-Reply-To",
   "compose.headerReferences": "References",
-
-  "attachment.name": "attachment",
 
   "task.title": "Tasks",
   "task.savedTo": "Saved to {{.Path}}",

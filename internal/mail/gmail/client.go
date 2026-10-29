@@ -195,15 +195,6 @@ func (c *client) doBody(ctx context.Context, op, method, path string, query url.
 	return c.doRequest(ctx, op, method, c.baseURL, path, query, "application/json", body, out)
 }
 
-// doMediaUpload performs one authorized request whose body is the resource
-// itself rather than JSON, such as the raw source of a message. The body goes to
-// the media upload service, which avoids the base64 field of the JSON form and
-// its size limit.
-func (c *client) doMediaUpload(ctx context.Context, op, path, contentType string, body []byte, out any) error {
-	return c.doRequest(ctx, op, http.MethodPost, c.uploadURL, path,
-		url.Values{"uploadType": {"media"}}, contentType, body, out)
-}
-
 // streamDrain bounds how much of a response is read after a streamed handler
 // has taken what it needs. What is left is the tail of the JSON document, so a
 // full buffer is already more than enough to finish the transfer.
@@ -353,31 +344,70 @@ func (p *progressReader) finish() {
 // body is sent with contentType. It holds the account's request slot for the
 // HTTP round trip, so single and batch requests never overlap.
 func (c *client) send(ctx context.Context, method, base, path string, query url.Values, contentType string, body []byte, token string) (*http.Response, error) {
+	u := base + path
+	if len(query) > 0 {
+		u += "?" + query.Encode()
+	}
+	headers := make(http.Header)
+	if body != nil {
+		headers.Set("Content-Type", contentType)
+	}
+	return c.sendRaw(ctx, method, u, headers, body, token)
+}
+
+// sendRaw performs one request with whatever headers the caller needs. It is
+// what the resumable upload uses for its session and chunk requests, whose
+// content type and range headers differ from a JSON call.
+func (c *client) sendRaw(ctx context.Context, method, rawURL string, headers http.Header, body []byte, token string) (*http.Response, error) {
 	if err := c.acquireReq(ctx); err != nil {
 		return nil, err
 	}
 	defer c.releaseReq()
 
-	u := base + path
-	if len(query) > 0 {
-		u += "?" + query.Encode()
-	}
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, u, reader)
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, reader)
 	if err != nil {
 		return nil, err
 	}
+	for key, values := range headers {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", contentType)
-	}
 	resp, err := c.http.Do(req)
 	logRequest(c.accountID, method, req.URL.Path, resp, err)
 	return resp, err
+}
+
+// sendHeaders performs one authorized request and refreshes the token once
+// when the server rejects it. The caller owns the response body.
+func (c *client) sendHeaders(ctx context.Context, op, method, rawURL string, headers http.Header, body []byte) (*http.Response, error) {
+	token, err := c.accessToken(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.sendRaw(ctx, method, rawURL, headers, body, token)
+	if err != nil {
+		return nil, fmt.Errorf("gmail %s: %w", op, err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		return resp, nil
+	}
+	_ = resp.Body.Close()
+	token, err = c.accessToken(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	resp, err = c.sendRaw(ctx, method, rawURL, headers, body, token)
+	if err != nil {
+		return nil, fmt.Errorf("gmail %s: %w", op, err)
+	}
+	return resp, nil
 }
 
 // logRequest reports one Gmail API call at DEBUG. endpoint is the API path
@@ -476,7 +506,7 @@ func apiError(op string, resp *http.Response) error {
 	switch resp.StatusCode {
 	case http.StatusNotFound:
 		return fmt.Errorf("%w: %s", mail.ErrNotFound, detail)
-	case http.StatusBadRequest:
+	case http.StatusBadRequest, http.StatusRequestEntityTooLarge:
 		return fmt.Errorf("%w: %s", mail.ErrInvalidArgument, detail)
 	case http.StatusUnauthorized:
 		return fmt.Errorf("%w: %s", mail.ErrUnauthorized, detail)

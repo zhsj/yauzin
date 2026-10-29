@@ -32,7 +32,7 @@
 
 | 项目 | 原主张 | 恢复条件 | 影响面 |
 | --- | --- | --- | --- |
-| 附件大小上限 | 复制到暂存目录前按体积拦截（对齐主流邮箱上限），chip 显示大小 | 真实后端接入、明确单封上限后一并设计 | `internal/ui/filepicker.go:61`、`internal/mail` |
+| 附件大小上限 | 不设客户端限制；Gmail 发送走 resumable 分块流式上传，超出服务端上限时由 Gmail 报错，附件直接读原文件、不复制暂存 | 需要在发送前快速失败或按账号展示上限时再评估 | `internal/mail/gmail/upload.go`、`internal/mail/rfc822`、`internal/ui/filepicker.go` |
 | CI 与 `-race` | `.github/workflows` + Makefile + 容器内 `go test -race` | 需要稳定的 CI 运行环境时恢复 | 仓库根（当前无 `.github/`、无 Makefile）、`Dockerfile.build` |
 
 暂缓项不设优先级；恢复时按各自“影响面”重新评估，不要直接照搬旧结论。

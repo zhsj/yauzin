@@ -52,11 +52,11 @@
 
 ### 3.2 发信（`internal/mail/rfc822`、`mail/smtp`、`netproxy`）
 
-- **一份报文，两条传输**：`rfc822.Build(draft, from, opts)` 把 `mail.Draft` 渲染成完整 RFC 5322 报文（CRLF 行尾、`Date` / `Message-ID` / `MIME-Version`、RFC 2047 编码的主题与显示名、`text/plain` 正文 base64、有附件时 `multipart/mixed` + 流式 base64 附件），Gmail 与 SMTP 共用，避免两套 MIME 行为分叉。显示名、主题与附件名里的 CR/LF 一律替换成空格，防止用户输入注入报文头。
+- **一份报文，两条传输**：`rfc822.Prepare(draft, from, opts)` 先解析出整封报文的结构与精确字节数（`Message.Size()`），`Message.WriteTo(io.Writer)` 再按顺序写出（CRLF 行尾、`Date` / `Message-ID` / `MIME-Version`、RFC 2047 编码的主题与显示名、`text/plain` 正文 base64、有附件时 `multipart/mixed` + 逐块读取的 base64 附件），Gmail 与 SMTP 共用，避免两套 MIME 行为分叉。`Message` 只保存头部与每个附件的路径/大小，不持有文件内容，因此渲染内存与附件大小无关；`Prepare` 会打开每个附件做前置校验，缺文件在拨号或建上传会话之前失败。`Build` 仍保留为 `Prepare + WriteTo(bytes.Buffer)` 的兼容包装，只用于测试等需要完整字节的场景。显示名、主题与附件名里的 CR/LF 一律替换成空格，防止用户输入注入报文头。
 - **Bcc 头是传输差异**：`Draft.Bcc` 始终属于信封（`Draft.Recipients()` = To + Cc + Bcc 去重）。Gmail API 只能看到 raw 报文，所以 `rfc822.Options{BccHeader: true}` 把密送地址写进 `Bcc` 头（Gmail 投递时剔除该头）；直连 SMTP 时密送地址只进 `RCPT TO`，报文头必须不含 `Bcc`，否则其他收件人都能看到密送对象。
 - **线程头只在回复与 mailto 里写**：回复把被回复邮件的 Message-ID 写进 `In-Reply-To`，`References` 保留原文祖链（去重）并追加该 Message-ID；mailto 链接自带的 RFC 2368 `in-reply-to` 只给出父 ID，因此 `References` 只含这一个 ID；转发与新邮件都不写，避免把转发硬塞进原会话。`mail.ReplyReferences` 是回复的唯一拼接点，`mail.NormalizeMessageID` 校验尖括号形态并丢弃畸形值（同时挡住头注入），mailto 的 `in-reply-to` 也走同一校验。读取侧没有新增请求：Gmail `GetThread` 已是 `format=full`，`payload.headers` 里直接取 `message-id` / `references`；mock 的种子数据按 `<id@yauzin.invalid>` 补齐，`RawMessage` 也写出这些头，便于对照检查。
 - **Date 与 Message-ID 由写信浮层决定**：两者在打开写信时确定（切换发件人只重算 Message-ID 的域名），随 `Draft` 交给渲染器，取值顺序是 `Draft > Options > 现场生成`。这样写信浮层的表头详情显示的就是报文里真正写出的值；`Options` 仍只作测试注入点。
-- **Gmail 发送**：`messages.send` 走 media 上传（`POST <host>/upload/gmail/v1/users/me/messages/send?uploadType=media`，`Content-Type: message/rfc822`），避开 `{"raw": base64}` 的 33% 体积膨胀与 JSON 请求上限。`From` 一律取账号自身地址，不采信 `Draft.From`：Gmail 只接受属于该账号的身份。发送成功的邮件由 Gmail 自己放进「已发送」。`client` 因此有两个 API 根：`apiPath`（普通 REST）与 `uploadURL`（`/upload` + `apiPath`），两者共用请求槽、401 重试与 `apiError` 分类。
+- **Gmail 发送**：`messages.send` 走 resumable 上传（`POST <host>/upload/gmail/v1/users/me/messages/send?uploadType=resumable`，`Content-Type: message/rfc822`，`X-Upload-Content-Length` 为 `Message.Size()`），既避开 `{"raw": base64}` 的 33% 体积膨胀，也不需要在内存里持有整封报文。会话 URI 从响应的 `Location` 取得；报文通过 `io.Pipe` 由 `Message.WriteTo` 按 8 MiB（256 KiB 整数倍）切块 `PUT`，`308 Resume Incomplete` 按 `Range` 续传，`401` 刷新令牌后重放当前块，`5xx`/`429` 先用 `Content-Range: bytes */total` 查询已收字节再续传。客户端不设附件大小上限：超过 Gmail 的 35 MiB（36,700,160 字节，编码后）由服务端拒绝，413/400 统一归为 `ErrInvalidArgument`。`From` 一律取账号自身地址，不采信 `Draft.From`：Gmail 只接受属于该账号的身份。发送成功的邮件由 Gmail 自己放进「已发送」。`client` 因此有两个 API 根：`apiPath`（普通 REST）与 `uploadURL`（`/upload` + `apiPath`），两者共用请求槽、401 重试与 `apiError` 分类。
 - **SMTP 发信**：`smtp.Sender` 每条发信条目一个实例、每次发送一条连接（`net/smtp`）。`Security` 三选一：`tls`（465 隐式 TLS，本包先包裹连接）、`starttls`（587，服务器不广告 STARTTLS 就报错而不是退回明文）、`none`（25，仅限自有网络的中继）。`Username` 为空跳过 AUTH；否则按服务器广告选 `PLAIN`（优先）或 `LOGIN`——两者都在本包实现，因为 `net/smtp` 的 `PlainAuth` 拒绝在未加密连接上发密码，而「不加密」是用户显式选择。认证被拒（501/504/530/534/535）包成 `smtp.ErrAuth`，由 `errors.go` 翻成「检查用户名和密码」，其余协议错误保留原文（用户要看到具体原因）。连接、TLS 与 AUTH 各阶段都受 `ctx` 的 deadline 与取消约束；DEBUG 只记 host/port/发件地址/收件人数，不记密码与报文。
 - **代理**：`internal/netproxy` 是裸 TCP 的代理拨号器——`net/http` 的代理支持在它的 internal bundle 里，给不了别的 dialer。`Parse` 规则（`http`/`https`/`socks5`，必须有 host 与端口，`socks5h` 不接受）由 `gmail.ParseProxy` 与 SMTP 共用；`Dial` 对 socks5 用 `golang.org/x/net/proxy`，对 `http`/`https` 手写 `CONNECT`（含 `Proxy-Authorization: Basic`，https 时先对代理做 TLS）。发信条目与 Gmail 账号一样有 `useProxy`，沿用 `settings.json` 的全局代理地址。
 - **不写 Gmail「已发送」**：通过 SMTP 发出的邮件不会出现在 Gmail 的已发送里（`messages.insert` 不接受未配置 `sendAs` 的伪造 From，配置 sendAs 需要额外验证流程）。留档靠 SMTP 条目上的「默认密送到当前 Gmail 账号」开关：选中该发件人时写信浮层把当前邮箱地址预填进密送字段，用户可清空或改填。
@@ -267,7 +267,7 @@
 - Go 1.26+（`go.mod` 声明 `go 1.26.0`）；开发机工具链是 `/run/host/lib/go-1.27/bin/go`（go1.27.2），构建镜像内为 Debian unstable 源的 `golang-go` 1.27。
 - CGO 开启：Gio 没有纯 Go 后端。
 - Linux 运行需要 X11/OpenGL 或 Vulkan 运行库（`libx11`、`libxkbcommon`、`libGL`/`libvulkan`）；从源码编译还需要 `libx11-dev`、`libxkbcommon-x11-dev`、`libxcursor-dev`、`libxfixes-dev`、`libwayland-dev`、`libegl-dev`、`libvulkan-dev`。
-- 文件选择与附件保存通过 `xdg-desktop-portal` 提供的系统对话框；对话框不可用时保存直接报错并提示「系统文件选择器不可用」，不回退到 `~/Downloads`，也不写任何文件。附件保存先选位置再下载，内容直接写入所选文件；附件保存与邮件发送都显示在侧栏底部的「任务列表」分栏，任务完成后保留到进程退出。
+- 文件选择与附件保存通过 `xdg-desktop-portal` 提供的系统对话框；对话框不可用时保存直接报错并提示「系统文件选择器不可用」，不回退到 `~/Downloads`，也不写任何文件。附件保存先选位置再下载，内容直接写入所选文件；选择附件只记录用户文件的原始路径，不复制到临时目录，发送时才按需从原文件流式读取，草稿关闭或移除附件都不会删除原文件（文件在发送前被移动/改动会给出明确错误）；附件保存与邮件发送都显示在侧栏底部的「任务列表」分栏，任务完成后保留到进程退出。
 - macOS 需要 Xcode Command Line Tools，Windows 需要 MinGW-w64。
 - 开发沙箱 `CGO_ENABLED=0` 且缺少上述开发库：任何（直接或间接）import `gioui.org/app` 的目标（`internal/ui`、`cmd/yauzin`）只能在 Docker 内编译，典型报错 `build constraints exclude all Go files in .../gioui.org/internal/vk`。
 - 沙箱内访问外网走本地代理，命令前置 `https_proxy=http://127.0.0.1:1081`；`internal/cmd/gmailgen` 只在下载 Discovery 文档时需要它，代码本身不读代理配置。
@@ -420,7 +420,7 @@ cmd/yauzin/main.go             入口：app.Main + 窗口事件循环
 internal/mail/mail.go          领域模型（会话摘要 / 分页）与 Service 接口
 internal/mail/mock/            内存 mock 后端（140ms 模拟延迟，按会话聚合）
 internal/mail/gmail/           Gmail 后端：OAuth（PKCE 回环）、REST 客户端、请求日志 transport、MIME 解析、写操作（mutate.go：标记/归档/垃圾邮件/删除）、发信（send.go：messages.send 的 media 上传）、Discovery 生成的 API 类型
-internal/mail/rfc822/          Draft → RFC 5322 报文（头编码、折行、附件 multipart、可选 Bcc 头），Gmail 与 SMTP 共用
+internal/mail/rfc822/          Draft → RFC 5322 报文（头编码、折行、附件 multipart、可选 Bcc 头）；Prepare 定长、WriteTo 流式，Gmail 与 SMTP 共用
 internal/mail/smtp/            SMTP 发信：三种加密、PLAIN/LOGIN、信封收件人（含 Bcc）、代理拨号
 internal/netproxy/             裸 TCP 代理拨号：http/https CONNECT 与 socks5（与 Gmail 共用的地址校验）
 internal/cmd/gmailgen/         Gmail Discovery 文档 → Go 类型生成器（go generate 入口）
@@ -452,7 +452,7 @@ internal/ui/reader_find.go     阅读器正文查找：匹配内核、查找条�
 internal/ui/messagecard.go     可折叠消息卡片
 internal/ui/textselection.go   阅读器可选文字：选区状态、右键区域与选区菜单（复制 / 打开链接）
 internal/ui/compose_view.go    写信浮层布局（含发件人就地展开、密送行与只读表头详情）
-internal/ui/compose_actions.go 发送（按发件人分派到后端或 SMTP）、附件暂存与丢弃
+internal/ui/compose_actions.go 发送（按发件人分派到后端或 SMTP）、附件路径列表的增删
 internal/ui/settings.go        设置浮层（通用/账号/快捷键，含网络代理、日志级别与账号手风琴：展开后是浅灰子卡片——代理开关 + 描边按钮操作，删除在同一行原地确认；账号卡下方是发信账号分组）
 internal/ui/smtp_account.go    SMTP 发信账号：新增/编辑表单浮层、设置页分组行与其展开块
 internal/ui/account_add.go     添加账号 / 重新登录浮层（类型选择含 SMTP 发信账号、授权链接复制与打开）
@@ -470,7 +470,7 @@ internal/ui/widgets_button.go  iconButton / pillButton
 internal/ui/widgets_input.go   复选框、开关、点击拦截与输入框
 internal/ui/widgets_nav.go     侧栏导航项与菜单行
 internal/ui/format.go          时间、地址、主题与回复/转发引用块排版
-internal/ui/filepicker.go      xdg-desktop-portal 文件选择；附件保存先选位置再直接写入
+internal/ui/filepicker.go      xdg-desktop-portal 文件选择；发送附件只取原路径不复制，保存附件先选位置再直接写入
 internal/ui/openurl.go         跨平台打开链接/文件
 internal/ui/htmlfile.go        HTML 临时文件与 CSP 注入
 internal/ui/htmlsource.go      原始邮件页（元信息 + 转义源码）

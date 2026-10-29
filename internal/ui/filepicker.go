@@ -13,19 +13,15 @@ import (
 	"github.com/zhsj/yauzin/internal/mail"
 )
 
-// pickAttachment opens the desktop file chooser and stages the chosen file in
-// the app temp directory so the mail backend receives a stable path.
+// pickAttachment opens the desktop file chooser and records the chosen file's
+// path. Nothing is copied to the scratch directory: the send path streams the
+// original file from disk, so the draft never owns a second copy of it.
 func (a *App) pickAttachment(c *composeView) {
 	// Capture the picker on the UI goroutine: the worker must not read the
 	// field, which detach clears when the window goes away.
 	exp := a.windowExplorer()
 	if exp == nil {
 		c.errMsg = i18n.T("compose.attachUnavailable")
-		return
-	}
-	dir, err := a.tempDir()
-	if err != nil {
-		c.errMsg = err.Error()
 		return
 	}
 
@@ -43,38 +39,23 @@ func (a *App) pickAttachment(c *composeView) {
 		}
 		defer func() { _ = rc.Close() }()
 
-		name := i18n.T("attachment.name")
-		if f, ok := rc.(*os.File); ok && f.Name() != "" {
-			name = filepath.Base(f.Name())
-		} else if statter, ok := rc.(interface{ Stat() (os.FileInfo, error) }); ok {
-			if fi, statErr := statter.Stat(); statErr == nil && fi.Name() != "" {
-				name = fi.Name()
-			}
-		}
-
-		tmp, err := os.CreateTemp(dir, "attach-*")
-		if err != nil {
-			a.post(func() { c.errMsg = err.Error() })
+		// A desktop picker opens the file itself, so its name is the path to
+		// stream from later. A reader with no path cannot be attached: reading
+		// it now would mean copying the whole file somewhere.
+		f, ok := rc.(*os.File)
+		if !ok || f.Name() == "" {
+			a.post(func() { c.errMsg = i18n.T("compose.attachmentPathUnavailable") })
 			return
 		}
-		tmpName := tmp.Name()
-		// Every failure below has to drop the staged file: nothing else owns it
-		// until the draft receives the path.
-		discard := func(err error) {
-			_ = os.Remove(tmpName)
-			a.post(func() { c.errMsg = err.Error() })
-		}
-		if _, err := io.Copy(tmp, rc); err != nil {
-			_ = tmp.Close()
-			discard(err)
+		path := f.Name()
+		info, statErr := f.Stat()
+		if statErr != nil || !info.Mode().IsRegular() {
+			a.post(func() { c.errMsg = i18n.T("compose.attachmentPathUnavailable") })
 			return
 		}
-		if err := tmp.Close(); err != nil {
-			discard(err)
-			return
-		}
+		name := filepath.Base(path)
 		a.post(func() {
-			c.addAttachment(mail.DraftAttachment{Name: name, Path: tmpName})
+			c.addAttachment(mail.DraftAttachment{Name: name, Path: path})
 		})
 	}()
 }

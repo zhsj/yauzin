@@ -575,7 +575,7 @@ const (
 	timeoutList     = 30 * time.Second
 	timeoutThread   = 30 * time.Second
 	timeoutMutation = 20 * time.Second
-	timeoutSend     = 2 * time.Minute
+	timeoutSend     = 5 * time.Minute
 	timeoutAttach   = time.Minute
 	// timeoutPoll bounds one process-level inbox poll: the change check plus
 	// the search for the unread conversations, so both fit in one budget.

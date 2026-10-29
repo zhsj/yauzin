@@ -2,9 +2,6 @@ package ui
 
 import (
 	"context"
-	"errors"
-	"io/fs"
-	"os"
 	"strings"
 
 	"github.com/zhsj/yauzin/internal/i18n"
@@ -71,10 +68,6 @@ func (c *composeView) send() {
 	accID := c.app.activeAcc
 	finish := func() {
 		c.sending = false
-		if c.discardPending {
-			c.discardPending = false
-			c.removeStaged()
-		}
 	}
 	cancel := c.app.async("send", timeoutSend, nil,
 		deliver,
@@ -122,11 +115,11 @@ func (c *composeView) send() {
 }
 
 // addAttachment is called on the UI goroutine after the file picker returns.
+// The path is the user's own file: nothing is copied and nothing is deleted
+// here, whatever happens to the draft.
 func (c *composeView) addAttachment(att mail.DraftAttachment) {
 	for _, existing := range c.attachments {
 		if existing.Path == att.Path {
-			// The caller has already staged a copy; it will never be used.
-			_ = os.Remove(att.Path)
 			c.errMsg = i18n.T("compose.duplicateAttachment")
 			return
 		}
@@ -139,47 +132,20 @@ func (c *composeView) removeAttachment(index int) {
 	if index < 0 || index >= len(c.attachments) {
 		return
 	}
-	att := c.attachments[index]
 	// Build a new slice instead of splicing in place: the send goroutine may
 	// still hold the previous one.
 	rest := make([]mail.DraftAttachment, 0, len(c.attachments)-1)
 	rest = append(rest, c.attachments[:index]...)
 	rest = append(rest, c.attachments[index+1:]...)
 	c.attachments = rest
-	if att.Path != "" {
-		if err := os.Remove(att.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			logErr("remove staged attachment", err)
-		}
-	}
 	c.refreshChips()
 }
 
-// discard drops the staged attachment files of a draft that is going away. It
-// is safe to call twice: the slice is cleared, so removed paths are not
-// removed again.
+// discard drops the attachment list of a draft that is going away. The files
+// belong to the user and are left untouched.
 func (c *composeView) discard() {
 	if c == nil {
 		return
-	}
-	if c.sending {
-		// The send goroutine may still be reading the files; the completion
-		// callback removes them instead.
-		c.discardPending = true
-		return
-	}
-	c.removeStaged()
-}
-
-// removeStaged deletes the staged files of every attachment the draft still
-// holds.
-func (c *composeView) removeStaged() {
-	for _, att := range c.attachments {
-		if att.Path == "" {
-			continue
-		}
-		if err := os.Remove(att.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			logErr("remove staged attachment", err)
-		}
 	}
 	c.attachments = nil
 	c.chips = nil
