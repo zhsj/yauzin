@@ -6,7 +6,7 @@ require (
 	gioui.org v0.10.4-0.20261022055823-ba799cc61a63
 	gioui.org/x v0.10.3
 	github.com/godbus/dbus/v5 v5.2.4
-	github.com/nicksnyder/go-i18n/v2 v2.6.1
+	github.com/nicksnyder/go-i18n/v2 v2.7.0
 	golang.org/x/image v0.47.0
 	golang.org/x/net v0.62.0
 	golang.org/x/oauth2 v0.37.0
