@@ -116,8 +116,16 @@ func newComposeView(a *App, mode composeMode, msg *mail.Message, replySelection 
 	c.date = time.Now()
 	c.refreshIdentity()
 
-	if msg != nil && mode == composeReply {
-		c.to.SetText(msg.From.String())
+	if msg != nil && (mode == composeReply || mode == composeReplyAll) {
+		// The identity rows were built above, so the caller's own addresses are
+		// known here: a reply-all must not put the user back on the list.
+		self := make([]mail.Address, len(c.senders))
+		for i, sender := range c.senders {
+			self[i] = mail.Address{Email: sender.email}
+		}
+		to, cc := mail.ReplyRecipients(msg, self, mode == composeReplyAll)
+		c.to.SetText(mail.FormatAddressList(to))
+		c.cc.SetText(mail.FormatAddressList(cc))
 		c.subject.SetText(replySubject(msg.Subject))
 		quote := replyQuote(msg, replySelection)
 		c.body.SetText(quote)
@@ -196,6 +204,8 @@ func (c *composeView) title() string {
 	switch c.mode {
 	case composeReply:
 		return i18n.T("compose.reply")
+	case composeReplyAll:
+		return i18n.T("compose.replyAll")
 	case composeForward:
 		return i18n.T("compose.forward")
 	default:

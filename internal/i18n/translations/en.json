@@ -126,6 +126,7 @@
   "shortcut.top": "Jump to the top",
   "shortcut.bottom": "Jump to the bottom",
   "shortcut.reply": "Reply",
+  "shortcut.replyAll": "Reply all",
   "shortcut.forward": "Forward",
   "shortcut.find": "Find in message",
   "shortcut.hint": "Shortcuts work while no text field has focus; Ctrl+W and Ctrl+Q work anywhere. While a panel is open, only Esc, Ctrl+W and Ctrl+Q act.",
@@ -173,6 +174,7 @@
   },
   "reader.loading": "Loading…",
   "reader.reply": "Reply",
+  "reader.replyAll": "Reply all",
   "reader.forward": "Forward",
   "reader.find.hint": "Find in message",
   "reader.find.empty": "No matches",
@@ -190,6 +192,7 @@
 
   "compose.new": "New message",
   "compose.reply": "Reply",
+  "compose.replyAll": "Reply all",
   "compose.forward": "Forward",
   "compose.from": "From",
   "compose.to": "To",

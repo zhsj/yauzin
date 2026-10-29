@@ -40,9 +40,10 @@ import (
 type composeMode string
 
 const (
-	composeNew     composeMode = "new"
-	composeReply   composeMode = "reply"
-	composeForward composeMode = "forward"
+	composeNew      composeMode = "new"
+	composeReply    composeMode = "reply"
+	composeReplyAll composeMode = "reply-all"
+	composeForward  composeMode = "forward"
 )
 
 // perPage is the number of conversations one page requests. It is below

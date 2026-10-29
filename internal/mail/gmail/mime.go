@@ -34,6 +34,7 @@ func (s *Service) message(m *Message) *mail.Message {
 		},
 		MessageID:  strings.TrimSpace(h["message-id"]),
 		References: messageIDList(h["references"]),
+		ReplyTo:    parseAddressList(h["reply-to"]),
 		Cc:         parseAddressList(h["cc"]),
 	}
 	var bodies mimeBodies

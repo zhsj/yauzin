@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/zhsj/yauzin/internal/accounts"
+	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
 )
 
@@ -58,6 +59,72 @@ func TestComposeReplyThreadsOntoTheMessage(t *testing.T) {
 	}
 	if !draft.Date.Equal(c.date) || draft.Date.IsZero() {
 		t.Fatalf("sent Date = %v, want the one on screen %v", draft.Date, c.date)
+	}
+}
+
+// TestComposeReplyAllFillsToAndCc pins the recipient rows of a reply-all: the
+// sender stays in To, the other original recipients join it, and the caller's
+// own addresses are left out. It also threads like a plain reply.
+func TestComposeReplyAllFillsToAndCc(t *testing.T) {
+	a, _, _ := composeTestApp(t)
+	msg := &mail.Message{
+		MessageSummary: mail.MessageSummary{
+			ID:      "m2",
+			From:    mail.Address{Name: "Bob", Email: "bob@example.com"},
+			To:      []mail.Address{{Name: "Ada", Email: "ada@example.com"}, {Name: "Ann", Email: "ann@example.com"}},
+			Subject: "hello",
+		},
+		MessageID: "<m2@example.com>",
+		Cc:        []mail.Address{{Name: "Cid", Email: "cid@example.com"}},
+		TextBody:  "hello",
+	}
+
+	c := newComposeView(a, composeReplyAll, msg, "")
+	if got, want := c.to.Text(), "Bob <bob@example.com>, Ann <ann@example.com>"; got != want {
+		t.Fatalf("To = %q, want %q", got, want)
+	}
+	if got, want := c.cc.Text(), "Cid <cid@example.com>"; got != want {
+		t.Fatalf("Cc = %q, want %q", got, want)
+	}
+	if got, want := c.title(), i18n.T("compose.replyAll"); got != want {
+		t.Fatalf("title = %q, want %q", got, want)
+	}
+	if c.inReplyTo != "<m2@example.com>" || len(c.references) == 0 {
+		t.Fatalf("reply-all lost the thread headers: %q/%q", c.inReplyTo, c.references)
+	}
+
+	// A plain reply keeps its sender-only To and an empty Cc.
+	reply := newComposeView(a, composeReply, msg, "")
+	if got, want := reply.to.Text(), "Bob <bob@example.com>"; got != want {
+		t.Fatalf("reply To = %q, want %q", got, want)
+	}
+	if got := reply.cc.Text(); got != "" {
+		t.Fatalf("reply Cc = %q, want it empty", got)
+	}
+}
+
+// TestComposeReplyToWinsForBothReplies pins the Reply-To rule: when the parent
+// carries the header, both reply modes address only those mailboxes and ignore
+// the original To and Cc.
+func TestComposeReplyToWinsForBothReplies(t *testing.T) {
+	a, _, _ := composeTestApp(t)
+	msg := &mail.Message{
+		MessageSummary: mail.MessageSummary{
+			ID:   "m2",
+			From: mail.Address{Email: "list@example.com"},
+			To:   []mail.Address{{Email: "ada@example.com"}, {Email: "ann@example.com"}},
+		},
+		ReplyTo: []mail.Address{{Name: "Bob", Email: "bob@example.com"}},
+	}
+
+	for _, mode := range []composeMode{composeReply, composeReplyAll} {
+		c := newComposeView(a, mode, msg, "")
+		if got, want := c.to.Text(), "Bob <bob@example.com>"; got != want {
+			t.Fatalf("mode %v To = %q, want %q", mode, got, want)
+		}
+		if got := c.cc.Text(); got != "" {
+			t.Fatalf("mode %v Cc = %q, want it empty", mode, got)
+		}
 	}
 }
 

@@ -125,6 +125,7 @@
   "shortcut.top": "跳到顶部",
   "shortcut.bottom": "跳到底部",
   "shortcut.reply": "回复",
+  "shortcut.replyAll": "回复全部",
   "shortcut.forward": "转发",
   "shortcut.find": "在正文中查找",
   "shortcut.hint": "输入框获得焦点时快捷键不生效，Ctrl+W 与 Ctrl+Q 始终可用；浮层打开时只有 Esc、Ctrl+W 与 Ctrl+Q 有效。",
@@ -170,6 +171,7 @@
   },
   "reader.loading": "正在加载…",
   "reader.reply": "回复",
+  "reader.replyAll": "回复全部",
   "reader.forward": "转发",
   "reader.find.hint": "在正文中查找",
   "reader.find.empty": "无匹配",
@@ -187,6 +189,7 @@
 
   "compose.new": "新邮件",
   "compose.reply": "回复",
+  "compose.replyAll": "回复全部",
   "compose.forward": "转发",
   "compose.from": "发件人",
   "compose.to": "收件人",

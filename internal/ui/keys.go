@@ -22,6 +22,7 @@ const (
 	keyStar
 	keyRead
 	keyReply
+	keyReplyAll
 	keyForward
 	keyEscape
 	keyCloseWindow
@@ -115,6 +116,7 @@ var shortcutTable = []shortcut{
 	{"shortcut.top", groupScroll, keyTop, false, 0, []key.Name{key.NameHome}, []string{"Home"}},
 	{"shortcut.bottom", groupScroll, keyBottom, false, 0, []key.Name{key.NameEnd}, []string{"End"}},
 	{"shortcut.reply", groupReader, keyReply, false, 0, []key.Name{"R"}, []string{"R"}},
+	{"shortcut.replyAll", groupReader, keyReplyAll, false, 0, []key.Name{"A"}, []string{"A"}},
 	{"shortcut.forward", groupReader, keyForward, false, 0, []key.Name{"F"}, []string{"F"}},
 	{"shortcut.find", groupReader, keyFind, true, key.ModShortcut, []key.Name{"F"}, []string{"Ctrl", "F"}},
 }
@@ -165,6 +167,8 @@ func (sc shortcut) title() string {
 		return i18n.T("shortcut.bottom")
 	case "shortcut.reply":
 		return i18n.T("shortcut.reply")
+	case "shortcut.replyAll":
+		return i18n.T("shortcut.replyAll")
 	case "shortcut.forward":
 		return i18n.T("shortcut.forward")
 	case "shortcut.find":
@@ -419,6 +423,12 @@ func (a *App) readerKeys(gtx layout.Context, bits uint32) {
 	if bits&keyReply != 0 {
 		if m := a.reader.newestForReply; m != nil {
 			a.openCompose(composeReply, m)
+		}
+		return
+	}
+	if bits&keyReplyAll != 0 {
+		if m := a.reader.newestForReply; m != nil {
+			a.openCompose(composeReplyAll, m)
 		}
 		return
 	}

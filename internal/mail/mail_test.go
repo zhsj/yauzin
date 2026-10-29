@@ -283,6 +283,99 @@ func TestReplyReferences(t *testing.T) {
 	}
 }
 
+func TestReplyRecipients(t *testing.T) {
+	me := []Address{{Email: "me@example.com"}}
+	parent := &Message{
+		MessageSummary: MessageSummary{
+			From: Address{Name: "Bob", Email: "bob@example.com"},
+			To:   []Address{{Name: "Me", Email: "ME@example.com"}, {Name: "Ann", Email: "ann@example.com"}},
+		},
+		Cc: []Address{{Name: "Cid", Email: "cid@example.com"}, {Email: "ann@example.com"}},
+	}
+	tests := []struct {
+		name   string
+		parent *Message
+		all    bool
+		wantTo []string
+		wantCc []string
+	}{
+		{
+			name:   "reply goes to the sender alone",
+			parent: parent,
+			wantTo: []string{"bob@example.com"},
+		},
+		{
+			name:   "reply all adds the other original recipients",
+			parent: parent,
+			all:    true,
+			wantTo: []string{"bob@example.com", "ann@example.com"},
+			wantCc: []string{"cid@example.com"},
+		},
+		{
+			name: "reply all leaves out the caller",
+			parent: &Message{
+				MessageSummary: MessageSummary{
+					From: Address{Email: "me@example.com"},
+					To:   []Address{{Email: "bob@example.com"}},
+				},
+				Cc: []Address{{Email: "Me@Example.com"}},
+			},
+			all:    true,
+			wantTo: []string{"bob@example.com"},
+		},
+		{
+			name: "reply-to wins for a reply",
+			parent: &Message{
+				MessageSummary: MessageSummary{
+					From: Address{Email: "list@example.com"},
+					To:   []Address{{Email: "ann@example.com"}},
+				},
+				Cc:      []Address{{Email: "cid@example.com"}},
+				ReplyTo: []Address{{Name: "Bob", Email: "bob@example.com"}},
+			},
+			wantTo: []string{"bob@example.com"},
+		},
+		{
+			name: "reply all ignores the original recipients behind reply-to",
+			parent: &Message{
+				MessageSummary: MessageSummary{
+					From: Address{Email: "list@example.com"},
+					To:   []Address{{Email: "ann@example.com"}},
+				},
+				Cc:      []Address{{Email: "cid@example.com"}},
+				ReplyTo: []Address{{Email: "bob@example.com"}, {Email: "BOB@example.com"}},
+			},
+			all:    true,
+			wantTo: []string{"bob@example.com"},
+		},
+		{
+			name:   "missing parent",
+			parent: nil,
+			all:    true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			to, cc := ReplyRecipients(tt.parent, me, tt.all)
+			if got := addressEmails(to); strings.Join(got, ",") != strings.Join(tt.wantTo, ",") {
+				t.Fatalf("To = %v, want %v", got, tt.wantTo)
+			}
+			if got := addressEmails(cc); strings.Join(got, ",") != strings.Join(tt.wantCc, ",") {
+				t.Fatalf("Cc = %v, want %v", got, tt.wantCc)
+			}
+		})
+	}
+}
+
+// addressEmails lists the addresses of one recipient row for comparison.
+func addressEmails(addrs []Address) []string {
+	out := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		out = append(out, addr.Email)
+	}
+	return out
+}
+
 func TestAppendUniqueAddresses(t *testing.T) {
 	base := []Address{{Email: "a@example.com"}}
 	got := AppendUniqueAddresses(base,

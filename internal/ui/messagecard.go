@@ -46,10 +46,20 @@ func (c *messageCard) actions(a *App) {
 	c.more.track = true
 }
 
-// menuItems lists the viewing actions of one message. The two previews need an
-// HTML body, the source view works for every message.
+// menuItems lists the actions of one message: reply-all is always offered, the
+// two previews need an HTML body, and the source view works for every message.
+// The composer takes the message from the reader when the item is clicked, so
+// a refresh that replaced the message object is still quoted correctly.
 func (c *messageCard) menuItems(a *App, m *mail.Message) []menuItem {
-	items := make([]menuItem, 0, 3)
+	items := []menuItem{{
+		Label: i18n.T("reader.replyAll"),
+		Icon:  iconReply,
+		OnTap: func() {
+			if msg := c.message(a); msg != nil {
+				a.openCompose(composeReplyAll, msg)
+			}
+		},
+	}}
 	if strings.TrimSpace(m.HTMLBody) != "" {
 		items = append(items,
 			menuItem{Label: i18n.T("reader.menu.safePreview"), Icon: iconOpenInNew, OnTap: func() {

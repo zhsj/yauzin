@@ -923,6 +923,7 @@ func sourceOf(m *mail.Message) string {
 	write("From", m.From.String())
 	write("To", mail.FormatAddressList(m.To))
 	write("Cc", mail.FormatAddressList(m.Cc))
+	write("Reply-To", mail.FormatAddressList(m.ReplyTo))
 	write("Subject", m.Subject)
 	if !m.Date.IsZero() {
 		write("Date", m.Date.Format(time.RFC1123Z))

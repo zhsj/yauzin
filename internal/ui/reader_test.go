@@ -153,6 +153,7 @@ func TestMessageCardMenuFollowsTheMessage(t *testing.T) {
 
 	items := card.menuItems(a, withHTML)
 	want := []string{
+		i18n.T("reader.replyAll"),
 		i18n.T("reader.menu.safePreview"),
 		i18n.T("reader.menu.fullPreview"),
 		i18n.T("reader.menu.viewSource"),
@@ -170,8 +171,42 @@ func TestMessageCardMenuFollowsTheMessage(t *testing.T) {
 	}
 
 	items = card.menuItems(a, plain)
-	if len(items) != 1 || items[0].Label != i18n.T("reader.menu.viewSource") {
-		t.Fatalf("text-only menu = %+v, want the source view alone", items)
+	if len(items) != 2 || items[0].Label != i18n.T("reader.replyAll") || items[1].Label != i18n.T("reader.menu.viewSource") {
+		t.Fatalf("text-only menu = %+v, want reply-all and the source view", items)
+	}
+}
+
+// TestMessageCardMenuRepliesToAll pins the menu entry: it opens a reply-all
+// composer for the message the card currently shows, with the other original
+// recipients on the Cc row.
+func TestMessageCardMenuRepliesToAll(t *testing.T) {
+	a := testApp(t)
+	msg := &mail.Message{
+		MessageSummary: mail.MessageSummary{
+			ID:   "m1",
+			From: mail.Address{Name: "Bob", Email: "bob@example.com"},
+			To:   []mail.Address{{Email: "ada@example.com"}},
+		},
+		Cc: []mail.Address{{Name: "Cid", Email: "cid@example.com"}},
+	}
+	a.msgs = []*mail.Message{msg}
+	card := a.reader.cardFor("m1")
+	card.actions(a)
+
+	items := card.menuItems(a, msg)
+	if items[0].Label != i18n.T("reader.replyAll") {
+		t.Fatalf("first entry = %q, want reply-all", items[0].Label)
+	}
+	items[0].OnTap()
+
+	if a.compose == nil {
+		t.Fatal("the reply-all entry opened no composer")
+	}
+	if a.compose.mode != composeReplyAll {
+		t.Fatalf("mode = %q, want %q", a.compose.mode, composeReplyAll)
+	}
+	if got, want := a.compose.cc.Text(), "Cid <cid@example.com>"; got != want {
+		t.Fatalf("Cc = %q, want %q", got, want)
 	}
 }
 
@@ -191,8 +226,8 @@ func TestMessageCardMoreOpensTheMenu(t *testing.T) {
 	if !ok {
 		t.Fatalf("overlay = %T after the more button, want *menuOverlay", a.overlay)
 	}
-	if len(m.items) != 3 {
-		t.Fatalf("menu has %d entries, want 3", len(m.items))
+	if len(m.items) != 4 {
+		t.Fatalf("menu has %d entries, want 4", len(m.items))
 	}
 }
 

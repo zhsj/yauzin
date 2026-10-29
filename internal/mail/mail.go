@@ -136,7 +136,11 @@ type Message struct {
 	MessageID string
 	// References lists the Message-IDs of the conversation's ancestors, oldest
 	// first, angle brackets included.
-	References  []string
+	References []string
+	// ReplyTo is the Reply-To header. When it is present, a reply goes only to
+	// these addresses: the sender asked for answers elsewhere than the mailbox
+	// the message came from.
+	ReplyTo     []Address
 	Cc          []Address
 	HTMLBody    string
 	TextBody    string
@@ -460,10 +464,9 @@ func unquoteDisplayName(name string) string {
 
 // FormatAddressList renders addresses separated by commas.
 //
-// It is reserved for backends that hand a recipient list to a protocol layer
-// (SMTP's RCPT TO, JMAP's replyTo): no code path in the app calls it yet, only
-// the tests do. Keep it exported so a real backend does not have to reintroduce
-// the same loop.
+// It fills the recipient fields of a reply and is also what a backend hands to
+// a protocol layer (SMTP's RCPT TO, JMAP's replyTo); the round trip through
+// ParseAddressList keeps the display names intact.
 func FormatAddressList(addrs []Address) string {
 	parts := make([]string, 0, len(addrs))
 	for _, a := range addrs {
@@ -536,6 +539,59 @@ func ReplyReferences(parent *Message) []string {
 		return nil
 	}
 	return ids
+}
+
+// ReplyRecipients returns the To and Cc rows of a reply to parent. A message
+// carrying Reply-To is answered only at those addresses: a reply and a
+// reply-all alike ignore the original To and Cc, because the sender asked for
+// answers somewhere else. Without that header the reply goes to the sender
+// alone, while a reply-all (all is true) also carries the other original
+// recipients; self names the caller's own addresses, which a reply-all leaves
+// out so the user does not copy themselves. Addresses are deduplicated by
+// email, and a Cc entry that already sits in To is dropped.
+func ReplyRecipients(parent *Message, self []Address, all bool) (to, cc []Address) {
+	if parent == nil {
+		return nil, nil
+	}
+	if len(parent.ReplyTo) > 0 {
+		return AppendUniqueAddresses(nil, parent.ReplyTo...), nil
+	}
+	if !all {
+		return AppendUniqueAddresses(nil, parent.From), nil
+	}
+	own := make(map[string]struct{}, len(self))
+	for _, addr := range self {
+		if key := addressKey(addr); key != "" {
+			own[key] = struct{}{}
+		}
+	}
+	seen := make(map[string]struct{}, len(parent.To)+len(parent.Cc)+1)
+	add := func(dst *[]Address, addrs ...Address) {
+		for _, addr := range addrs {
+			key := addressKey(addr)
+			if key == "" {
+				continue
+			}
+			if _, cut := own[key]; cut {
+				continue
+			}
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+			*dst = append(*dst, addr)
+		}
+	}
+	add(&to, parent.From)
+	add(&to, parent.To...)
+	add(&cc, parent.Cc...)
+	return to, cc
+}
+
+// addressKey is the identity of an address for deduplication: the address
+// itself, case folded, without the display name.
+func addressKey(addr Address) string {
+	return strings.ToLower(strings.TrimSpace(addr.Email))
 }
 
 // subjectPrefixes are the reply/forward markers stripped when conversations are

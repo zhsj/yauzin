@@ -181,6 +181,27 @@ func TestMessageReadsThreadHeaders(t *testing.T) {
 	}
 }
 
+// TestMessageReadsReplyTo pins the header that decides where a reply goes: a
+// reply must honour it instead of the From address, and a message without it
+// leaves the field empty.
+func TestMessageReadsReplyTo(t *testing.T) {
+	svc := &Service{acc: mail.Account{ID: "acc"}}
+	got := svc.message(&Message{ID: "m1", Payload: &MessagePart{Headers: []*MessagePartHeader{
+		{Name: "From", Value: "List <list@example.com>"},
+		{Name: "Reply-To", Value: "Bob <bob@example.com>, carol@example.com"},
+	}}})
+	if len(got.ReplyTo) != 2 || got.ReplyTo[0].Name != "Bob" || got.ReplyTo[0].Email != "bob@example.com" {
+		t.Fatalf("Reply-To = %+v, want Bob and carol", got.ReplyTo)
+	}
+	if got.ReplyTo[1].Email != "carol@example.com" {
+		t.Fatalf("second Reply-To = %+v", got.ReplyTo[1])
+	}
+
+	if missing := svc.message(&Message{ID: "m2", Payload: &MessagePart{}}); missing.ReplyTo != nil {
+		t.Fatalf("a message without Reply-To reported %+v", missing.ReplyTo)
+	}
+}
+
 func TestMalformedAddressesFallBackToText(t *testing.T) {
 	addrs := parseAddressList("not an address <")
 	if len(addrs) != 1 || addrs[0].String() != "not an address <" {
