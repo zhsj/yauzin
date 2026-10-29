@@ -39,6 +39,7 @@ type readerView struct {
 	del     *iconButton
 	read    *iconButton
 	star    *iconButton
+	spam    *iconButton
 	reply   *iconButton
 	forward *iconButton
 
@@ -61,6 +62,7 @@ func newReader(a *App) *readerView {
 	r.del = newListIcon(iconDelete, 36, a.deleteThread)
 	r.read = newListIcon(iconMarkRead, 36, a.toggleThreadRead)
 	r.star = newListIcon(iconStarOutline, 36, func() { a.toggleThreadStar(a.thread.ID) })
+	r.spam = newListIcon(iconSpam, 36, a.toggleThreadSpam)
 	r.reply = newListIcon(iconReply, 36, func() {
 		if r.newestForReply != nil {
 			a.openCompose(composeReply, r.newestForReply)
@@ -103,6 +105,15 @@ func (r *readerView) Layout(gtx layout.Context) layout.Dimensions {
 	// forward are unambiguous and go without.
 	r.archive.setTip(i18n.T("tooltip.archive"))
 	r.del.setTip(i18n.T("tooltip.delete"))
+	// One spam button serves both directions: it points at the folder the
+	// conversation is not in, which is where the click sends it.
+	spam := !a.viewingSpam()
+	r.spam.setTip(spamTip(spam))
+	if spam {
+		r.spam.setIcon(iconSpam)
+	} else {
+		r.spam.setIcon(iconInbox)
+	}
 
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -151,6 +162,12 @@ func (r *readerView) toolbar(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return r.del.Layout(gtx, th) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return r.read.Layout(gtx, th) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return r.star.Layout(gtx, th) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if !a.showsSpamAction() {
+					return layout.Dimensions{}
+				}
+				return r.spam.Layout(gtx, th)
+			}),
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 				return layout.Dimensions{Size: gtx.Constraints.Min}
 			}),

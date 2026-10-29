@@ -38,6 +38,7 @@ type listToolbar struct {
 	delete     *iconButton
 	markRead   *iconButton
 	markUnread *iconButton
+	spam       *iconButton
 	clear      *iconButton
 
 	prev *iconButton
@@ -78,6 +79,7 @@ func newListToolbar(a *App) *listToolbar {
 	t.delete = newListIcon(iconDelete, 32, a.bulkDelete)
 	t.markRead = newListIcon(iconMarkRead, 32, func() { a.bulkSetRead(true) })
 	t.markUnread = newListIcon(iconMarkUnread, 32, func() { a.bulkSetRead(false) })
+	t.spam = newListIcon(iconSpam, 32, a.bulkToggleSpam)
 	t.clear = newListIcon(iconClose, 32, func() { a.list.clearSelection() })
 	t.prev = newListIcon(iconChevronLeft, 32, func() { a.goToPage(t.page - 1) })
 	t.next = newListIcon(iconChevronRight, 32, func() { a.goToPage(t.page + 1) })
@@ -102,6 +104,15 @@ func (t *listToolbar) setTips() {
 	t.delete.setTip(i18n.T("tooltip.delete"))
 	t.markRead.setTip(i18n.T("tooltip.markRead"))
 	t.markUnread.setTip(i18n.T("tooltip.markUnread"))
+	// The selected rows come from the folder on screen, so the spam action
+	// points at the other folder, like the reader's and the rows' buttons.
+	spam := !t.app.viewingSpam()
+	t.spam.setTip(spamTip(spam))
+	if spam {
+		t.spam.setIcon(iconSpam)
+	} else {
+		t.spam.setIcon(iconInbox)
+	}
 }
 
 // setPage records the page the list is showing: its number, the total the
@@ -234,6 +245,12 @@ func (t *listToolbar) leftControls(gtx layout.Context, th *theme, selected int) 
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return t.delete.Layout(gtx, th) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return t.markRead.Layout(gtx, th) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return t.markUnread.Layout(gtx, th) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if !t.app.showsSpamAction() {
+					return layout.Dimensions{}
+				}
+				return t.spam.Layout(gtx, th)
+			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return th.text(gtx, i18n.N("list.selected", selected), textSecondary, colText, font.Medium, 1)

@@ -44,6 +44,7 @@ type messageRow struct {
 	archive *iconButton
 	del     *iconButton
 	mark    *iconButton
+	spam    *iconButton
 }
 
 func newMessageRow(l *messageListView) *messageRow {
@@ -62,6 +63,9 @@ func newMessageRow(l *messageListView) *messageRow {
 	})
 	r.mark = newListIcon(iconMarkRead, 28, func() {
 		r.app.toggleThreadReadByID(r.currentID)
+	})
+	r.spam = newListIcon(iconSpam, 28, func() {
+		r.app.toggleThreadSpamByID(r.currentID)
 	})
 	return r
 }
@@ -135,6 +139,15 @@ func (r *messageRow) syncControls(sum mail.ThreadSummary, selected bool) {
 	// needs no rebuild.
 	r.archive.setTip(i18n.T("tooltip.archive"))
 	r.del.setTip(i18n.T("tooltip.delete"))
+	// The row's spam button points at the other folder, the same way the
+	// reader's does: the whole page shares the folder on screen.
+	spam := !r.app.viewingSpam()
+	r.spam.setTip(spamTip(spam))
+	if spam {
+		r.spam.setIcon(iconSpam)
+	} else {
+		r.spam.setIcon(iconInbox)
+	}
 	if sum.Starred {
 		r.star.setIcon(iconStarFilled)
 	} else {
@@ -289,14 +302,15 @@ func (r *messageRow) tailCell(gtx layout.Context, sum mail.ThreadSummary, hovere
 	// The tail always reserves the same width — the idle row of the attachment
 	// slot and the date cell — so the subject/snippet body keeps its equal split
 	// no matter whether the pointer hovers a row or the conversation has an
-	// attachment. The hover actions overlay the same slot, right-aligned.
-	const tailWidth = 8 + 16 + 8 + 76
+	// attachment. The hover actions overlay the same slot, right-aligned, and
+	// are four 28dp buttons; that set is the wider of the two.
+	const tailWidth = 4 * 28
 	return layout.Stack{Alignment: layout.E}.Layout(gtx,
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 			if hovered {
 				return layout.Dimensions{Size: image.Pt(gtx.Dp(tailWidth), 0)}
 			}
-			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+			dims := layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					if !sum.HasAttachments {
@@ -313,6 +327,11 @@ func (r *messageRow) tailCell(gtx layout.Context, sum mail.ThreadSummary, hovere
 					})
 				}),
 			)
+			// Report the reserved width whatever the row drew, so the slot is
+			// the same size in both states and hovering never reflows the
+			// subject.
+			dims.Size.X = gtx.Dp(tailWidth)
+			return dims
 		}),
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
 			if !hovered {
@@ -322,6 +341,12 @@ func (r *messageRow) tailCell(gtx layout.Context, sum mail.ThreadSummary, hovere
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return r.archive.Layout(gtx, r.app.th) }),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return r.del.Layout(gtx, r.app.th) }),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return r.mark.Layout(gtx, r.app.th) }),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					if !r.app.showsSpamAction() {
+						return layout.Dimensions{}
+					}
+					return r.spam.Layout(gtx, r.app.th)
+				}),
 			)
 		}),
 	)
@@ -331,10 +356,10 @@ func (r *messageRow) tailCell(gtx layout.Context, sum mail.ThreadSummary, hovere
 // were not laid out this frame cannot suppress the row action.
 func (r *messageRow) clearHits() {
 	r.check.hit, r.star.hit = false, false
-	r.archive.hit, r.del.hit, r.mark.hit = false, false, false
+	r.archive.hit, r.del.hit, r.mark.hit, r.spam.hit = false, false, false, false
 }
 
 // controlHit reports whether one of the row's controls consumed the click.
 func (r *messageRow) controlHit() bool {
-	return r.check.hit || r.star.hit || r.archive.hit || r.del.hit || r.mark.hit
+	return r.check.hit || r.star.hit || r.archive.hit || r.del.hit || r.mark.hit || r.spam.hit
 }
