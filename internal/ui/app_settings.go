@@ -4,8 +4,6 @@ import (
 	"errors"
 	"strings"
 
-	"gioui.org/app"
-
 	"github.com/zhsj/yauzin/internal/accounts"
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/logging"
@@ -41,9 +39,7 @@ func (a *App) updateSettings(mutate func(*prefs.Settings)) bool {
 func (a *App) rebuildSettingsPanel() {
 	a.settings = newSettingsView(a)
 	a.overlay = a.settings
-	if w := a.window(); w != nil {
-		w.Invalidate()
-	}
+	a.invalidate()
 }
 
 // setLanguage switches the interface language and applies it to the running
@@ -65,7 +61,7 @@ func (a *App) setLanguage(tag string) {
 	a.reader.relabel()
 	brand := i18n.T("app.brand")
 	if w := a.window(); w != nil {
-		w.Option(app.Title(brand))
+		w.SetTitle(brand)
 	}
 	a.tray.Relabel(brand)
 

@@ -4,6 +4,11 @@
 // app_lifecycle for the window and the callback queue, app_data for folders and
 // paging, app_thread for conversations and bulk actions, app_overlay for the
 // frame and the floating panels, and app_settings for stored preferences.
+//
+// The package never imports gioui.org/app: the platform window layer sits
+// behind the Driver interface (see driver.go) and is implemented by
+// internal/uihost, which is the only place that needs cgo. Everything here
+// therefore compiles and is tested without a graphics stack.
 package ui
 
 import (
@@ -17,11 +22,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gioui.org/app"
 	"gioui.org/io/system"
 	"gioui.org/layout"
 	"gioui.org/unit"
-	"gioui.org/x/explorer"
 
 	"github.com/zhsj/yauzin/internal/accounts"
 	"github.com/zhsj/yauzin/internal/env"
@@ -62,10 +65,9 @@ type overlay interface {
 type App struct {
 	// Window and process lifetime.
 	// winMu guards win, which is nil while the process lives only in the tray.
-	winMu    sync.Mutex
-	win      *app.Window
-	th       *theme
-	explorer *explorer.Explorer
+	winMu sync.Mutex
+	win   Window
+	th    *theme
 
 	// Accounts and the backend that serves each one.
 	accounts []mail.Account

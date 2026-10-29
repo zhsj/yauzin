@@ -11,11 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gioui.org/app"
 	"gioui.org/io/system"
-	"gioui.org/op"
-	"gioui.org/unit"
-	"gioui.org/x/explorer"
+	"gioui.org/layout"
 
 	"github.com/zhsj/yauzin/internal/cursor"
 	"github.com/zhsj/yauzin/internal/env"
@@ -30,11 +27,12 @@ import (
 )
 
 // Run owns the window lifecycle. args are the arguments of this launch: a
-// mailto URI among them opens a composer once the app exists. The tray keeps
-// the process alive after the window is closed, so the App instance survives
-// across windows and keeps the loaded mail, the current folder and the draft
-// state intact.
-func Run(args []string) {
+// mailto URI among them opens a composer once the app exists. drv builds the
+// platform windows; internal/uihost is the implementation the program uses, and
+// a test can pass its own. The tray keeps the process alive after the window is
+// closed, so the App instance survives across windows and keeps the loaded
+// mail, the current folder and the draft state intact.
+func Run(args []string, drv Driver) {
 	// The console logger belongs to the process, not to an App: install it
 	// before anything below can log. newApp then applies the stored level.
 	logging.Init()
@@ -140,7 +138,11 @@ func Run(args []string) {
 	a.startPolling()
 
 	for !a.quitting.Load() {
-		w := new(app.Window)
+		// The cursor theme is resolved right before every window is created:
+		// Gio reads it then, so a theme changed while the app sat in the tray
+		// has to be exported again for the new window.
+		applyCursorTheme()
+		w := drv.NewWindow()
 		a.attach(w)
 		a.eventLoop(w)
 		a.detach()
@@ -175,56 +177,38 @@ func (a *App) closeServices() {
 	}
 }
 
-// eventLoop runs until the window is destroyed.
-func (a *App) eventLoop(w *app.Window) {
-	var ops op.Ops
-	for {
-		e := w.Event()
-		if a.explorer != nil {
-			a.explorer.ListenEvents(e)
-		}
-		switch e := e.(type) {
-		case app.FrameEvent:
-			gtx := app.NewContext(&ops, e)
-			a.perf.onFrame(e.Now)
-			a.drain()
-			a.startInitialLoad()
-			a.handleKeys(gtx)
-			a.layout(gtx)
-			// Hover labels are queued during layout and replayed here, on top
-			// of everything else and outside every clip.
-			a.drawTooltips(gtx)
-			e.Frame(gtx.Ops)
-			if acts := a.windowActions; acts != 0 {
-				a.windowActions = 0
-				a.performWindowActions(w, acts)
-			}
-		case app.ConfigEvent:
-			// Config.Decorated reports whether the platform decorates the
-			// window; without that the application draws its own title bar.
-			a.decorated = e.Config.Decorated
-			a.maximized = e.Config.Mode == app.Maximized
-			w.Invalidate()
-		case app.DestroyEvent:
-			return
-		}
-	}
+// eventLoop runs until the window is destroyed. The two callbacks are the whole
+// of what the window layer knows about the app.
+func (a *App) eventLoop(w Window) {
+	w.Events(a.onFrame, a.onWindowConfig)
 }
 
-// performWindowActions runs the requests the title bar collected during the
-// frame. The mode reset after a minimize works around the Gio Wayland
-// behaviour documented at windowSteps: the window keeps its title bar and gets
-// its maximize and drag gestures back once it is restored.
-func (a *App) performWindowActions(w *app.Window, acts system.Action) {
-	perform, resetMode := windowSteps(acts)
-	w.Perform(perform)
-	if resetMode {
-		w.Option(app.Windowed.Option())
-	}
+// onFrame draws one frame and returns the window requests the title bar
+// collected during it. They travel back instead of running here because the
+// layer applies them after the frame is handed to Gio: a close must not tear
+// the window down in the middle of a layout.
+func (a *App) onFrame(gtx layout.Context) WindowActions {
+	a.perf.onFrame(gtx.Now)
+	a.drain()
+	a.startInitialLoad()
+	a.handleKeys(gtx)
+	a.layout(gtx)
+	// Hover labels are queued during layout and replayed here, on top of
+	// everything else and outside every clip.
+	a.drawTooltips(gtx)
+	perform, resetMode := windowSteps(a.windowActions)
+	a.windowActions = 0
+	return WindowActions{Actions: perform, ResetMode: resetMode}
+}
+
+// onWindowConfig mirrors the platform state the title bar adapts to.
+func (a *App) onWindowConfig(cfg WindowConfig) {
+	a.decorated = cfg.Decorated
+	a.maximized = cfg.Maximized
 }
 
 // attach binds a fresh window to the existing App state.
-func (a *App) attach(w *app.Window) {
+func (a *App) attach(w Window) {
 	// An openCh token posted before this window existed is answered by creating
 	// it. Draining the token keeps it from reopening the next window the user
 	// closes, which is why the startup mailto arguments post without one.
@@ -232,30 +216,19 @@ func (a *App) attach(w *app.Window) {
 	case <-a.openCh:
 	default:
 	}
-	// Gio reads the cursor theme when it creates the window, so re-resolve it
-	// here to follow theme changes made while the app sat in the tray.
-	applyCursorTheme()
 	// Assume the platform decorates the new window until it reports otherwise:
 	// that keeps the first frame free of a title bar, and the ConfigEvent of
 	// the first frames corrects it wherever the platform leaves the
 	// decorations to the app.
 	a.decorated = true
 	a.maximized = false
-	w.Option(
-		app.Title(i18n.T("app.brand")),
-		app.Size(unit.Dp(1200), unit.Dp(840)),
-		app.MinSize(unit.Dp(560), unit.Dp(420)),
-		// Leave decoration to the app so Config.Decorated tells the truth. The
-		// title bar is drawn by the app in windowcontrols.go and topbar.go;
-		// platforms that decorate regardless (X11, Windows, macOS) keep their
-		// own frame and the app draws nothing. On Wayland the compositor
-		// answers client-side because internal/waylanddeco requests it.
-		app.Decorated(false),
-	)
 	a.winMu.Lock()
 	a.win = w
-	a.explorer = explorer.NewExplorer(w)
 	a.winMu.Unlock()
+	// The brand is also the title: set it here rather than in the window layer,
+	// which knows nothing about the wording, and again whenever the language
+	// changes.
+	w.SetTitle(i18n.T("app.brand"))
 	if a.loaded {
 		// detach cancelled whatever was in flight, and the mailbox may have
 		// changed while the app sat in the tray: check and refresh before the
@@ -275,11 +248,10 @@ func (a *App) detach() {
 	a.loadingThread = false
 	a.winMu.Lock()
 	a.win = nil
-	a.explorer = nil
 	a.winMu.Unlock()
 }
 
-func (a *App) window() *app.Window {
+func (a *App) window() Window {
 	a.winMu.Lock()
 	defer a.winMu.Unlock()
 	return a.win
@@ -293,13 +265,16 @@ func (a *App) invalidate() {
 	}
 }
 
-// windowExplorer returns the file picker of the current window. Workers must
-// not read the field directly: detach clears it on the UI goroutine while they
-// may still be running.
-func (a *App) windowExplorer() *explorer.Explorer {
+// windowPicker returns the file picker of the current window, nil without one.
+// Workers must not read the window directly: detach clears it on the UI
+// goroutine while they may still be running.
+func (a *App) windowPicker() FilePicker {
 	a.winMu.Lock()
 	defer a.winMu.Unlock()
-	return a.explorer
+	if a.win == nil {
+		return nil
+	}
+	return a.win.Picker()
 }
 
 // waitForWindow blocks the lifecycle loop until the tray asks for a window or

@@ -16,7 +16,7 @@
 
 ## 2. 分层
 
-依赖方向单向：`cmd` → `internal/ui` → 领域包；`internal/ui` 只依赖 `mail.Service` 接口，不依赖任何具体后端。各文件职责见 [§15 目录结构](#15-目录结构)，契约与不变量见下文。
+依赖方向单向：`cmd/yauzin` → `internal/uihost` → `internal/ui` → 领域包；`internal/ui` 只依赖 `mail.Service` 接口，不依赖任何具体后端。`internal/uihost` 是唯一 import `gioui.org/app` 的包（进程入口、窗口、事件循环与文件选择器），`internal/ui` 通过 `Driver`/`Window`/`FilePicker` 接口（`driver.go`）使用它，自身不碰 cgo，因此可以脱离图形栈编译与测试。各文件职责见 [§15 目录结构](#15-目录结构)，契约与不变量见下文。
 
 - **后端装配点**：`internal/ui/app.go` 的 `appOptions{accounts, newService, dev, store, proxy, factory, sendSMTP}` 是唯一装配后端的地方（`sendSMTP` 是发信账号的出站 SMTP 发送函数，默认由 `smtp.New` + 代理组装，测试注入替身）。`newApp()` 读取 `settings.json` 与 `accounts.json`，账号列表 = 已存 Gmail 账号；开发模式（`YAUZIN_DEV`）下再在末尾追加演示账号（`demo-gmail`，由 `internal/mail/mock` 服务），它是唯一使用 mock 后端的账号。没有任何账号时窗口以空列表打开（不阻塞启动，设置页仍可添加）。`newAppWith(pref, opts)` 接受已解析的设置与注入的工厂，测试经它构造 `App`，不触碰磁盘。UI 其余部分继续只认 `mail.Service`。
 
@@ -125,9 +125,10 @@
 
 ### 4.4 窗口生命周期
 
-- `Run()` 掌管生命周期循环：`App` 实例**跨窗口复用**，`attach`/`detach` 维护 `win`，托盘通过容量 1 的 `openCh`/`quitCh` 唤醒。
+- `Run(args, drv)` 掌管生命周期循环：`App` 实例**跨窗口复用**，`attach`/`detach` 维护 `win`，托盘通过容量 1 的 `openCh`/`quitCh` 唤醒。`drv` 是窗口层的唯一入口（`newApp` 不知道它），循环每轮 `applyCursorTheme()` → `drv.NewWindow()` → `attach` → `eventLoop` → `detach`；光标主题必须在建窗前解析，Gio 在创建窗口时读取 `XCURSOR_THEME`。
+- **窗口层是端口加实现**：`internal/ui/driver.go` 声明 `Driver`（建窗）、`Window`（`Events`/`Invalidate`/`Perform`/`SetTitle`/`Picker`）、`WindowConfig`、`WindowActions` 与 `FilePicker`；`internal/uihost` 用 `app.Window` 与 `*explorer.Explorer` 实现它们，并由 `uihost.Main` 充当进程入口（设 `app.ID`、起 UI goroutine、把主线程交给 `app.Main()`）。依赖方向因此是 `cmd/yauzin → uihost → ui`，ui 侧一行 cgo 也没有。
 - 关闭窗口默认销毁窗口、进程留在托盘；无通知区时降级为「关闭即退出」。
-- `windowActions` 收集标题栏请求，**帧绘制结束后**统一 `w.Perform`，避免布局中途销毁窗口；Ctrl+W 与标题栏关闭按钮共用这条路径，Ctrl+Q 直接走 `requestQuit()`。
+- `windowActions` 收集标题栏请求，帧回调把它连同 `windowSteps` 的复位结论一起以 `WindowActions` 返回给窗口层，**帧提交给 Gio 之后**才 `Perform`，避免布局中途销毁窗口；Ctrl+W 与标题栏关闭按钮共用这条路径，Ctrl+Q 直接走 `requestQuit()`（经 `Window.Perform`）。
 - `startInitialLoad()` 由 `startOnce` 门禁只跑一次：一次检查同时驱动全量加载与收件箱未读基线（`pollInboxUnreadKnown`）；后续窗口重建由 `attach` 的 `reloadChecked` 刷新，冷却窗口内复用上一次检查结论。
 - Gio 的 `app.Main()` 在 Linux 不返回，退出必须显式 `cleanupTemp()` + `os.Exit(0)`；托盘没有库自己的事件循环，退出路径只调 `t.Close()` 做增量卸载。
 - 生命周期循环之外的结束方式也要收拾现场：`watchInterrupt()` 在 `newApp()` 之后就开始监听 `SIGINT`（`Ctrl+C`，`signal.Notify` 就地注册），收到后先 `cleanupTemp()` 再 `os.Exit(0)`，否则托盘驻留期间被 `Ctrl+C` 停止的运行都会留下临时目录。`SIGTERM`/`SIGHUP` 故意不接管，保留默认行为：桌面会话结束、`kill`、终端挂断都按系统语义立即结束进程，不等待清理。信号路径与 UI goroutine 会并发访问临时目录，`tmpMu` 保护 `tmpDir`，`tmpClosed` 保证清理后不会再建一个新目录。
@@ -189,7 +190,7 @@
 - 未导出尺寸时 Gio 的 Wayland 后端自己用 32（`os_wayland.go`），KDE 未设置时是 24，所以 `kreadconfig6` 读不到值时两侧尺寸可能差一档。
 - 应用自己导出的值会被下一次解析读到（误判为「用户设置」并且不再回查 portal），因此 `cursor` 包用 `lastExport` 在读取 env 时屏蔽自写值；`Apply` 只在每次建窗前调用一次。运行中换主题需重开窗口。
 - **边缘缩放挂在 `Config.Decorated` 上**：Gio 的缩放热区 `systemGesture()` 首行即 `if Mode != Windowed || Decorated { return nil, 0 }`，只有合成器确认客户端装饰时才有缩放光标与 `xdg_toplevel.resize`。`internal/waylanddeco` 的 `set_mode(client_side)` 就是让合成器回 `configure(client_side)` 的那一步；应用自己拿不到 `wl_surface`/`xdg_toplevel`（`io/system` 只暴露 `ActionMove`），也不需要拿。
-- **最小化后的模式同步**：Gio 的 Wayland 后端把 `Mode` 置为 `Minimized` 后只靠 `wl_surface.enter` 清除，而窗口在同一 output 恢复不会触发 enter；`Configure` 又会丢弃 `prev.Mode == Minimized` 时的一切模式切换，于是恢复后最大化按钮、标题栏拖动与缩放热区全部失效。应用不做可视化补偿：`performWindowActions`（`app_lifecycle.go`）在执行动作后，按纯函数 `windowSteps` 的判断在最小化时补一次 `app.Windowed`，复位这条僵死记录（协议层窗口仍然是最小化的）。代价是幂等的最小化前已最大化情形需要点两次最大化：第一次只把状态同步回合成器本已保持的最大化。
+- **最小化后的模式同步**：Gio 的 Wayland 后端把 `Mode` 置为 `Minimized` 后只靠 `wl_surface.enter` 清除，而窗口在同一 output 恢复不会触发 enter；`Configure` 又会丢弃 `prev.Mode == Minimized` 时的一切模式切换，于是恢复后最大化按钮、标题栏拖动与缩放热区全部失效。应用不做可视化补偿：窗口层在 `Perform` 之后，按纯函数 `windowSteps`（`windowcontrols.go`，帧回调里算出并放进 `WindowActions.ResetMode`）的判断在最小化时补一次 `app.Windowed`，复位这条僵死记录（协议层窗口仍然是最小化的）。代价是幂等的最小化前已最大化情形需要点两次最大化：第一次只把状态同步回合成器本已保持的最大化。
 
 ### 7.2 使用者配置
 
@@ -254,7 +255,7 @@
 - **轮询与徽标**：轮询属于进程而不是窗口——`Run` 在 `tray.Start` 之后 `startPolling()`，退出前 `stopPolling()`。托盘驻留期间每分钟经同一检查通道（单飞 + 冷却，见 §4.2）检查一次，变化时只重载侧栏（标签名 + 未读数/颜色），不拉列表；徽标在 `loadFolderDetails` 的成功回调里统一刷新（收件箱未读 > 0 红、= 0 灰），因此启动、手动刷新、轮询、切账号、重建后端都会更新它。重开窗口时 `attach` 的「检查 + 全量加载」补齐列表。
 - `internal/singleinstance` 用会话总线名 `me.zhsj.yauzin`（同时是 Gio application ID）保证单实例：第一个进程持有名字并导出 `Open` 与 `OpenURI`，后续启动唤起窗口后 `os.Exit(0)`。带 mailto 参数时调 `OpenURI(uri)`，正在运行的实例若是旧版本、没有该方法，则回退 `Open`（窗口照开、URI 丢失并记日志），避免升级期间激活整个失败。Wayland 不允许强制前置已有窗口，这是已知限制。
 - **会话总线归进程所有**：单实例、通知、托盘都用 `dbus.SessionBus()` 这条进程级共享连接。任何包都不 `Close` 它：通知与托盘在 `Close` 里只 `RemoveSignal` / `RemoveMatchSignal` / `Export(nil, …)` 撤销自己挂载的东西，`singleinstance.Acquire`/`call` 失败路径也不关闭；进程退出（`os.Exit(0)`）时由内核回收 fd。需要独立生命周期时才用 `SessionBusPrivate()` 自建连接，但那就不再共享。
-- **mailto**：`cmd/yauzin` 把 `os.Args[1:]` 原样交给 `ui.Run`，解析放在纯 Go 的 `internal/mailto`（RFC 6068 的 path + hfields；按 `&` 与首个 `=` 手工切分、用 `url.PathUnescape` 解码，因为 `url.ParseQuery` 会把 RFC 6068 里字面的 `+` 当空格）。认 `to/cc/bcc/subject/body` 与 RFC 2368 遗留的 `in-reply-to`，地址类按出现顺序累加并去重，单行字段把 CR/LF 换成空格，正文把行尾归一为 LF。启动参数与「D-Bus 回调早于 `newApp` 返回」的 URI 都只 `post` 不 `requestOpen`（首个 `FrameEvent` 的 `drain` 就会打开撰写框；乱发 `openCh` 令牌会让用户刚关的窗口被重新弹出），外部激活才 `post + requestOpen`，`attach` 会清掉残留令牌。撰写框是单槽位，收到 mailto 一律替换当前草稿（丢弃未发送内容，属既定取舍）；有收件人时焦点落在正文并置于链接正文末尾。`in-reply-to` 经 `mail.NormalizeMessageID` 校验后写进 `composeView.inReplyTo`，`references` 只含这个父 ID；非法值只丢该头，主题不加 `Re:`。日志只说「拒绝了 mailto URI」，不记 URI（含收件人与正文）。
+- **mailto**：`uihost.Main` 把 `os.Args[1:]` 原样交给 `ui.Run`，解析放在纯 Go 的 `internal/mailto`（RFC 6068 的 path + hfields；按 `&` 与首个 `=` 手工切分、用 `url.PathUnescape` 解码，因为 `url.ParseQuery` 会把 RFC 6068 里字面的 `+` 当空格）。认 `to/cc/bcc/subject/body` 与 RFC 2368 遗留的 `in-reply-to`，地址类按出现顺序累加并去重，单行字段把 CR/LF 换成空格，正文把行尾归一为 LF。启动参数与「D-Bus 回调早于 `newApp` 返回」的 URI 都只 `post` 不 `requestOpen`（首个 `FrameEvent` 的 `drain` 就会打开撰写框；乱发 `openCh` 令牌会让用户刚关的窗口被重新弹出），外部激活才 `post + requestOpen`，`attach` 会清掉残留令牌。撰写框是单槽位，收到 mailto 一律替换当前草稿（丢弃未发送内容，属既定取舍）；有收件人时焦点落在正文并置于链接正文末尾。`in-reply-to` 经 `mail.NormalizeMessageID` 校验后写进 `composeView.inReplyTo`，`references` 只含这个父 ID；非法值只丢该头，主题不加 `Re:`。日志只说「拒绝了 mailto URI」，不记 URI（含收件人与正文）。
 
 ## 12. 性能监视器
 
@@ -271,7 +272,7 @@
 - Linux 运行需要 X11/OpenGL 或 Vulkan 运行库（`libx11`、`libxkbcommon`、`libGL`/`libvulkan`）；从源码编译还需要 `libx11-dev`、`libxkbcommon-x11-dev`、`libxcursor-dev`、`libxfixes-dev`、`libwayland-dev`、`libegl-dev`、`libvulkan-dev`。
 - 文件选择与附件保存通过 `xdg-desktop-portal` 提供的系统对话框；对话框不可用时保存直接报错并提示「系统文件选择器不可用」，不回退到 `~/Downloads`，也不写任何文件。附件保存先选位置再下载，内容直接写入所选文件；选择附件只记录用户文件的原始路径，不复制到临时目录，发送时才按需从原文件流式读取，草稿关闭或移除附件都不会删除原文件（文件在发送前被移动/改动会给出明确错误）；附件保存与邮件发送都显示在侧栏底部的「任务列表」分栏，任务完成后保留到进程退出。
 - macOS 需要 Xcode Command Line Tools，Windows 需要 MinGW-w64。
-- 开发沙箱 `CGO_ENABLED=0` 且缺少上述开发库：任何（直接或间接）import `gioui.org/app` 的目标（`internal/ui`、`cmd/yauzin`）只能在 Docker 内编译，典型报错 `build constraints exclude all Go files in .../gioui.org/internal/vk`。
+- 开发沙箱 `CGO_ENABLED=0` 且缺少上述开发库：任何（直接或间接）import `gioui.org/app` 的目标（`internal/uihost`、`cmd/yauzin`）只能在 Docker 内编译，典型报错 `build constraints exclude all Go files in .../gioui.org/internal/vk`。`internal/ui` 及其全部测试不在此列：它只经接口用到窗口层，可以在沙箱直接 `go test -vet=all ./internal/ui`。
 - 沙箱内访问外网走本地代理，命令前置 `https_proxy=http://127.0.0.1:1081`；`internal/cmd/gmailgen` 只在下载 Discovery 文档时需要它，代码本身不读代理配置。
 - 格式化使用 `gofmt`（沙箱 `PATH` 内，go1.27.2）；import 增删与分组使用 Go 扩展安装的 `goimports`（`~/go/bin/goimports`，**不在沙箱 `PATH`**），命令见 §13.5。
 - 静态检查用 `golangci-lint`（`staticcheck` + `gofumpt`/`goimports`），它随构建镜像提供，只在容器内运行（Gio 的包需要 cgo 与 C 头文件），命令见 §13.5。
@@ -334,7 +335,7 @@ docker run --rm --user $(id -u):$(id -g) \
 
 ### 13.5 静态检查与测试
 
-容器内跑测试与 lint（`internal/ui`、`cmd/*` 导入 Gio，必须有 cgo 与 C 头文件）：
+容器内跑测试与 lint（`internal/uihost`、`cmd/*` 导入 Gio，必须有 cgo 与 C 头文件；`./...` 因此要整个模块一起跑）：
 
 ```bash
 docker run --rm --user $(id -u):$(id -g) \
@@ -358,7 +359,7 @@ docker run --rm --user $(id -u):$(id -g) \
 纯 Go 包测试与格式化检查不需要容器，直接在本地（沙箱）跑：
 
 ```bash
-go test -vet=all ./internal/env ./internal/prefs ./internal/i18n ./internal/mail/... ./internal/tray ./internal/cursor
+go test -vet=all ./internal/env ./internal/prefs ./internal/i18n ./internal/mail/... ./internal/tray ./internal/cursor ./internal/ui
 
 gofmt -l internal/ cmd/
 ~/go/bin/goimports -local github.com/zhsj/yauzin -l internal/ cmd/
@@ -418,7 +419,7 @@ python3 scripts/gen_app_icons.py            # 需要 rsvg-convert（librsvg2-bin
 ## 15. 目录结构
 
 ```
-cmd/yauzin/main.go             入口：app.Main + 窗口事件循环
+cmd/yauzin/main.go             入口：只有一行 uihost.Main(os.Args[1:])
 internal/mail/mail.go          领域模型（会话摘要 / 分页）与 Service 接口
 internal/mail/mock/            内存 mock 后端（140ms 模拟延迟，按会话聚合）
 internal/mail/gmail/           Gmail 后端：OAuth（PKCE 回环）、REST 客户端、请求日志 transport、MIME 解析、写操作（mutate.go：标记/归档/垃圾邮件/删除）、发信（send.go：messages.send 的 media 上传）、Discovery 生成的 API 类型
@@ -427,8 +428,11 @@ internal/mail/smtp/            SMTP 发信：三种加密、PLAIN/LOGIN、信封
 internal/netproxy/             裸 TCP 代理拨号：http/https CONNECT 与 socks5（与 Gmail 共用的地址校验）
 internal/cmd/gmailgen/         Gmail Discovery 文档 → Go 类型生成器（go generate 入口）
 internal/accounts/             accounts.json：OAuth 凭据（provider）、每账号 kind/令牌/useProxy、SMTP 发信条目（smtp 配置，无令牌）
+internal/uihost/uihost.go      唯一 import gioui.org/app 的包：进程入口（app.ID / app.Main）、建窗与初始选项、事件循环、窗口动作、waylanddeco 副作用引入
+internal/uihost/picker.go      把 gioui.org/x/explorer 适配成 ui.FilePicker（错误映射为 ui 的两个哨兵）
+internal/ui/driver.go          窗口层端口：Driver / Window / WindowConfig / WindowActions / FilePicker 与文件选择器错误
 internal/ui/app.go             状态与构造：App 字段、构造器、异步原语
-internal/ui/app_lifecycle.go   窗口生命周期、post 队列、临时目录与 Ctrl+C 清理
+internal/ui/app_lifecycle.go   生命周期循环（Run + attach/detach + 帧与配置回调）、post 队列、临时目录与 Ctrl+C 清理
 internal/ui/app_data.go        账号、文件夹、分页与加载（含先检查再加载）
 internal/ui/app_poll.go        1 分钟轮询入口（进程生命周期，检查走 app_check.go）
 internal/ui/app_thread.go      会话打开与批量动作

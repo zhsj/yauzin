@@ -10,8 +10,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"gioui.org/x/explorer"
-
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
 )
@@ -21,18 +19,18 @@ import (
 // original file from disk, so the draft never owns a second copy of it.
 func (a *App) pickAttachment(c *composeView) {
 	// Capture the picker on the UI goroutine: the worker must not read the
-	// field, which detach clears when the window goes away.
-	exp := a.windowExplorer()
-	if exp == nil {
+	// window, which detach clears when it goes away.
+	picker := a.windowPicker()
+	if picker == nil {
 		c.errMsg = i18n.T("compose.attachUnavailable")
 		return
 	}
 
 	go func() {
-		rc, err := exp.ChooseFile()
+		rc, err := picker.ChooseFile()
 		if err != nil {
 			a.post(func() {
-				if errors.Is(err, explorer.ErrNotAvailable) {
+				if errors.Is(err, ErrPickerUnavailable) {
 					c.errMsg = i18n.T("compose.attachUnavailable")
 					return
 				}
@@ -103,8 +101,8 @@ func (a *App) saveMessage(m *mail.Message) {
 // while the same transfer runs is ignored; name is what the row shows and
 // filename is the default the save dialog offers.
 func (a *App) saveDownload(op, key, name, filename string, fetch func(context.Context, io.Writer, func(mail.Progress)) error) {
-	exp := a.windowExplorer()
-	if exp == nil {
+	picker := a.windowPicker()
+	if picker == nil {
 		a.notify(i18n.T("compose.attachUnavailable"), true)
 		return
 	}
@@ -140,9 +138,9 @@ func (a *App) saveDownload(op, key, name, filename string, fetch func(context.Co
 		defer cancel()
 		// The dialog comes first: the user picks the destination before any
 		// byte is downloaded, and the download timeout starts only afterwards.
-		w, err := exp.CreateFile(filename)
+		w, err := picker.CreateFile(filename)
 		if err != nil {
-			if errors.Is(err, explorer.ErrUserDecline) {
+			if errors.Is(err, ErrPickerDeclined) {
 				// A cancelled dialog is not a failure: nothing was downloaded
 				// and no task is left behind.
 				a.post(func() { a.tasks.drop(id) })

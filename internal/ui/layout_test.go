@@ -16,10 +16,9 @@ import (
 	"github.com/zhsj/yauzin/internal/prefs"
 )
 
-// testApp builds just enough state to lay out one headless frame. It avoids
-// the window and explorer, which are not needed for pure layout, and leaves the
-// account without a backend: tests that need one install a fake with
-// useService.
+// testApp builds just enough state to lay out one headless frame. It avoids the
+// window layer, which is not needed for pure layout, and leaves the account
+// without a backend: tests that need one install a fake with useService.
 func testApp(t *testing.T) *App {
 	t.Helper()
 	return newAppWith(prefs.Settings{}, appOptions{
