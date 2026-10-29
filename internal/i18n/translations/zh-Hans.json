@@ -126,6 +126,7 @@
   "shortcut.bottom": "跳到底部",
   "shortcut.reply": "回复",
   "shortcut.forward": "转发",
+  "shortcut.find": "在正文中查找",
   "shortcut.hint": "输入框获得焦点时快捷键不生效，Ctrl+W 与 Ctrl+Q 始终可用；浮层打开时只有 Esc、Ctrl+W 与 Ctrl+Q 有效。",
 
   "sidebar.compose": "写邮件",
@@ -170,6 +171,10 @@
   "reader.loading": "正在加载…",
   "reader.reply": "回复",
   "reader.forward": "转发",
+  "reader.find.hint": "在正文中查找",
+  "reader.find.empty": "无匹配",
+  "reader.find.count": "{{.Current}}/{{.Total}}",
+  "reader.find.countCapped": "{{.Current}}/{{.Total}}+",
 
   "source.title": "原始邮件",
   "source.messageId": "邮件 ID",

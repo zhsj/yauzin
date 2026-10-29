@@ -70,7 +70,7 @@
 
 1. 会话上下文：`activeAcc`、`activeFolder`、`query`、`folders`。`activeFolder == ""` 就是搜索视图（此时 `query` 非空），侧栏不高亮任何项；非空则是该文件夹/标签的浏览视图。
 2. 分页：`page`（1 基）+ `tokens`（`tokens[i]` 打开第 `i+1` 页，`tokens[0]` 恒为空游标）。
-3. 阅读：`selectedThread`、`thread`、`msgs`、`expanded`、`loadingThread`。
+3. 阅读：`selectedThread`、`thread`、`msgs`、`expanded`、`loadingThread`；阅读器查找条的查询、命中与当前项也是这一层的瞬态，随会话重置。
 4. 窗口/浮层：`decorated`、`maximized`、`windowActions`、`overlay` + `compose`/`settings`/`menu`。
 
 窗口句柄、post 队列、退出标志是唯一跨 goroutine 共享的部分（`winMu`、`postMu`、`quitting`）。
@@ -109,7 +109,7 @@
 
 - 所有按键在 `internal/ui/keys.go` 的单一入口路由：先镜像搜索框焦点，再分发全局层（Ctrl+W 关窗口、Ctrl+Q 退出进程），然后按「状态条 → 浮层 → 阅读器」的 Esc 顺序处理，最后才分发其余快捷键。
 - 键表 `shortcutTable` 同时驱动分发与「设置 → 快捷键」页：每条记录带分组、位、修饰键 (`mods`)、`global` 标志、Gio 键名与键帽文本，`readShortcuts(gtx, global)` 只读其中一半，设置页遍历整张表，新增按键只需改一处。列表与阅读器都生效的 E / Delete / S / U 归入「全局」组，帮助页因此不出现重复行；方向键与 PgUp/PgDn/Home/End 归入「滚动」组；Esc 也在表内，按位在浮层/搜索门禁之前处理。
-- `global` 行（Ctrl+W / Ctrl+Q）要求修饰键，因此在两道门禁之前读取，写信浮窗、设置页、搜索框聚焦时同样可用；Ctrl+W 置位 `windowActions` 的 `ActionClose`（与标题栏关闭按钮同一条路径），Ctrl+Q 调 `requestQuit()`，同帧同时按下以退出优先。
+- `global` 行（Ctrl+W / Ctrl+Q / Ctrl+F）要求修饰键，因此在两道门禁之前读取，写信浮窗、设置页、搜索框聚焦时同样可用；Ctrl+W 置位 `windowActions` 的 `ActionClose`（与标题栏关闭按钮同一条路径），Ctrl+Q 调 `requestQuit()`，同帧同时按下以退出优先。Ctrl+F 是「阅读器内查找」，只在 `overlay == nil && selectedThread != ""` 时打开查找条，否则整帧忽略；查找编辑器聚焦时只让出 Esc（Enter 由编辑器的 `Submit` 触发「下一个」），因此阅读器的其他快捷键不会吞掉正在输入的字符。Esc 顺序为状态条 → 浮层 → 查找条 → 会话。
 - 搜索框焦点用 `gtx.Focused(&a.top.search)` 每帧采样，**不能**用 `gtx.Event(key.FocusFilter{...})` 去读：`FocusFilter` 同时匹配目标的 `EditEvent`/`SnippetEvent`/`SelectionEvent`/`CompositionEvent`，而 `Router.Event` 命中即从该帧删除事件，读焦点会把编辑器的文本输入一起吃掉（表现为能聚焦、光标会闪、但打不出字）。
 - 读快捷键是破坏性的，因此裸键只在没有编辑器持有键盘时才读：搜索框聚焦时只读 Esc（其余字符、退格、回车全部留给编辑器，回车才能触发 `Editor.Submit`），浮层打开时同样只处理 Esc。未读取的事件在帧末由 `Router.Frame` 直接丢弃，不会残留到编辑器失焦后才触发。全局层是例外：它只要修饰键组合，而 `widget.Editor` 只绑定 Ctrl+Z/C/V/X/A、Ctrl+Backspace/Delete、Home/End 与方向键，Ctrl+W / Ctrl+Q 不会被编辑器消费。
 - 字母键名是 Gio 的大写形式（`J`/`K`/`C`…），普通字母过滤不带修饰键，所以 `Ctrl+C` 不会被当成「写信」；反过来 `key.Filter.Required` 的匹配要求事件修饰键是该集合的子集，`Ctrl+Shift+W` 也不会触发「关闭窗口」。
@@ -127,6 +127,14 @@
 - Gio 的 `app.Main()` 在 Linux 不返回，退出必须显式 `cleanupTemp()` + `os.Exit(0)`；托盘没有库自己的事件循环，退出路径只调 `t.Close()` 做增量卸载。
 - 生命周期循环之外的结束方式也要收拾现场：`watchInterrupt()` 在 `newApp()` 之后就开始监听 `SIGINT`（`Ctrl+C`，`signal.Notify` 就地注册），收到后先 `cleanupTemp()` 再 `os.Exit(0)`，否则托盘驻留期间被 `Ctrl+C` 停止的运行都会留下临时目录。`SIGTERM`/`SIGHUP` 故意不接管，保留默认行为：桌面会话结束、`kill`、终端挂断都按系统语义立即结束进程，不等待清理。信号路径与 UI goroutine 会并发访问临时目录，`tmpMu` 保护 `tmpDir`，`tmpClosed` 保证清理后不会再建一个新目录。
 
+### 4.6 阅读器正文查找
+
+- **范围与顺序**：当前会话每封邮件的 `text/plain` 正文（`plainBody`，即卡片实际渲染的那串文本，去掉首尾空白），按邮件顺序、正文内偏移顺序；不区分大小写；空查询不算查找。偏移是 **rune 偏移**，因为 `Selectable` 的选区与 `Regions` 都按 rune 计。大小写折叠必须逐 rune 做（`unicode.ToLower`）：先把整串 `strings.ToLower` 再按字节索引，遇到小写化改变字节长度的字符会让后面所有偏移错位。
+- **上限**：一次查询最多保留 1000 个命中（`findHitLimit`），超出的部分不再扫描，计数器显示 `n/1000+`；否则「一个字母 + 一兆正文」会让每帧的高亮遍历上万条区间。
+- **高亮几何来自 `Selectable.Regions`**：这是 Gio 唯一暴露命中位置的地方，返回相对正文控件原点的矩形。底色必须画在文字之下，而 `Regions` 只有在该文本 `Layout` 之后才有效，所以 `MessageCard` 用**上一帧**的矩形在画文字之前落笔，画完文字后再刷新缓存；缓存按 `(findBar.gen, 正文宽度, 正文文本)` 三者失效，最多闪一帧。缓存里每个矩形还记录它属于哪条命中（`hitOf`），**当前命中每帧按 `findBar.cur` 现查，不写进缓存键**：上一个 / 下一个只换归属，几何不必重测，强调色当帧就换，也不会因为缓存整体失效让整页高亮闪一下。**不要用 `SetCaret` 做高亮**：那会破坏「一个阅读器只有一处选区」，还会让回复把命中的片段当成引用选区。
+- **跳转是两段式**：`layout.List` 只能从 `Position.First` 起布局，拿不到未布局卡片的像素位置，因此第一段 `First = 邮件下标`（必要时 `Offset = 0`）把卡片带到视口顶部；`reader.Layout` 在列表布局之后调 `findBar.afterLayout`，用 `bodyY = 10dp + card.headH`（卡片上内边距加头部与分隔线的实测高度）和命中矩形（由 `findMarks.current(cur)` 现查）算出屏幕位置，把 `Position.Offset` 校正到「视口上部三分之一」，带 2px 死区、最多 3 次、卡片比视口矮时把 Offset 夹回 0。卡片已经在视口顶部时保留原 Offset，避免长邮件先闪回顶部。命中所在邮件会被展开（折叠的卡片没有正文，也就没有几何）。
+- **状态**：`readerView.reset()`（打开 / 关闭会话）与 `findBar.hide()` 都清空查询、命中与高亮；关闭查找条把键盘交还窗口根（`blurRequested`）。
+
 ## 5. 布局与视觉规格
 
 - 顶栏高度：平台装饰 64dp，CSD 单行 48dp，一律经 `App.headerHeight()`；侧栏 256dp；列表行高 40dp；内容卡片圆角 16dp；窗口默认 1200×840、最小 560×420。
@@ -140,6 +148,7 @@
 - 后端没有的能力不做假入口、不放禁用占位。
 - **省略号截断不能交给 `MinSize`**：`TruncateEllipsis` 的最小宽度会退化成「…」，再被 Center/Border 压缩。必须给固定宽度槽位。
 - 顶栏中任何随语言变宽的元素都必须放进固定宽度单元格：品牌 wordmark 用 `brandNameEms`（em 倍数）定宽、单元格内左对齐（居中会把中文「邮笺」两侧的余量变成印章与文字之间约 20dp 的空隙），窗口窄于 820dp 隐藏；搜索胶囊是固定 dp 宽度且编辑器占满单元格（`Constraints.Min.X = Max.X`，否则文字从中间开始）。
+- 阅读器查找条（`findBarHeight` 40dp）紧贴工具栏下方：左侧搜索图标、占满剩余宽度的编辑器、`n/m` 计数（`textMeta` + `colMuted`，无命中为 `colFaint`）、上一个 / 下一个 / 关闭三个 28dp 图标按钮（无命中时两个跳转按钮禁用）。命中底色用 `colFindMark`（浅黄，覆盖全部命中）与 `colFindCurrent`（琥珀，当前命中），都是半透明令牌，文字画在底色之上以保持对比度。
 
 ## 6. Gio 实践约定与踩坑
 
@@ -434,6 +443,7 @@ internal/ui/messagelist_model.go  列表数据与批量选择
 internal/ui/messagelist_row.go    会话行布局与 hover 动作
 internal/ui/messagelist_text.go   发件人/主题/摘要格式化
 internal/ui/reader.go          阅读器容器与工具栏
+internal/ui/reader_find.go     阅读器正文查找：匹配内核、查找条、命中高亮几何与两段式跳转
 internal/ui/messagecard.go     可折叠消息卡片
 internal/ui/textselection.go   阅读器可选文字：选区状态、右键区域与选区菜单（复制 / 打开链接）
 internal/ui/compose_view.go    写信浮层布局（含发件人就地展开、密送行与只读表头详情）

@@ -15,7 +15,7 @@ import (
 // shortcuts page rely on: one row per action, one bit per row, readable caps,
 // display order by group, and a translation for every label.
 func TestShortcutTableIsConsistent(t *testing.T) {
-	if got, want := len(shortcutTable), 21; got != want {
+	if got, want := len(shortcutTable), 22; got != want {
 		t.Fatalf("shortcut table has %d rows, want %d", got, want)
 	}
 	bits := map[uint32]string{}

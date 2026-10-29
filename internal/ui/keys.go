@@ -32,6 +32,7 @@ const (
 	keyPageDown
 	keyTop
 	keyBottom
+	keyFind
 )
 
 // shortcutGroup orders the sections of the shortcuts page. The constants are
@@ -115,6 +116,7 @@ var shortcutTable = []shortcut{
 	{"shortcut.bottom", groupScroll, keyBottom, false, 0, []key.Name{key.NameEnd}, []string{"End"}},
 	{"shortcut.reply", groupReader, keyReply, false, 0, []key.Name{"R"}, []string{"R"}},
 	{"shortcut.forward", groupReader, keyForward, false, 0, []key.Name{"F"}, []string{"F"}},
+	{"shortcut.find", groupReader, keyFind, true, key.ModShortcut, []key.Name{"F"}, []string{"Ctrl", "F"}},
 }
 
 // title translates the action shown on the shortcuts page. The literal keys
@@ -165,6 +167,8 @@ func (sc shortcut) title() string {
 		return i18n.T("shortcut.reply")
 	case "shortcut.forward":
 		return i18n.T("shortcut.forward")
+	case "shortcut.find":
+		return i18n.T("shortcut.find")
 	default:
 		return sc.action
 	}
@@ -188,6 +192,10 @@ func (a *App) handleKeys(gtx layout.Context) {
 		a.blurRequested = false
 		gtx.Execute(key.FocusCmd{Tag: a})
 	}
+	// A pending find focus is requested after the blur above: the two are
+	// never meant to fire together, and the row that was just opened is the
+	// more recent intention.
+	a.reader.find.trackFocus(gtx)
 
 	// Quit wins when both arrive in the same frame: it ends the process, which
 	// closes the window on the way out.
@@ -202,6 +210,23 @@ func (a *App) handleKeys(gtx layout.Context) {
 			a.windowActions |= system.ActionClose
 			return
 		}
+		if bits&keyFind != 0 && a.overlay == nil && a.selectedThread != "" {
+			// Find belongs to the open conversation. A modifier is required,
+			// so reading it here is safe even while an editor has the
+			// keyboard; the panel-free gate keeps it out of overlays.
+			a.reader.find.show()
+			return
+		}
+	}
+
+	if a.overlay == nil && a.selectedThread != "" && a.reader.find.focused {
+		// The find editor owns every key but Esc: its Enter submits through
+		// the editor itself, and the characters, backspace and arrows are
+		// what the user is typing.
+		if pressed(gtx, key.NameEscape) {
+			a.escape(gtx)
+		}
+		return
 	}
 
 	if a.overlay == nil && a.searchFocused {
@@ -320,6 +345,10 @@ func (a *App) escape(gtx layout.Context) {
 	}
 	if a.overlay != nil {
 		a.hideOverlay()
+		return
+	}
+	if a.reader.find.open {
+		a.reader.find.hide()
 		return
 	}
 	if a.selectedThread != "" {

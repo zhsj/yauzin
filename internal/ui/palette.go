@@ -32,7 +32,12 @@ var (
 	colChipFallback = color.NRGBA{R: 0xE8, G: 0xEA, B: 0xED, A: 0xFF}
 	colStarIdle     = color.NRGBA{R: 0xB8, G: 0xBD, B: 0xC4, A: 0xFF}
 	colSelection    = color.NRGBA{R: 0x0B, G: 0x57, B: 0xD0, A: 0x33}
-	colOverlay      = color.NRGBA{R: 0x1F, G: 0x1F, B: 0x1F, A: 0x3D}
+	// colFindMark backs every match of the reader's find, colFindCurrent the
+	// one the reader is standing on. Both stay translucent so the body text,
+	// drawn above them, keeps its contrast on the highlight.
+	colFindMark    = color.NRGBA{R: 0xFF, G: 0xE0, B: 0x82, A: 0x8C}
+	colFindCurrent = color.NRGBA{R: 0xFF, G: 0xAB, B: 0x40, A: 0xCC}
+	colOverlay     = color.NRGBA{R: 0x1F, G: 0x1F, B: 0x1F, A: 0x3D}
 )
 
 // colOnDeco is the glyph colour on the red close-button hover, the only place

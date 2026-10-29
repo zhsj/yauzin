@@ -16,6 +16,9 @@ func (a *App) resetSelection() {
 	a.msgGen++
 	cancelRequest(&a.msgCancel)
 	a.loadingThread = false
+	// Leaving the reader takes its find row with it: the query describes a
+	// conversation that is no longer on screen.
+	a.reader.find.reset()
 }
 
 func (a *App) openThread(sum mail.ThreadSummary) {

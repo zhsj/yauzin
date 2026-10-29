@@ -40,8 +40,12 @@ type readerView struct {
 	read    *iconButton
 	star    *iconButton
 	spam    *iconButton
+	findBtn *iconButton
 	reply   *iconButton
 	forward *iconButton
+
+	// find is the in-conversation find row, opened from the toolbar or Ctrl+F.
+	find *findBar
 
 	// subject is the headline of the conversation, selectable like the text of
 	// the messages. It belongs to the thread currently shown.
@@ -63,6 +67,8 @@ func newReader(a *App) *readerView {
 	r.read = newListIcon(iconMarkRead, 36, a.toggleThreadRead)
 	r.star = newListIcon(iconStarOutline, 36, func() { a.toggleThreadStar(a.thread.ID) })
 	r.spam = newListIcon(iconSpam, 36, a.toggleThreadSpam)
+	r.findBtn = newListIcon(iconSearch, 36, func() { r.find.show() })
+	r.findBtn.setGlyph(22)
 	r.reply = newListIcon(iconReply, 36, func() {
 		if r.newestForReply != nil {
 			a.openCompose(composeReply, r.newestForReply)
@@ -73,6 +79,7 @@ func newReader(a *App) *readerView {
 			a.openCompose(composeForward, r.newestForReply)
 		}
 	})
+	r.find = newFindBar(r)
 	return r
 }
 
@@ -109,6 +116,7 @@ func (r *readerView) Layout(gtx layout.Context) layout.Dimensions {
 	// conversation is not in, which is where the click sends it.
 	spam := !a.viewingSpam()
 	r.spam.setTip(spamTip(spam))
+	r.findBtn.setTip(i18n.T("reader.find.hint"))
 	if spam {
 		r.spam.setIcon(iconSpam)
 	} else {
@@ -118,6 +126,12 @@ func (r *readerView) Layout(gtx layout.Context) layout.Dimensions {
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return r.toolbar(gtx)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if !r.find.open {
+				return layout.Dimensions{}
+			}
+			return r.find.Layout(gtx, a)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layout.Inset{Top: 6, Bottom: 10, Left: 18, Right: 18}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -141,13 +155,17 @@ func (r *readerView) Layout(gtx layout.Context) layout.Dimensions {
 		}),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			r.viewH = gtx.Constraints.Max.Y
-			return r.list.Layout(gtx, len(a.msgs), func(gtx layout.Context, i int) layout.Dimensions {
+			dims := r.list.Layout(gtx, len(a.msgs), func(gtx layout.Context, i int) layout.Dimensions {
 				msg := a.msgs[i]
 				card := r.cardFor(msg.ID)
 				return layout.Inset{Bottom: 10, Left: 10, Right: 10}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return card.Layout(gtx, msg)
 				})
 			})
+			// The hit geometry only exists once the list has laid the target
+			// card out, so the reveal correction runs after it.
+			r.find.afterLayout(gtx)
+			return dims
 		}),
 	)
 }
@@ -173,6 +191,9 @@ func (r *readerView) toolbar(gtx layout.Context) layout.Dimensions {
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return r.reply.Layout(gtx, th) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return r.forward.Layout(gtx, th) }),
+			// The find button is last on purpose: a narrow window clips its
+			// trailing buttons first, and Ctrl+F still opens the row.
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return r.findBtn.Layout(gtx, th) }),
 		)
 	})
 }
@@ -234,6 +255,7 @@ func (r *readerView) reset() {
 	r.atts = map[string]*pillButton{}
 	r.subject = textSelection{}
 	r.list.Position = layout.Position{}
+	r.find.reset()
 }
 
 // scrollBy moves the conversation by dy pixels, positive scrolling down. The

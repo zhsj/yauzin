@@ -3,11 +3,13 @@ package ui
 import (
 	"image"
 	"strings"
+	"unicode/utf8"
 
 	"gioui.org/font"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
+	"gioui.org/unit"
 	"gioui.org/widget"
 
 	"github.com/zhsj/yauzin/internal/i18n"
@@ -90,6 +92,10 @@ func (c *messageCard) message(a *App) *mail.Message {
 	return nil
 }
 
+// cardInsetTop is the padding above the content of a card. The find bar adds it
+// to the measured head height to locate the body inside the card.
+const cardInsetTop unit.Dp = 10
+
 // truncateName keeps attachment chips from stretching the card.
 func truncateName(name string, limit int) string {
 	runes := []rune(name)
@@ -120,6 +126,15 @@ type messageCard struct {
 	name     textSelection
 	addr     textSelection
 	bodyText textSelection
+
+	// headH is the height of the open head and its divider on the last layout,
+	// height the height of the whole card. The find bar needs both to scroll a
+	// hit inside a card taller than the viewport.
+	headH  int
+	height int
+	// marks are the highlight rectangles of the find hits in this body,
+	// measured from the layout of an earlier frame.
+	marks findMarks
 }
 
 // selectedText returns the text selected in the body of this card's message, or
@@ -174,7 +189,7 @@ func (c *messageCard) Layout(gtx layout.Context, msg *mail.Message) layout.Dimen
 	// Measure the content first: list children get unbounded height, so the
 	// card background must follow the content instead of filling the axis.
 	macro := op.Record(gtx.Ops)
-	content := layout.Inset{Top: 10, Bottom: 12, Left: 14, Right: 14}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	content := layout.Inset{Top: cardInsetTop, Bottom: 12, Left: 14, Right: 14}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		if !open {
 			return c.collapsed(gtx, msg)
 		}
@@ -193,6 +208,7 @@ func (c *messageCard) Layout(gtx layout.Context, msg *mail.Message) layout.Dimen
 		w = content.Size.X
 	}
 	size := image.Pt(w, content.Size.Y)
+	c.height = size.Y
 	cardGtx := gtx
 	cardGtx.Constraints = layout.Exact(size)
 	strokeRect(cardGtx, fill, colBorder, 12, 1)
@@ -247,9 +263,12 @@ func (c *messageCard) collapsed(gtx layout.Context, msg *mail.Message) layout.Di
 func (c *messageCard) expanded(gtx layout.Context, msg *mail.Message) layout.Dimensions {
 	a := c.reader.app
 	th := a.th
+	// The head and its divider are measured as they are drawn: the find bar
+	// locates the body below them, and the body itself is laid out after.
+	c.headH = 0
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+			dims := layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					return c.foldTarget(gtx, th, &c.avatar, func(gtx layout.Context) layout.Dimensions {
 						return th.avatar(gtx, senderName(msg.From), 32)
@@ -283,9 +302,13 @@ func (c *messageCard) expanded(gtx layout.Context, msg *mail.Message) layout.Dim
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 2) }),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.more.Layout(gtx, th) }),
 			)
+			c.headH += dims.Size.Y
+			return dims
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{Top: 8, Bottom: 8}.Layout(gtx, hline)
+			dims := layout.Inset{Top: 8, Bottom: 8}.Layout(gtx, hline)
+			c.headH += dims.Size.Y
+			return dims
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return c.body(gtx, msg)
@@ -329,12 +352,58 @@ func (c *messageCard) foldTarget(gtx layout.Context, th *theme, click *widget.Cl
 // card's "more" menu hands them to the browser instead. The body is the one
 // surface that gets bodyLineHeight: a placeholder hint is a single line, so it
 // keeps the default spacing.
+//
+// The find highlights are painted before the text, from the geometry measured
+// when the text was laid out last; the fresh geometry is collected after the
+// text is drawn, because Gio only reports glyph positions after layout.
 func (c *messageCard) body(gtx layout.Context, msg *mail.Message) layout.Dimensions {
-	body := strings.TrimSpace(msg.TextBody)
+	body := plainBody(msg)
 	if body == "" {
 		return c.bodyText.Wrap(gtx, c.reader, msg.ID, i18n.T("reader.noPlainText"), textMain, 0, colMuted, font.Normal)
 	}
-	return c.bodyText.Wrap(gtx, c.reader, msg.ID, body, textMain, bodyLineHeight, colText, font.Normal)
+	f := c.reader.find
+	width := gtx.Constraints.Max.X
+	if !f.active() {
+		c.marks = findMarks{}
+		return c.bodyText.Wrap(gtx, c.reader, msg.ID, body, textMain, bodyLineHeight, colText, font.Normal)
+	}
+	if c.marks.valid(f.gen, width, body) {
+		c.marks.paint(gtx, f.cur)
+	}
+	dims := c.bodyText.Wrap(gtx, c.reader, msg.ID, body, textMain, bodyLineHeight, colText, font.Normal)
+	if !c.marks.valid(f.gen, width, body) {
+		c.collectFind(msg.ID, body, width)
+	}
+	return dims
+}
+
+// collectFind asks the laid-out Selectable where the hits of this message are.
+// The rectangles are reused until the query, the text or the width changes.
+func (c *messageCard) collectFind(msgID, body string, width int) {
+	f := c.reader.find
+	m := &c.marks
+	m.gen, m.width, m.text = f.gen, width, body
+	m.rects = m.rects[:0]
+	// hitOf keeps every rectangle tied to the hit it came from; which one is
+	// current is decided when painting and scrolling, not here.
+	m.hitOf = m.hitOf[:0]
+	base, hits := f.hitsFor(msgID)
+	runeLen := utf8.RuneCountInString(body)
+	var regions []widget.Region
+	for i, hit := range hits {
+		if hit.end > runeLen {
+			// The hits predate a body that changed under them.
+			continue
+		}
+		regions = c.bodyText.sel.Regions(hit.start, hit.end, regions)
+		for _, region := range regions {
+			if region.Bounds.Empty() {
+				continue
+			}
+			m.rects = append(m.rects, region.Bounds)
+			m.hitOf = append(m.hitOf, base+i)
+		}
+	}
 }
 
 func (c *messageCard) attachments(gtx layout.Context, msg *mail.Message) layout.Dimensions {
