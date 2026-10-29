@@ -349,6 +349,56 @@ func TestReplyRecipients(t *testing.T) {
 			wantTo: []string{"bob@example.com"},
 		},
 		{
+			name: "mail-followup-to answers a reply",
+			parent: &Message{
+				MessageSummary: MessageSummary{
+					From: Address{Name: "Marco", Email: "md@example.org"},
+					To:   []Address{{Email: "list@example.org"}},
+				},
+				MailFollowupTo: []Address{{Email: "list@example.org"}},
+			},
+			wantTo: []string{"list@example.org"},
+		},
+		{
+			name: "mail-followup-to answers a reply all",
+			parent: &Message{
+				MessageSummary: MessageSummary{
+					From: Address{Name: "Marco", Email: "md@example.org"},
+					To:   []Address{{Email: "list@example.org"}},
+				},
+				Cc:             []Address{{Email: "cid@example.org"}},
+				MailFollowupTo: []Address{{Email: "list@example.org"}, {Email: "LIST@example.org"}},
+			},
+			all:    true,
+			wantTo: []string{"list@example.org"},
+		},
+		{
+			name: "reply-to wins over mail-followup-to",
+			parent: &Message{
+				MessageSummary: MessageSummary{
+					From: Address{Email: "list@example.org"},
+				},
+				ReplyTo:        []Address{{Email: "bob@example.org"}},
+				MailFollowupTo: []Address{{Email: "list@example.org"}},
+			},
+			all:    true,
+			wantTo: []string{"bob@example.org"},
+		},
+		{
+			name: "mail-followup-to without usable addresses falls through",
+			parent: &Message{
+				MessageSummary: MessageSummary{
+					From: Address{Email: "bob@example.com"},
+					To:   []Address{{Email: "me@example.com"}, {Email: "ann@example.com"}},
+				},
+				Cc:             []Address{{Email: "cid@example.com"}},
+				MailFollowupTo: []Address{{Email: "  "}},
+			},
+			all:    true,
+			wantTo: []string{"bob@example.com", "ann@example.com"},
+			wantCc: []string{"cid@example.com"},
+		},
+		{
 			name:   "missing parent",
 			parent: nil,
 			all:    true,

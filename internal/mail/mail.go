@@ -140,11 +140,15 @@ type Message struct {
 	// ReplyTo is the Reply-To header. When it is present, a reply goes only to
 	// these addresses: the sender asked for answers elsewhere than the mailbox
 	// the message came from.
-	ReplyTo     []Address
-	Cc          []Address
-	HTMLBody    string
-	TextBody    string
-	Attachments []Attachment
+	ReplyTo []Address
+	// MailFollowupTo is the non-standard Mail-Followup-To header mailing lists
+	// add to route follow-ups to the list. It decides the reply address only
+	// when the message carries no Reply-To.
+	MailFollowupTo []Address
+	Cc             []Address
+	HTMLBody       string
+	TextBody       string
+	Attachments    []Attachment
 }
 
 // ThreadSummary is one conversation rendered as a single list row. Backends
@@ -544,17 +548,25 @@ func ReplyReferences(parent *Message) []string {
 // ReplyRecipients returns the To and Cc rows of a reply to parent. A message
 // carrying Reply-To is answered only at those addresses: a reply and a
 // reply-all alike ignore the original To and Cc, because the sender asked for
-// answers somewhere else. Without that header the reply goes to the sender
-// alone, while a reply-all (all is true) also carries the other original
-// recipients; self names the caller's own addresses, which a reply-all leaves
-// out so the user does not copy themselves. Addresses are deduplicated by
-// email, and a Cc entry that already sits in To is dropped.
+// answers somewhere else. A mailing list message without Reply-To is answered
+// at its Mail-Followup-To address the same way. Without either header the
+// reply goes to the sender alone, while a reply-all (all is true) also carries
+// the other original recipients; self names the caller's own addresses, which
+// a reply-all leaves out so the user does not copy themselves. Addresses are
+// deduplicated by email, and a Cc entry that already sits in To is dropped.
 func ReplyRecipients(parent *Message, self []Address, all bool) (to, cc []Address) {
 	if parent == nil {
 		return nil, nil
 	}
 	if len(parent.ReplyTo) > 0 {
 		return AppendUniqueAddresses(nil, parent.ReplyTo...), nil
+	}
+	if len(parent.MailFollowupTo) > 0 {
+		// A header with no usable address says nothing about the reply, so the
+		// decision falls through to the recipients of the message itself.
+		if to = AppendUniqueAddresses(nil, parent.MailFollowupTo...); len(to) > 0 {
+			return to, nil
+		}
 	}
 	if !all {
 		return AppendUniqueAddresses(nil, parent.From), nil

@@ -202,6 +202,24 @@ func TestMessageReadsReplyTo(t *testing.T) {
 	}
 }
 
+// TestMessageReadsMailFollowupTo pins the list header Debian-style mailing
+// lists use: without a Reply-To it is what decides where a reply goes, and a
+// message without it leaves the field empty.
+func TestMessageReadsMailFollowupTo(t *testing.T) {
+	svc := &Service{acc: mail.Account{ID: "acc"}}
+	got := svc.message(&Message{ID: "m1", Payload: &MessagePart{Headers: []*MessagePartHeader{
+		{Name: "From", Value: "Marco <md@example.com>"},
+		{Name: "Mail-Followup-To", Value: "debian-devel@lists.example.org"},
+	}}})
+	if len(got.MailFollowupTo) != 1 || got.MailFollowupTo[0].Email != "debian-devel@lists.example.org" {
+		t.Fatalf("Mail-Followup-To = %+v", got.MailFollowupTo)
+	}
+
+	if missing := svc.message(&Message{ID: "m2", Payload: &MessagePart{}}); missing.MailFollowupTo != nil {
+		t.Fatalf("a message without Mail-Followup-To reported %+v", missing.MailFollowupTo)
+	}
+}
+
 func TestMalformedAddressesFallBackToText(t *testing.T) {
 	addrs := parseAddressList("not an address <")
 	if len(addrs) != 1 || addrs[0].String() != "not an address <" {

@@ -32,10 +32,11 @@ func (s *Service) message(m *Message) *mail.Message {
 			Starred:   m.hasFlag("STARRED"),
 			Labels:    append([]string(nil), m.LabelIDs...),
 		},
-		MessageID:  strings.TrimSpace(h["message-id"]),
-		References: messageIDList(h["references"]),
-		ReplyTo:    parseAddressList(h["reply-to"]),
-		Cc:         parseAddressList(h["cc"]),
+		MessageID:      strings.TrimSpace(h["message-id"]),
+		References:     messageIDList(h["references"]),
+		ReplyTo:        parseAddressList(h["reply-to"]),
+		MailFollowupTo: parseAddressList(h["mail-followup-to"]),
+		Cc:             parseAddressList(h["cc"]),
 	}
 	var bodies mimeBodies
 	collectParts(m.Payload, &bodies)

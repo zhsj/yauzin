@@ -128,6 +128,38 @@ func TestComposeReplyToWinsForBothReplies(t *testing.T) {
 	}
 }
 
+// TestComposeMailFollowupToAddressesTheList pins the list-mail rule: a message
+// without Reply-To but with Mail-Followup-To is answered at the list address in
+// both reply modes, and the original recipients stay out of the draft.
+func TestComposeMailFollowupToAddressesTheList(t *testing.T) {
+	a, _, _ := composeTestApp(t)
+	msg := &mail.Message{
+		MessageSummary: mail.MessageSummary{
+			ID:      "m2",
+			From:    mail.Address{Name: "Marco", Email: "md@example.org"},
+			To:      []mail.Address{{Email: "debian-devel@lists.example.org"}},
+			Subject: "hello",
+		},
+		MessageID:      "<m2@example.org>",
+		Cc:             []mail.Address{{Email: "cid@example.org"}},
+		MailFollowupTo: []mail.Address{{Email: "debian-devel@lists.example.org"}},
+		TextBody:       "hello",
+	}
+
+	for _, mode := range []composeMode{composeReply, composeReplyAll} {
+		c := newComposeView(a, mode, msg, "")
+		if got, want := c.to.Text(), "debian-devel@lists.example.org"; got != want {
+			t.Fatalf("mode %v To = %q, want %q", mode, got, want)
+		}
+		if got := c.cc.Text(); got != "" {
+			t.Fatalf("mode %v Cc = %q, want it empty", mode, got)
+		}
+		if c.inReplyTo != "<m2@example.org>" || len(c.references) == 0 {
+			t.Fatalf("mode %v lost the thread headers: %q/%q", mode, c.inReplyTo, c.references)
+		}
+	}
+}
+
 // TestComposeThreadsOnlyAReply keeps the other two modes clean: a new message
 // and a forward start a conversation of their own.
 func TestComposeThreadsOnlyAReply(t *testing.T) {
