@@ -33,6 +33,21 @@ const (
 	taskLimit = 50
 	// taskButtonSize is the square of the row's dismiss control.
 	taskButtonSize = unit.Dp(20)
+	// The task section is a white card with a hairline border, the way the
+	// settings sub-cards sit on the page background.
+	taskCardRadius = unit.Dp(8)
+	// taskCardPadY keeps the first and the last row off the card border.
+	taskCardPadY = unit.Dp(4)
+	// taskRowPadX and taskRowPadRight keep the icon and the dismiss control
+	// off the card border.
+	taskRowPadX     = unit.Dp(10)
+	taskRowPadRight = unit.Dp(6)
+	taskIconCell    = unit.Dp(20)
+	taskIconGap     = unit.Dp(10)
+	// taskDividerIndent is where the hairline between rows starts: the row's
+	// left padding plus the icon cell and its gap, which is exactly the text's
+	// left edge.
+	taskDividerIndent = taskRowPadX + taskIconCell + taskIconGap
 )
 
 // taskKind says which job a row reports, since the two jobs word their status
@@ -248,9 +263,28 @@ func (p *taskPanel) dismiss(id uint64) {
 	t.removed = true
 }
 
-// LayoutSection draws the fixed task list at the bottom of the sidebar: a
-// separator, the section label and up to taskSectionRows rows, scrolling
-// inside the section. It returns an empty size when there is no task.
+// taskCardSize is the exact size of the task card: the visible rows plus the
+// hairline of breathing room above and below them.
+func taskCardSize(gtx layout.Context, rows int) image.Point {
+	w := gtx.Constraints.Max.X
+	if w <= 0 {
+		w = gtx.Constraints.Min.X
+	}
+	return image.Pt(w, rows*gtx.Dp(taskRowHeight)+2*gtx.Dp(taskCardPadY))
+}
+
+// taskDividerRect is the hairline between two rows: it starts where the text
+// starts and runs to the row's right padding.
+func taskDividerRect(gtx layout.Context, rowHeight int) image.Rectangle {
+	h := gtx.Dp(1)
+	left := gtx.Dp(taskDividerIndent)
+	right := max(gtx.Constraints.Max.X-gtx.Dp(taskRowPadRight), left)
+	return image.Rect(left, rowHeight-h, right, rowHeight)
+}
+
+// LayoutSection draws the fixed task list at the bottom of the sidebar: a gap,
+// the section label and up to taskSectionRows rows in a white card, scrolling
+// inside the card. It returns an empty size when there is no task.
 func (p *taskPanel) LayoutSection(gtx layout.Context, th *theme) layout.Dimensions {
 	p.compact()
 	if len(p.tasks) == 0 {
@@ -258,28 +292,54 @@ func (p *taskPanel) LayoutSection(gtx layout.Context, th *theme) layout.Dimensio
 	}
 	rows := min(len(p.tasks), taskSectionRows)
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hline(gtx) }),
+		// No separator line: the card's border already divides the section
+		// from the folders above, and two lines this close read as noise.
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 10) }),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{Top: 10, Bottom: 4, Left: 14, Right: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Left: 14, Right: 4, Bottom: 6}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return th.sectionLabel(gtx, i18n.T("task.title"))
 			})
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			viewport := gtx
-			viewport.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, rows*gtx.Dp(taskRowHeight)))
-			return p.list.Layout(viewport, len(p.tasks), func(gtx layout.Context, i int) layout.Dimensions {
-				return p.row(gtx, th, p.tasks[i])
+			return p.card(gtx, th, rows)
+		}),
+	)
+}
+
+// card draws the white rounded panel holding the visible rows. Its height is
+// known from the row count, so the background needs no second layout pass.
+func (p *taskPanel) card(gtx layout.Context, th *theme, rows int) layout.Dimensions {
+	size := taskCardSize(gtx, rows)
+	gtx.Constraints = layout.Exact(size)
+	return layout.Stack{Alignment: layout.NW}.Layout(gtx,
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			return strokeRect(gtx, colSurface, colBorder, taskCardRadius, 1)
+		}),
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Top: taskCardPadY, Bottom: taskCardPadY}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				gtx.Constraints = layout.Exact(image.Pt(size.X, rows*gtx.Dp(taskRowHeight)))
+				return p.list.Layout(gtx, len(p.tasks), func(gtx layout.Context, i int) layout.Dimensions {
+					return p.row(gtx, th, p.tasks[i], i < len(p.tasks)-1)
+				})
 			})
 		}),
 	)
 }
 
 // row draws one task: icon, name and a status line, with the dismiss control at
-// the end.
-func (p *taskPanel) row(gtx layout.Context, th *theme, t *task) layout.Dimensions {
+// the end. divider draws the hairline separating it from the row below, which
+// the last row of the list does not get.
+func (p *taskPanel) row(gtx layout.Context, th *theme, t *task, divider bool) layout.Dimensions {
 	h := gtx.Dp(taskRowHeight)
 	gtx.Constraints.Min.Y = h
 	gtx.Constraints.Max.Y = h
+	if divider {
+		// Painted before the content and outside the row's horizontal padding,
+		// so it can run all the way to the card's right edge.
+		area := clip.Rect(taskDividerRect(gtx, h)).Push(gtx.Ops)
+		paint.Fill(gtx.Ops, colBorder)
+		area.Pop()
+	}
 	ic := iconFile
 	if t.kind == taskSend {
 		ic = iconSent
@@ -295,31 +355,33 @@ func (p *taskPanel) row(gtx layout.Context, th *theme, t *task) layout.Dimension
 	} else {
 		t.btn.setTip(i18n.T("task.remove"))
 	}
-	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{Right: 10}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return th.glyphIn(gtx, ic, 16, 20)
-			})
-		}),
-		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return th.text(gtx, t.name, textMeta, colText, font.Normal, 1)
-				}),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return vgap(gtx, 6)
-				}),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return p.status(gtx, th, t)
-				}),
-			)
-		}),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{Left: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return t.btn.Layout(gtx, th)
-			})
-		}),
-	)
+	return layout.Inset{Left: taskRowPadX, Right: taskRowPadRight}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Right: taskIconGap}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return th.glyphIn(gtx, ic, 16, taskIconCell)
+				})
+			}),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return th.text(gtx, t.name, textMeta, colText, font.Normal, 1)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return vgap(gtx, 6)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return p.status(gtx, th, t)
+					}),
+				)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Left: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return t.btn.Layout(gtx, th)
+				})
+			}),
+		)
+	})
 }
 
 // status is the second line of a row: the progress of a running save, the

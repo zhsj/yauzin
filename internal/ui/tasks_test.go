@@ -224,6 +224,40 @@ func TestTaskPanelDismiss(t *testing.T) {
 	p.dismiss(done.id)
 }
 
+// TestTaskCardGeometry pins the card and the hairline between rows: the card
+// hugs the row count, and the divider starts at the text's left edge and stops
+// short of the card's right border.
+func TestTaskCardGeometry(t *testing.T) {
+	var ops op.Ops
+	gtx := testGtx(&ops, image.Pt(240, 340))
+	row := gtx.Dp(taskRowHeight)
+	if got, want := taskCardSize(gtx, 1), image.Pt(240, row+2*gtx.Dp(taskCardPadY)); got != want {
+		t.Fatalf("card of one row = %v, want %v", got, want)
+	}
+	if got, want := taskCardSize(gtx, taskSectionRows),
+		image.Pt(240, taskSectionRows*row+2*gtx.Dp(taskCardPadY)); got != want {
+		t.Fatalf("card of %d rows = %v, want %v", taskSectionRows, got, want)
+	}
+
+	// The indent is the row padding plus the icon cell and its gap, so the line
+	// starts under the text and not under the icon.
+	if got := gtx.Dp(taskDividerIndent); got != 40 {
+		t.Fatalf("divider indent = %d, want 40", got)
+	}
+	want := image.Rect(40, row-1, 240-6, row)
+	if got := taskDividerRect(gtx, row); got != want {
+		t.Fatalf("divider = %v, want %v", got, want)
+	}
+
+	// A row too narrow to hold the indent collapses the line instead of
+	// painting it backwards.
+	narrow := gtx
+	narrow.Constraints.Max.X = 30
+	if got := taskDividerRect(narrow, row); got.Dx() != 0 {
+		t.Fatalf("narrow divider = %v, want no width", got)
+	}
+}
+
 // TestTaskPanelLayout pins the section's size in the sidebar: it hugs the
 // sidebar width, stops growing once the visible rows are full, and draws both
 // kinds of job.
