@@ -279,15 +279,17 @@ func (c *messageCard) expanded(gtx layout.Context, msg *mail.Message) layout.Dim
 }
 
 // body shows the text/plain part. HTML bodies are never rendered in-app: the
-// card's "more" menu hands them to the browser instead.
+// card's "more" menu hands them to the browser instead. The body is the one
+// surface that gets bodyLineHeight: a placeholder hint is a single line, so it
+// keeps the default spacing.
 func (c *messageCard) body(gtx layout.Context, msg *mail.Message) layout.Dimensions {
 	th := c.reader.app.th
 	body := strings.TrimSpace(msg.TextBody)
 	sel := c.bodySelection(msg)
 	if body == "" {
-		return th.selectableText(gtx, sel, i18n.T("reader.noPlainText"), textMain, colMuted, font.Normal)
+		return th.selectableText(gtx, sel, i18n.T("reader.noPlainText"), textMain, 0, colMuted, font.Normal)
 	}
-	return th.selectableText(gtx, sel, body, textMain, colText, font.Normal)
+	return th.selectableText(gtx, sel, body, textMain, bodyLineHeight, colText, font.Normal)
 }
 
 func (c *messageCard) attachments(gtx layout.Context, msg *mail.Message) layout.Dimensions {

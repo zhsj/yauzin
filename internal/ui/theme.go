@@ -113,19 +113,21 @@ func (t *theme) wrappedText(gtx layout.Context, txt string, size unit.Sp, col co
 	return t.text(gtx, txt, size, col, weight, 0)
 }
 
-// glyph draws one Material Symbols codepoint.
 // selectableText draws wrapped text that can be dragged over and copied with
 // Ctrl+C. The Selectable must be kept by the caller so the selection survives
-// redraws and can be reset when the text changes.
-func (t *theme) selectableText(gtx layout.Context, sel *widget.Selectable, txt string, size unit.Sp, col color.NRGBA, weight font.Weight) layout.Dimensions {
+// redraws and can be reset when the text changes. lineHeight is the baseline
+// distance; zero keeps Gio's default of 1.2 times the text size.
+func (t *theme) selectableText(gtx layout.Context, sel *widget.Selectable, txt string, size, lineHeight unit.Sp, col color.NRGBA, weight font.Weight) layout.Dimensions {
 	l := material.Label(t.mat, size, txt)
 	l.Font = font.Font{Typeface: t.face, Weight: weight}
 	l.Color = col
 	l.State = sel
 	l.SelectionColor = colSelection
+	l.LineHeight = lineHeight
 	return l.Layout(gtx)
 }
 
+// glyph draws one Material Symbols codepoint.
 func (t *theme) glyph(gtx layout.Context, ic icon, size unit.Sp) layout.Dimensions {
 	face := t.iconFace
 	if ic.fill {

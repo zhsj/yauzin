@@ -29,3 +29,9 @@ const (
 	// overlay.
 	textTiny unit.Sp = 12
 )
+
+// bodyLineHeight is the baseline distance of the reader body: 1.5 times
+// textMain, the usual line height for long-form reading. It is derived rather
+// than written out so it follows the ladder; the default spacing (1.2 times the
+// text size) leaves multi-line mail too tight to read in one pass.
+const bodyLineHeight = textMain * 3 / 2

@@ -4,9 +4,14 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"image"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gioui.org/font"
+	"gioui.org/unit"
+	"gioui.org/widget"
 )
 
 // textSizeArg is the index of the size argument in the argument list of each
@@ -57,5 +62,23 @@ func TestTextSizesComeFromTheScale(t *testing.T) {
 			}
 			return true
 		})
+	}
+}
+
+// TestReaderBodyLineHeight checks the reader body really gets the wider line
+// spacing: the same two lines must take more room with bodyLineHeight than with
+// the shaper's 1.2 default.
+func TestReaderBodyLineHeight(t *testing.T) {
+	a := testApp(t)
+	const txt = "first line\nsecond line"
+	height := func(lineHeight unit.Sp) int {
+		_, _, gtx := newRouterFrame(image.Pt(400, 1<<16))
+		sel := new(widget.Selectable)
+		sel.SetText(txt)
+		return a.th.selectableText(gtx, sel, txt, textMain, lineHeight, colText, font.Normal).Size.Y
+	}
+	def, body := height(0), height(bodyLineHeight)
+	if body <= def {
+		t.Fatalf("reader body height = %dpx with the line height, want more than the %dpx default", body, def)
 	}
 }
