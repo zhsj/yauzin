@@ -20,7 +20,6 @@ import (
 // The label pill of a conversation row follows Gmail's 40dp row: a small
 // solid chip around the label name.
 const (
-	labelChipText   unit.Sp = 11
 	labelChipPadX   unit.Dp = 6
 	labelChipPadY   unit.Dp = 2
 	labelChipGap    unit.Dp = 4
@@ -181,14 +180,14 @@ func (r *messageRow) senderCell(gtx layout.Context, sum mail.ThreadSummary, weig
 			if sum.MessageCount > 1 {
 				gtx.Constraints.Max.X = gtx.Dp(128)
 			}
-			return r.app.th.text(gtx, threadParticipants(sum), 14, colText, weight, 1)
+			return r.app.th.text(gtx, threadParticipants(sum), textMain, colText, weight, 1)
 		}),
 	}
 	if sum.MessageCount > 1 {
 		names = append(names,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 6) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return r.app.th.text(gtx, strconv.Itoa(sum.MessageCount), 13, colMuted, font.Normal, 1)
+				return r.app.th.text(gtx, strconv.Itoa(sum.MessageCount), textSecondary, colMuted, font.Normal, 1)
 			}),
 		)
 	}
@@ -212,11 +211,11 @@ func (r *messageRow) subjectSnippetCell(gtx layout.Context, sum mail.ThreadSumma
 	}
 	children = append(children,
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			return r.app.th.text(gtx, subjectOrPlaceholder(sum.Subject), 14, colText, weight, 1)
+			return r.app.th.text(gtx, subjectOrPlaceholder(sum.Subject), textMain, colText, weight, 1)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			return r.app.th.text(gtx, snippetText(sum.Snippet), 14, colMuted, font.Normal, 1)
+			return r.app.th.text(gtx, snippetText(sum.Snippet), textMain, colMuted, font.Normal, 1)
 		}),
 	)
 	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx, children...)
@@ -260,7 +259,7 @@ func (r *messageRow) labelStrip(gtx layout.Context, chips []labelChip, maxWidth 
 		macro := op.Record(gtx.Ops)
 		measure := gtx
 		measure.Constraints = layout.Constraints{Max: image.Pt(textMax, 1<<16)}
-		text := th.text(measure, chip.name, labelChipText, chipTextColor(chip.bg), font.Normal, 1)
+		text := th.text(measure, chip.name, textTiny, chipTextColor(chip.bg), font.Normal, 1)
 		call := macro.Stop()
 
 		w := min(text.Size.X+2*padX, remain)
@@ -310,7 +309,7 @@ func (r *messageRow) tailCell(gtx layout.Context, sum mail.ThreadSummary, hovere
 					gtx.Constraints.Min.X = gtx.Dp(76)
 					gtx.Constraints.Max.X = gtx.Dp(76)
 					return layout.E.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-						return r.app.th.text(gtx, formatListTime(sum.LastDate), 13, colMuted, font.Normal, 1)
+						return r.app.th.text(gtx, formatListTime(sum.LastDate), textSecondary, colMuted, font.Normal, 1)
 					})
 				}),
 			)

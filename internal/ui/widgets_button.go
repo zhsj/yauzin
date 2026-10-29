@@ -253,7 +253,7 @@ func (b *linkButton) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 			)
 		}
 		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return th.text(gtx, b.label, 13, col, font.Medium, 1)
+			return th.text(gtx, b.label, textSecondary, col, font.Medium, 1)
 		}))
 		// The padding is inside the clickable, so the label keeps a hit area
 		// taller than its line box without shifting the text right.
@@ -305,7 +305,7 @@ func (b *outlineButton) Layout(gtx layout.Context, th *theme) layout.Dimensions 
 		measure := gtx
 		measure.Constraints = layout.Constraints{Max: image.Pt(1<<20, 1<<20)}
 		macro := op.Record(gtx.Ops)
-		label := th.text(measure, b.label, 13, textCol, font.Medium, 1)
+		label := th.text(measure, b.label, textSecondary, textCol, font.Medium, 1)
 		call := macro.Stop()
 
 		// The height is fixed so the action line keeps its rhythm no matter
@@ -469,7 +469,7 @@ func (b *pillButton) content(gtx layout.Context, th *theme) layout.Dimensions {
 		)
 	}
 	children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-		return th.text(gtx, b.label, 14, txtCol, font.Medium, 1)
+		return th.text(gtx, b.label, textMain, txtCol, font.Medium, 1)
 	}))
 	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx, children...)
 }

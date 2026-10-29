@@ -230,13 +230,13 @@ func TestBrandWordmarkFitsTitleBar(t *testing.T) {
 	gtx := testGtx(&ops, testWindow)
 
 	row := gtx.Dp(topBarHeightCSD) - 2*gtx.Dp(4)
-	dims := a.th.text(gtx, i18n.T("app.brand"), brandNameSize, colPrimary, brandNameWeight, 1)
+	dims := a.th.text(gtx, i18n.T("app.brand"), textTitle, colPrimary, brandNameWeight, 1)
 	if dims.Size.Y > row {
 		t.Fatalf("wordmark line height %dpx does not fit the %dpx title bar row", dims.Size.Y, row)
 	}
 	// The wordmark is truncated with an ellipsis once it outgrows its cell, and
 	// the cell width is what keeps the centred search pill stable.
-	if cell := gtx.Sp(brandNameSize) * brandNameEms; dims.Size.X > cell {
+	if cell := gtx.Sp(textTitle) * brandNameEms; dims.Size.X > cell {
 		t.Fatalf("wordmark %dpx is wider than its %dpx cell", dims.Size.X, cell)
 	}
 	if mark := gtx.Dp(brandMarkSize); dims.Size.Y > mark {

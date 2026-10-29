@@ -95,7 +95,7 @@ func (s *statusBar) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 12) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return th.text(gtx, s.msg, 13, textCol, font.Normal, 2)
+				return th.text(gtx, s.msg, textSecondary, textCol, font.Normal, 2)
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 12) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {

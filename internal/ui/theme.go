@@ -60,7 +60,7 @@ type glyphKey struct {
 func newTheme(t *themeFonts) *theme {
 	mat := material.NewTheme()
 	mat.Shaper = t.shaper
-	mat.TextSize = 14
+	mat.TextSize = textMain
 	mat.Face = t.face
 	mat.Fg = colText
 	mat.Bg = colSurface
@@ -191,7 +191,7 @@ func (t *theme) tooltip(gtx layout.Context, text string) layout.Dimensions {
 	measure := gtx
 	measure.Constraints = layout.Constraints{Max: image.Pt(1<<16, 1<<16)}
 	content := layout.Inset{Top: 5, Bottom: 5, Left: 10, Right: 10}.Layout(measure, func(gtx layout.Context) layout.Dimensions {
-		return t.text(gtx, text, 12, color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}, font.Normal, 1)
+		return t.text(gtx, text, textMeta, color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}, font.Normal, 1)
 	})
 	call := macro.Stop()
 
@@ -247,7 +247,7 @@ func initials(name string) string {
 
 // sectionLabel is the small uppercase-ish heading used in the sidebar.
 func (t *theme) sectionLabel(gtx layout.Context, txt string) layout.Dimensions {
-	return t.text(gtx, txt, 12, colMuted, font.Medium, 1)
+	return t.text(gtx, txt, textMeta, colMuted, font.Medium, 1)
 }
 
 // emptyState renders a centred icon, title and hint.
@@ -261,11 +261,11 @@ func (t *theme) emptyState(gtx layout.Context, ic icon, title, hint string) layo
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 10) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return t.text(gtx, title, 16, colText, font.Medium, 0)
+				return t.text(gtx, title, textHeading, colText, font.Medium, 0)
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 4) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return t.text(gtx, hint, 13, colMuted, font.Normal, 0)
+				return t.text(gtx, hint, textSecondary, colMuted, font.Normal, 0)
 			}),
 		)
 	})

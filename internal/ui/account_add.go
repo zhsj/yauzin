@@ -395,7 +395,7 @@ func (d *accountDialog) Layout(gtx layout.Context, a *App) layout.Dimensions {
 				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 						return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							return th.text(gtx, d.titleText(), 18, colText, font.Bold, 1)
+							return th.text(gtx, d.titleText(), textHeading, colText, font.Bold, 1)
 						})
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.close.Layout(gtx, th) }),
@@ -439,7 +439,7 @@ func (d *accountDialog) typeContent(gtx layout.Context, th *theme) layout.Dimens
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Left: 20, Right: 20, Bottom: 8}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return th.wrappedText(gtx, i18n.T("settings.accountChooseType"), 12, colMuted, font.Normal)
+					return th.wrappedText(gtx, i18n.T("settings.accountChooseType"), textMeta, colMuted, font.Normal)
 				})
 			}),
 			layout.Rigid(rows(d.typeRows, th)),
@@ -472,7 +472,7 @@ func (d *accountDialog) gmailContent(gtx layout.Context, th *theme) layout.Dimen
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Bottom: 12}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return th.wrappedText(gtx, i18n.T("settings.accountIntro"), 12, colMuted, font.Normal)
+					return th.wrappedText(gtx, i18n.T("settings.accountIntro"), textMeta, colMuted, font.Normal)
 				})
 			}),
 			layout.Rigid(labelledField(th, i18n.T("settings.accountClientID"), &d.clientID, &d.clientIDBox, "1234.apps.googleusercontent.com")),
@@ -503,26 +503,26 @@ func (d *accountDialog) authContent(gtx layout.Context, th *theme) layout.Dimens
 					return layout.Dimensions{}
 				}
 				return layout.Inset{Bottom: 8}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return th.text(gtx, d.relogin.DisplayName(), 14, colText, font.Medium, 1)
+					return th.text(gtx, d.relogin.DisplayName(), textMain, colText, font.Medium, 1)
 				})
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Bottom: 12}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return th.wrappedText(gtx, i18n.T("settings.accountAuthHint"), 12, colMuted, font.Normal)
+					return th.wrappedText(gtx, i18n.T("settings.accountAuthHint"), textMeta, colMuted, font.Normal)
 				})
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Bottom: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return th.text(gtx, i18n.T("settings.accountAuthURL"), 12, colMuted, font.Medium, 1)
+					return th.text(gtx, i18n.T("settings.accountAuthURL"), textMeta, colMuted, font.Medium, 1)
 				})
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				if d.authURL == "" {
 					return layout.Inset{Top: 4, Bottom: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-						return th.wrappedText(gtx, i18n.T("settings.accountWaiting"), 12, colMuted, font.Normal)
+						return th.wrappedText(gtx, i18n.T("settings.accountWaiting"), textMeta, colMuted, font.Normal)
 					})
 				}
-				return th.boxedField(gtx, &d.authField, nil, "", 12, gtx.Dp(38))
+				return th.boxedField(gtx, &d.authField, nil, "", textMeta, gtx.Dp(38))
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 10) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -573,7 +573,7 @@ func (d *accountDialog) authContent(gtx layout.Context, th *theme) layout.Dimens
 func (d *accountDialog) proxyRow(th *theme) layout.Widget {
 	return func(gtx layout.Context) layout.Dimensions {
 		if !d.hasProxy {
-			return th.wrappedText(gtx, i18n.T("settings.proxyUnset"), 12, colMuted, font.Normal)
+			return th.wrappedText(gtx, i18n.T("settings.proxyUnset"), textMeta, colMuted, font.Normal)
 		}
 		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -585,7 +585,7 @@ func (d *accountDialog) proxyRow(th *theme) layout.Widget {
 				if d.useProxy {
 					label = label + " · " + d.proxy
 				}
-				return th.wrappedText(gtx, label, 12, colMuted, font.Normal)
+				return th.wrappedText(gtx, label, textMeta, colMuted, font.Normal)
 			}),
 		)
 	}
@@ -596,7 +596,7 @@ func (d *accountDialog) errorRow(th *theme) layout.Widget {
 		if d.err == "" {
 			return layout.Dimensions{}
 		}
-		return th.wrappedText(gtx, d.err, 12, colDanger, font.Normal)
+		return th.wrappedText(gtx, d.err, textMeta, colDanger, font.Normal)
 	}
 }
 

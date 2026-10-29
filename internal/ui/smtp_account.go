@@ -298,7 +298,7 @@ func (d *smtpDialog) Layout(gtx layout.Context, a *App) layout.Dimensions {
 				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 						return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							return th.text(gtx, d.titleText(), 18, colText, font.Bold, 1)
+							return th.text(gtx, d.titleText(), textHeading, colText, font.Bold, 1)
 						})
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.close.Layout(gtx, th) }),
@@ -333,7 +333,7 @@ func (d *smtpDialog) content(gtx layout.Context, th *theme) layout.Dimensions {
 	children := []layout.FlexChild{
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layout.Inset{Bottom: 12}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return th.wrappedText(gtx, i18n.T("settings.smtpIntro"), 12, colMuted, font.Normal)
+				return th.wrappedText(gtx, i18n.T("settings.smtpIntro"), textMeta, colMuted, font.Normal)
 			})
 		}),
 		layout.Rigid(labelledField(th, i18n.T("settings.smtpHost"), &d.host, &d.hostBox, i18n.T("settings.smtpHostHint"))),
@@ -351,7 +351,7 @@ func (d *smtpDialog) content(gtx layout.Context, th *theme) layout.Dimensions {
 				return layout.Dimensions{}
 			}
 			return layout.Inset{Top: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return th.wrappedText(gtx, i18n.T("settings.smtpPlainWarning"), 12, colDanger, font.Normal)
+				return th.wrappedText(gtx, i18n.T("settings.smtpPlainWarning"), textMeta, colDanger, font.Normal)
 			})
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 12) }),
@@ -372,7 +372,7 @@ func (d *smtpDialog) content(gtx layout.Context, th *theme) layout.Dimensions {
 				return layout.Dimensions{}
 			}
 			return layout.Inset{Bottom: 8}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return th.wrappedText(gtx, d.err, 12, colDanger, font.Normal)
+				return th.wrappedText(gtx, d.err, textMeta, colDanger, font.Normal)
 			})
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -495,7 +495,7 @@ func (d *smtpAccountDetails) actions(gtx layout.Context, th *theme) layout.Dimen
 		if d.armed {
 			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-					return th.text(gtx, i18n.T("settings.smtpDeletePrompt"), 12, colDanger, font.Normal, 1)
+					return th.text(gtx, i18n.T("settings.smtpDeletePrompt"), textMeta, colDanger, font.Normal, 1)
 				}),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.cancel.Layout(gtx, th) }),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
@@ -518,7 +518,7 @@ func labelledField(th *theme, label string, ed *widget.Editor, box *widget.Click
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Bottom: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return th.text(gtx, label, 12, colMuted, font.Medium, 1)
+					return th.text(gtx, label, textMeta, colMuted, font.Medium, 1)
 				})
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -526,7 +526,7 @@ func labelledField(th *theme, label string, ed *widget.Editor, box *widget.Click
 				if h > gtx.Constraints.Max.Y {
 					h = gtx.Constraints.Max.Y
 				}
-				return th.boxedField(gtx, ed, box, hint, 14, h)
+				return th.boxedField(gtx, ed, box, hint, textMain, h)
 			}),
 		)
 	}
@@ -585,14 +585,14 @@ func (f *formSwitch) row(gtx layout.Context, th *theme) layout.Dimensions {
 						if f.disabled {
 							col = colMuted
 						}
-						return th.text(gtx, f.title, 13, col, font.Medium, 1)
+						return th.text(gtx, f.title, textSecondary, col, font.Medium, 1)
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						if f.subtitle == "" {
 							return layout.Dimensions{}
 						}
 						return layout.Inset{Top: 2}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							return th.wrappedText(gtx, f.subtitle, 12, colMuted, font.Normal)
+							return th.wrappedText(gtx, f.subtitle, textMeta, colMuted, font.Normal)
 						})
 					}),
 				)

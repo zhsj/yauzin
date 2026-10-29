@@ -105,12 +105,12 @@ func (n *navItem) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 			children = append(children,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 16) }),
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-					return th.text(gtx, n.label, 14, colText, font.Medium, 1)
+					return th.text(gtx, n.label, textMain, colText, font.Medium, 1)
 				}),
 			)
 			if n.count > 0 {
 				children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return th.text(gtx, strconv.Itoa(n.count), 12, colMuted, font.Medium, 1)
+					return th.text(gtx, strconv.Itoa(n.count), textMeta, colMuted, font.Medium, 1)
 				}))
 			}
 			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx, children...)
@@ -240,7 +240,7 @@ func (r *menuRow) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 				)
 			}
 			children = append(children, layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-				return th.text(gtx, r.label, 14, colText, font.Normal, 1)
+				return th.text(gtx, r.label, textMain, colText, font.Normal, 1)
 			}))
 			if r.checked {
 				children = append(children,

@@ -236,7 +236,7 @@ func (t *listToolbar) leftControls(gtx layout.Context, th *theme, selected int) 
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return t.markUnread.Layout(gtx, th) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return th.text(gtx, i18n.N("list.selected", selected), 13, colText, font.Medium, 1)
+				return th.text(gtx, i18n.N("list.selected", selected), textSecondary, colText, font.Medium, 1)
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 4) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return t.clear.Layout(gtx, th) }),
@@ -259,7 +259,7 @@ func (t *listToolbar) rightControls(gtx layout.Context, th *theme) []layout.Flex
 				if text == "" {
 					return layout.Dimensions{}
 				}
-				return th.text(gtx, text, 13, colMuted, font.Normal, 1)
+				return th.text(gtx, text, textSecondary, colMuted, font.Normal, 1)
 			})
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),

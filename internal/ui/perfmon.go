@@ -28,9 +28,6 @@ const (
 	// second keeps the CPU cost of ReadMemStats (a stop-the-world pause) and
 	// the redraw cadence negligible.
 	perfSampleInterval = time.Second
-	// perfTextSize is the font size of both rows; they deliberately share one
-	// size and colour so neither row reads as more important.
-	perfTextSize = unit.Sp(11)
 	// perfIdleAfter is the frame silence after which fps reads as 0: Gio stops
 	// redrawing when nothing happens, and a frozen last value would lie.
 	perfIdleAfter = 2 * time.Second
@@ -242,7 +239,7 @@ func (p *perfMonitor) layout(gtx layout.Context, th *theme) layout.Dimensions {
 	cell := func(txt string, w int) layout.Widget {
 		return func(gtx layout.Context) layout.Dimensions {
 			gtx.Constraints.Min.X = w
-			return th.text(gtx, txt, perfTextSize, colMuted, font.Normal, 1)
+			return th.text(gtx, txt, textTiny, colMuted, font.Normal, 1)
 		}
 	}
 	sep := func() layout.Widget { return cell("·", sepW) }
@@ -285,7 +282,7 @@ func measureTextWidth(th *theme, gtx layout.Context, txt string) int {
 	m := gtx
 	m.Constraints = layout.Constraints{Max: image.Pt(1<<16, 1<<16)}
 	macro := op.Record(m.Ops)
-	dims := th.text(m, txt, perfTextSize, colMuted, font.Normal, 1)
+	dims := th.text(m, txt, textTiny, colMuted, font.Normal, 1)
 	macro.Stop()
 	return dims.Size.X
 }

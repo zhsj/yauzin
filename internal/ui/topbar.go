@@ -70,10 +70,9 @@ const (
 	// centred search pill shifts when the language changes. Four ems fits the
 	// widest translation with margin to spare.
 	brandNameEms = 4
-	// brandNameSize and brandNameWeight are the wordmark style. Both title bar
-	// modes share them: the combined bar has the same 40dp content row, and a
-	// 15sp label read as too small beside the 36dp mark.
-	brandNameSize   = unit.Sp(22)
+	// brandNameWeight is the wordmark weight, which pairs with textTitle. Both
+	// title bar modes share the style: the combined bar has the same 40dp
+	// content row, and a smaller label read as too small beside the 36dp mark.
 	brandNameWeight = font.Bold
 	// searchGripMin is the thinnest blank strip kept beside the pill, so the
 	// title bar stays draggable once the window gets narrow.
@@ -162,7 +161,7 @@ func (t *topBar) leftControls(gtx layout.Context, csd bool, th *theme) []layout.
 				return hgap(gtx, brandMarkGap)
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return t.brandName(gtx, th, brandNameSize, colPrimary, brandNameWeight)
+				return t.brandName(gtx, th, textTitle, colPrimary, brandNameWeight)
 			}),
 		)
 	}
@@ -256,7 +255,7 @@ func (t *topBar) brand(gtx layout.Context, th *theme, showName bool) layout.Dime
 			children = append(children,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, brandMarkGap) }),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return t.brandName(gtx, th, brandNameSize, colPrimary, brandNameWeight)
+					return t.brandName(gtx, th, textTitle, colPrimary, brandNameWeight)
 				}),
 			)
 		}

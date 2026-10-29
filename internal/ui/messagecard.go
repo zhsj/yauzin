@@ -194,14 +194,14 @@ func (c *messageCard) collapsed(gtx layout.Context, msg *mail.Message) layout.Di
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				gtx.Constraints.Min.X = gtx.Dp(180)
 				gtx.Constraints.Max.X = gtx.Dp(180)
-				return th.text(gtx, senderName(msg.From), 14, colText, font.Bold, 1)
+				return th.text(gtx, senderName(msg.From), textMain, colText, font.Bold, 1)
 			}),
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-				return th.text(gtx, snippetText(msg.Snippet), 13, colMuted, font.Normal, 1)
+				return th.text(gtx, snippetText(msg.Snippet), textSecondary, colMuted, font.Normal, 1)
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return th.text(gtx, formatListTime(msg.Date), 12, colMuted, font.Normal, 1)
+				return th.text(gtx, formatListTime(msg.Date), textMeta, colMuted, font.Normal, 1)
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 6) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -228,15 +228,15 @@ func (c *messageCard) expanded(gtx layout.Context, msg *mail.Message) layout.Dim
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 						return column(gtx,
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return th.text(gtx, senderName(msg.From), 14, colText, font.Bold, 1)
+								return th.text(gtx, senderName(msg.From), textMain, colText, font.Bold, 1)
 							}),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return th.text(gtx, msg.From.Email, 12, colMuted, font.Normal, 1)
+								return th.text(gtx, msg.From.Email, textMeta, colMuted, font.Normal, 1)
 							}),
 						)
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return th.text(gtx, formatFullTime(msg.Date), 12, colMuted, font.Normal, 1)
+						return th.text(gtx, formatFullTime(msg.Date), textMeta, colMuted, font.Normal, 1)
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 6) }),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -285,9 +285,9 @@ func (c *messageCard) body(gtx layout.Context, msg *mail.Message) layout.Dimensi
 	body := strings.TrimSpace(msg.TextBody)
 	sel := c.bodySelection(msg)
 	if body == "" {
-		return th.selectableText(gtx, sel, i18n.T("reader.noPlainText"), 14, colMuted, font.Normal)
+		return th.selectableText(gtx, sel, i18n.T("reader.noPlainText"), textMain, colMuted, font.Normal)
 	}
-	return th.selectableText(gtx, sel, body, 14, colText, font.Normal)
+	return th.selectableText(gtx, sel, body, textMain, colText, font.Normal)
 }
 
 func (c *messageCard) attachments(gtx layout.Context, msg *mail.Message) layout.Dimensions {

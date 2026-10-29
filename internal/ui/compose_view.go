@@ -502,7 +502,7 @@ func (c *composeView) fromLine(gtx layout.Context, th *theme) layout.Dimensions 
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-				return th.text(gtx, c.senderLabel(), 14, colText, font.Normal, 1)
+				return th.text(gtx, c.senderLabel(), textMain, colText, font.Normal, 1)
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				if c.fromOpen {
@@ -563,7 +563,7 @@ func (c *composeView) fieldRow(gtx layout.Context, ed *widget.Editor, label, hin
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.fieldLabel(gtx, label) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-				return c.app.th.textField(gtx, ed, hint, 14)
+				return c.app.th.textField(gtx, ed, hint, textMain)
 			}),
 		)
 	})
@@ -575,7 +575,7 @@ func (c *composeView) fieldRow(gtx layout.Context, ed *widget.Editor, label, hin
 func (c *composeView) fieldLabel(gtx layout.Context, label string) layout.Dimensions {
 	w := gtx.Dp(composeLabelWidth)
 	gtx.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, 1<<16)}
-	return c.app.th.text(gtx, label, 14, colMuted, font.Normal, 1)
+	return c.app.th.text(gtx, label, textMain, colMuted, font.Normal, 1)
 }
 
 // headersLabelWidth is the label column of the header details. It is wider than
@@ -594,7 +594,7 @@ func (c *composeView) headersToggleRow(gtx layout.Context) layout.Dimensions {
 		dims := layout.Inset{Left: 16, Right: 10, Top: 2, Bottom: 2}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return th.text(gtx, i18n.T("compose.headers"), 12, colMuted, font.Normal, 1)
+					return th.text(gtx, i18n.T("compose.headers"), textMeta, colMuted, font.Normal, 1)
 				}),
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 					return layout.Dimensions{Size: gtx.Constraints.Min}
@@ -634,7 +634,7 @@ func (c *composeView) headerDetails(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.headerLabel(gtx, item.label) }),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-						return c.app.th.wrappedText(gtx, item.value, 12, colMuted, font.Normal)
+						return c.app.th.wrappedText(gtx, item.value, textMeta, colMuted, font.Normal)
 					}),
 				)
 			})
@@ -650,7 +650,7 @@ func (c *composeView) headerDetails(gtx layout.Context) layout.Dimensions {
 func (c *composeView) headerLabel(gtx layout.Context, label string) layout.Dimensions {
 	w := gtx.Dp(headersLabelWidth)
 	gtx.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, 1<<16)}
-	return c.app.th.text(gtx, label, 12, colMuted, font.Normal, 1)
+	return c.app.th.text(gtx, label, textMeta, colMuted, font.Normal, 1)
 }
 
 // referencesText is the visible form of the References chain. A long chain is
@@ -678,7 +678,7 @@ func (c *composeView) separator(gtx layout.Context) layout.Dimensions {
 // bodyRow lays out the message body, the one row that takes the leftover height.
 func (c *composeView) bodyRow(gtx layout.Context) layout.Dimensions {
 	return layout.Inset{Top: 8, Bottom: 8, Left: 16, Right: 16}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return c.app.th.textField(gtx, &c.body, i18n.T("compose.body"), 14)
+		return c.app.th.textField(gtx, &c.body, i18n.T("compose.body"), textMain)
 	})
 }
 
@@ -696,7 +696,7 @@ func (c *composeView) header(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return th.text(gtx, c.title(), 14, colText, font.Medium, 1)
+					return th.text(gtx, c.title(), textMain, colText, font.Medium, 1)
 				})
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.maxBtn.Layout(gtx, th) }),
@@ -722,7 +722,7 @@ func (c *composeView) footer(gtx layout.Context) layout.Dimensions {
 					if c.errMsg == "" {
 						return layout.Dimensions{}
 					}
-					return th.text(gtx, c.errMsg, 12, colDanger, font.Normal, 1)
+					return th.text(gtx, c.errMsg, textMeta, colDanger, font.Normal, 1)
 				})
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.sendBtn.Layout(gtx, th) }),
@@ -782,7 +782,7 @@ func (c *attachmentChip) Layout(gtx layout.Context, th *theme) layout.Dimensions
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 6) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				gtx.Constraints.Max.X = gtx.Dp(120)
-				return th.text(gtx, c.name, 12, colMuted, font.Normal, 1)
+				return th.text(gtx, c.name, textMeta, colMuted, font.Normal, 1)
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 4) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.remove.Layout(gtx, th) }),

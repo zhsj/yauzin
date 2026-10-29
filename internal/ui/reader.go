@@ -74,7 +74,7 @@ func (r *readerView) Layout(gtx layout.Context) layout.Dimensions {
 	a := r.app
 	if a.loadingThread {
 		return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return a.th.text(gtx, i18n.T("reader.loading"), 14, colMuted, font.Normal, 1)
+			return a.th.text(gtx, i18n.T("reader.loading"), textMain, colMuted, font.Normal, 1)
 		})
 	}
 	if len(a.msgs) == 0 {
@@ -108,11 +108,11 @@ func (r *readerView) Layout(gtx layout.Context) layout.Dimensions {
 			return layout.Inset{Top: 6, Bottom: 10, Left: 18, Right: 18}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return a.th.wrappedText(gtx, subjectOrPlaceholder(a.thread.Subject), 22, colText, font.Bold)
+						return a.th.wrappedText(gtx, subjectOrPlaceholder(a.thread.Subject), textTitle, colText, font.Bold)
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 4) }),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return a.th.text(gtx, i18n.N("reader.messageCount", len(a.msgs)), 12, colMuted, font.Normal, 1)
+						return a.th.text(gtx, i18n.N("reader.messageCount", len(a.msgs)), textMeta, colMuted, font.Normal, 1)
 					}),
 				)
 			})

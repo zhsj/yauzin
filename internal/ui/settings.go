@@ -228,7 +228,7 @@ func (d *accountDetails) actions(gtx layout.Context, th *theme) layout.Dimension
 		if d.armed {
 			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-					return th.text(gtx, i18n.T("settings.accountDeletePrompt"), 12, colDanger, font.Normal, 1)
+					return th.text(gtx, i18n.T("settings.accountDeletePrompt"), textMeta, colDanger, font.Normal, 1)
 				}),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return d.cancel.Layout(gtx, th) }),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
@@ -461,7 +461,7 @@ func (s *settingsView) Layout(gtx layout.Context, a *App) layout.Dimensions {
 				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 						return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							return th.text(gtx, i18n.T("settings.title"), 18, colText, font.Bold, 1)
+							return th.text(gtx, i18n.T("settings.title"), textHeading, colText, font.Bold, 1)
 						})
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return s.close.Layout(gtx, th) }),
@@ -529,7 +529,7 @@ func (s *settingsView) tab(gtx layout.Context, th *theme, i int) layout.Dimensio
 			col, weight = colText, font.Bold
 		}
 		layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return th.text(gtx, t.label, 14, col, weight, 1)
+			return th.text(gtx, t.label, textMain, col, weight, 1)
 		})
 		if selected {
 			// Tab indicator: a primary bar resting on the hairline below.
@@ -646,7 +646,7 @@ func sectionHeading(th *theme, label string) layout.Widget {
 func sectionHint(th *theme, text string) layout.Widget {
 	return func(gtx layout.Context) layout.Dimensions {
 		return layout.Inset{Top: 8, Bottom: 4, Left: 32, Right: 32}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return th.wrappedText(gtx, text, 12, colMuted, font.Normal)
+			return th.wrappedText(gtx, text, textMeta, colMuted, font.Normal)
 		})
 	}
 }
@@ -727,19 +727,19 @@ func (s *settingsView) proxySection(th *theme) layout.Widget {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Top: 12, Bottom: 2, Left: 16, Right: 16}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return th.text(gtx, i18n.T("settings.proxy"), 14, colText, font.Medium, 1)
+					return th.text(gtx, i18n.T("settings.proxy"), textMain, colText, font.Medium, 1)
 				})
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Left: 16, Right: 16, Bottom: 8}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return th.wrappedText(gtx, i18n.T("settings.proxyHint"), 12, colMuted, font.Normal)
+					return th.wrappedText(gtx, i18n.T("settings.proxyHint"), textMeta, colMuted, font.Normal)
 				})
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Left: 16, Right: 16, Bottom: 12}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return th.boxedField(gtx, s.proxy, &s.proxyBox, i18n.T("settings.proxyPlaceholder"), 13, gtx.Dp(36))
+							return th.boxedField(gtx, s.proxy, &s.proxyBox, i18n.T("settings.proxyPlaceholder"), textSecondary, gtx.Dp(36))
 						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -753,7 +753,7 @@ func (s *settingsView) proxySection(th *theme) layout.Widget {
 					return layout.Dimensions{}
 				}
 				return layout.Inset{Left: 16, Right: 16, Bottom: 12}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return th.wrappedText(gtx, s.proxyErr, 12, colDanger, font.Normal)
+					return th.wrappedText(gtx, s.proxyErr, textMeta, colDanger, font.Normal)
 				})
 			}),
 		)
@@ -828,7 +828,7 @@ func shortcutRow(gtx layout.Context, th *theme, sc shortcut) layout.Dimensions {
 			// The action takes the slack and truncates instead of pushing the
 			// caps off the row when a translation is long.
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-				return th.text(gtx, sc.title(), 14, colText, font.Normal, 1)
+				return th.text(gtx, sc.title(), textMain, colText, font.Normal, 1)
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return keyCaps(gtx, th, sc.caps)
@@ -862,7 +862,7 @@ func keyCap(gtx layout.Context, th *theme, label string) layout.Dimensions {
 	measure := gtx
 	measure.Constraints = layout.Constraints{Max: image.Pt(1<<16, 1<<16)}
 	macro := op.Record(gtx.Ops)
-	dims := th.text(measure, label, 11, colMuted, font.Medium, 1)
+	dims := th.text(measure, label, textTiny, colMuted, font.Medium, 1)
 	call := macro.Stop()
 
 	pad := gtx.Dp(7)
@@ -985,7 +985,7 @@ func (r *settingsRow) content(gtx layout.Context, th *theme) layout.Dimensions {
 		}
 		texts := []layout.FlexChild{
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return th.text(gtx, r.title, 14, titleCol, weight, 1)
+				return th.text(gtx, r.title, textMain, titleCol, weight, 1)
 			}),
 		}
 		if r.subtitle != "" {
@@ -994,7 +994,7 @@ func (r *settingsRow) content(gtx layout.Context, th *theme) layout.Dimensions {
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					// Two lines are enough for a short explanation; anything
 					// longer belongs in the documentation, not the panel.
-					return th.text(gtx, r.subtitle, 12, subtitleCol, font.Normal, 2)
+					return th.text(gtx, r.subtitle, textMeta, subtitleCol, font.Normal, 2)
 				}),
 			)
 		}
@@ -1020,7 +1020,7 @@ func (r *settingsRow) content(gtx layout.Context, th *theme) layout.Dimensions {
 							if val == "" {
 								return layout.Dimensions{}
 							}
-							return th.text(gtx, val, 13, colMuted, font.Normal, 1)
+							return th.text(gtx, val, textSecondary, colMuted, font.Normal, 1)
 						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							if val == "" || glyph == 0 {

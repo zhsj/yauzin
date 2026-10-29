@@ -130,7 +130,7 @@ func (t *topBar) searchField(gtx layout.Context, csd bool) layout.Dimensions {
 				// pill. Vertical centring is left to the Flex alignment.
 				gtx.Constraints.Min.X = gtx.Constraints.Max.X
 				gtx.Constraints.Min.Y = 0
-				es := th.editor(&t.search, i18n.T("topbar.search"), 14)
+				es := th.editor(&t.search, i18n.T("topbar.search"), textMain)
 				es.Color, es.HintColor = colText, colFaint
 				es.SelectionColor = colSelection
 				dims := es.Layout(gtx)

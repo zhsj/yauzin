@@ -209,6 +209,7 @@ func (b *tapBlocker) Layout(gtx layout.Context) layout.Dimensions {
 }
 
 // textField is a single-line editor styled for the compose and search fields.
+// size is a step of the text ladder in typography.go.
 func (t *theme) textField(gtx layout.Context, ed *widget.Editor, hint string, size unit.Sp) layout.Dimensions {
 	es := t.editor(ed, hint, size)
 	es.Color = colText
@@ -223,7 +224,8 @@ func (t *theme) textField(gtx layout.Context, ed *widget.Editor, hint string, si
 // shifted down by the leftover space; without that the text clings to the top
 // of the box. box, when not nil, turns the whole box into the hit target: a
 // click on the padding above or below the text moves the focus into the
-// editor, which only registers the text line itself.
+// editor, which only registers the text line itself. size is a step of the text
+// ladder in typography.go.
 func (t *theme) boxedField(gtx layout.Context, ed *widget.Editor, box *widget.Clickable, hint string, size unit.Sp, h int) layout.Dimensions {
 	full := image.Pt(gtx.Constraints.Max.X, h)
 	field := func(gtx layout.Context) layout.Dimensions {
@@ -259,7 +261,8 @@ func (t *theme) boxedField(gtx layout.Context, ed *widget.Editor, box *widget.Cl
 }
 
 // editor prepares a single-line editor with the shared font. Callers set the
-// colors that fit the background they draw it on.
+// colors that fit the background they draw it on; size is a step of the text
+// ladder in typography.go.
 func (t *theme) editor(ed *widget.Editor, hint string, size unit.Sp) material.EditorStyle {
 	es := material.Editor(t.mat, ed, hint)
 	es.Font = font.Font{Typeface: t.face}
