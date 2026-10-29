@@ -204,9 +204,71 @@ func (c *client) doMediaUpload(ctx context.Context, op, path, contentType string
 		url.Values{"uploadType": {"media"}}, contentType, body, out)
 }
 
+// streamDrain bounds how much of a response is read after a streamed handler
+// has taken what it needs. What is left is the tail of the JSON document, so a
+// full buffer is already more than enough to finish the transfer.
+const streamDrain = 64 << 10
+
+// doStream performs one authorized JSON GET and hands the response body to
+// handle as it arrives, instead of decoding the whole document into a value.
+// The body is counted for progress while handle reads it. Once handle is done
+// the rest of the document is drained, so the transfer completes and the
+// connection can be reused.
+func (c *client) doStream(ctx context.Context, op, path string, query url.Values, progress func(mail.Progress), handle func(io.Reader) error) error {
+	return c.doRequestHandle(ctx, op, http.MethodGet, c.baseURL, path, query, "application/json", nil, func(resp *http.Response) error {
+		src := io.Reader(resp.Body)
+		var counter *progressReader
+		if progress != nil {
+			counter = &progressReader{r: resp.Body, total: resp.ContentLength, report: progress}
+			src = counter
+		}
+		if err := handle(src); err != nil {
+			// A failed transfer is closed rather than drained: the rest of the
+			// body cannot repair it.
+			return err
+		}
+		_, _ = io.CopyN(io.Discard, src, streamDrain)
+		if counter != nil {
+			counter.finish()
+		}
+		return nil
+	})
+}
+
 // doRequest performs one authorized request against one of the API roots. It
 // refreshes the token once when the server rejects it.
 func (c *client) doRequest(ctx context.Context, op, method, base, path string, query url.Values, contentType string, body []byte, out any) error {
+	return c.doRequestProgress(ctx, op, method, base, path, query, contentType, body, out, nil)
+}
+
+// doRequestProgress is doRequest with an optional progress callback for the
+// response body. A retried request starts its count from zero, so a caller that
+// reports progress must keep it monotonic.
+func (c *client) doRequestProgress(ctx context.Context, op, method, base, path string, query url.Values, contentType string, body []byte, out any, progress func(mail.Progress)) error {
+	return c.doRequestHandle(ctx, op, method, base, path, query, contentType, body, func(resp *http.Response) error {
+		if out == nil || resp.StatusCode == http.StatusNoContent {
+			return nil
+		}
+		src := io.Reader(resp.Body)
+		var counter *progressReader
+		if progress != nil {
+			counter = &progressReader{r: resp.Body, total: resp.ContentLength, report: progress}
+			src = counter
+		}
+		if err := json.NewDecoder(src).Decode(out); err != nil {
+			return fmt.Errorf("gmail %s: decode response: %w", op, err)
+		}
+		if counter != nil {
+			counter.finish()
+		}
+		return nil
+	})
+}
+
+// doRequestHandle performs one authorized request against one of the API roots
+// and hands a successful response to handle. It refreshes the token once when
+// the server rejects it and always closes the response body.
+func (c *client) doRequestHandle(ctx context.Context, op, method, base, path string, query url.Values, contentType string, body []byte, handle func(*http.Response) error) error {
 	token, err := c.accessToken(ctx, false)
 	if err != nil {
 		return err
@@ -233,13 +295,58 @@ func (c *client) doRequest(ctx context.Context, op, method, base, path string, q
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return apiError(op, resp)
 	}
-	if out == nil || resp.StatusCode == http.StatusNoContent {
+	if handle == nil {
 		return nil
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("gmail %s: decode response: %w", op, err)
+	return handle(resp)
+}
+
+// progressReportStep bounds how much a transfer without a known total may read
+// between two progress callbacks.
+const progressReportStep = 64 << 10
+
+// progressReader counts the bytes of a response body and reports them at most
+// once per percent (or per progressReportStep when the length is unknown), so a
+// large attachment yields about a hundred callbacks instead of thousands.
+type progressReader struct {
+	r      io.Reader
+	done   int64
+	total  int64
+	last   int64
+	report func(mail.Progress)
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	p.done += int64(n)
+	if p.wantsReport() {
+		p.report(mail.Progress{Done: p.done, Total: p.total})
+		p.last = p.done
 	}
-	return nil
+	return n, err
+}
+
+func (p *progressReader) wantsReport() bool {
+	if p.done == p.last {
+		return false
+	}
+	if p.total <= 0 {
+		return p.done-p.last >= progressReportStep
+	}
+	return p.done*100/p.total != p.last*100/p.total
+}
+
+// finish reports the final state once the payload has been decoded. The body
+// is complete even when the last Read stopped short of the advertised length.
+func (p *progressReader) finish() {
+	done := p.done
+	if p.total > 0 {
+		done = p.total
+	}
+	if done != p.last {
+		p.report(mail.Progress{Done: done, Total: p.total})
+		p.last = done
+	}
 }
 
 // send builds and performs one request with the given bearer token. A non-nil

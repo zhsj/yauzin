@@ -199,6 +199,33 @@ func TestAttachmentMetadataWithoutBody(t *testing.T) {
 	}
 }
 
+// TestAttachmentWithoutBlobKeepsEmptyID pins that a file part whose content
+// travels inside the payload is still listed, with no ID to download: the reader
+// shows what the message carries, and saving it reports that nothing is there.
+func TestAttachmentWithoutBlobKeepsEmptyID(t *testing.T) {
+	svc := &Service{}
+	got := svc.message(&Message{ID: "m1", Payload: &MessagePart{
+		MIMEType: "multipart/mixed",
+		Parts: []*MessagePart{
+			textPart("text/plain", "the body"),
+			{Filename: "notes.txt", MIMEType: "text/plain", PartID: "2", Body: &MessagePartBody{Data: b64("inline")}},
+			{Filename: "blob.bin", MIMEType: "application/octet-stream", Body: &MessagePartBody{AttachmentID: "a1"}},
+		},
+	}})
+	if len(got.Attachments) != 2 {
+		t.Fatalf("attachments = %+v", got.Attachments)
+	}
+	if id := got.Attachments[0].ID; id != "" {
+		t.Fatalf("inline part ID = %q, want an empty ID", id)
+	}
+	if id := got.Attachments[1].ID; id != "a1" {
+		t.Fatalf("blob attachment ID = %q, want a1", id)
+	}
+	if !got.HasAttachments {
+		t.Fatal("message with file parts reported no attachments")
+	}
+}
+
 func TestPayloadHasAttachment(t *testing.T) {
 	if payloadHasAttachment(&MessagePart{MIMEType: "text/plain", Body: &MessagePartBody{Data: b64("x")}}) {
 		t.Fatal("a body-only part reported an attachment")

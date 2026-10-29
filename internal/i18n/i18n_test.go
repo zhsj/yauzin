@@ -72,9 +72,9 @@ func TestTranslate(t *testing.T) {
 	if got := T("app.brand"); got != "邮笺" {
 		t.Errorf("zh-Hans app.brand = %q, want 邮笺", got)
 	}
-	if got, want := T("toast.savedTo", map[string]string{"Path": "/tmp/a.pdf"}),
+	if got, want := T("download.savedTo", map[string]string{"Path": "/tmp/a.pdf"}),
 		"已保存到 /tmp/a.pdf"; got != want {
-		t.Errorf("zh-Hans toast.savedTo = %q, want %q", got, want)
+		t.Errorf("zh-Hans download.savedTo = %q, want %q", got, want)
 	}
 	if got, want := T("list.range", map[string]int{"Start": 1, "End": 50, "Total": 120}),
 		"1–50 / 共 120"; got != want {

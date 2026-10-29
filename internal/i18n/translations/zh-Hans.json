@@ -209,6 +209,11 @@
 
   "attachment.name": "附件",
 
+  "download.title": "任务列表",
+  "download.savedTo": "已保存到 {{.Path}}",
+  "download.failed": "失败：{{.Error}}",
+  "download.failedPartial": "失败：{{.Error}}，目标文件可能不完整",
+
   "error.notFound": "邮件不存在或已被删除",
   "error.unsupported": "当前账号不支持该操作",
   "error.invalidArgument": "请求无效，请检查收件人后重试",
@@ -234,7 +239,6 @@
   "toast.pageMarkedUnread": "本页已全部标为未读",
   "toast.saveFailed": "保存失败：{{.Error}}",
   "toast.openFailed": "无法打开 HTML 版本：{{.Error}}",
-  "toast.savedTo": "已保存到 {{.Path}}",
   "toast.sent": "邮件已发送",
   "toast.accountSwitched": "已切换到 {{.Name}}",
   "toast.accountAdded": "已添加 {{.Name}}",

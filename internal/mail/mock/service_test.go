@@ -1,11 +1,11 @@
 package mock
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"math"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -970,52 +970,32 @@ func TestSaveAttachment(t *testing.T) {
 		t.Fatal("the seeded inbox has no attachment")
 	}
 
-	dir := t.TempDir()
-	path, err := s.SaveAttachment(ctx, msg.ID, att.ID, dir)
-	if err != nil {
-		t.Fatalf("save attachment: %v", err)
-	}
-	if filepath.Dir(path) != dir {
-		t.Fatalf("attachment written to %q, want a file inside %q", path, dir)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("attachment mode %o, want 600", perm)
-	}
-
-	if _, err := s.SaveAttachment(ctx, msg.ID, "no-such-attachment", dir); !errors.Is(err, mail.ErrNotFound) {
-		t.Fatalf("unknown attachment returned %v, want ErrNotFound", err)
-	}
-
-	// A hostile file name must not escape the directory it is written to.
-	if err := s.Send(ctx, mail.Draft{
-		To:          []mail.Address{{Email: "bob@example.com"}},
-		Subject:     "with attachment",
-		Body:        "body",
-		Attachments: []mail.DraftAttachment{{Name: "../../escape.txt"}},
+	var updates []mail.Progress
+	var body bytes.Buffer
+	if err := s.SaveAttachment(ctx, msg.ID, att.ID, &body, func(p mail.Progress) {
+		updates = append(updates, p)
 	}); err != nil {
-		t.Fatalf("send: %v", err)
-	}
-	sent, err := s.ListThreads(ctx, mail.ListRequest{FolderID: "sent", Limit: 1})
-	if err != nil {
-		t.Fatalf("list sent: %v", err)
-	}
-	msgs, err := s.GetThread(ctx, sent.Threads[0].ID)
-	if err != nil {
-		t.Fatalf("get thread: %v", err)
-	}
-	evil := msgs[0]
-	if len(evil.Attachments) != 1 {
-		t.Fatalf("sent message has %d attachments, want 1", len(evil.Attachments))
-	}
-	evilPath, err := s.SaveAttachment(ctx, evil.ID, evil.Attachments[0].ID, dir)
-	if err != nil {
 		t.Fatalf("save attachment: %v", err)
 	}
-	if filepath.Dir(evilPath) != dir {
-		t.Fatalf("attachment escaped to %q", evilPath)
+	if body.Len() == 0 {
+		t.Fatal("save wrote no content")
+	}
+	if !strings.Contains(body.String(), msg.Subject) {
+		t.Fatalf("saved content %q does not mention the subject %q", body.String(), msg.Subject)
+	}
+	if len(updates) == 0 {
+		t.Fatal("save reported no progress")
+	}
+	for i := 1; i < len(updates); i++ {
+		if updates[i].Done < updates[i-1].Done {
+			t.Fatalf("progress went backwards: %v after %v", updates[i], updates[i-1])
+		}
+	}
+	if last := updates[len(updates)-1]; last.Total <= 0 || last.Done != last.Total {
+		t.Fatalf("last progress %v, want Done == Total > 0", last)
+	}
+
+	if err := s.SaveAttachment(ctx, msg.ID, "no-such-attachment", io.Discard, nil); !errors.Is(err, mail.ErrNotFound) {
+		t.Fatalf("unknown attachment returned %v, want ErrNotFound", err)
 	}
 }

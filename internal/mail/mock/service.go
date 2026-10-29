@@ -8,8 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"html"
-	"os"
-	"path/filepath"
+	"io"
 	"slices"
 	"sort"
 	"strconv"
@@ -818,18 +817,18 @@ func (s *Service) storeSent(draft mail.Draft) {
 }
 
 // SaveAttachment implements mail.Service.
-func (s *Service) SaveAttachment(ctx context.Context, messageID, attachmentID, dir string) (string, error) {
+func (s *Service) SaveAttachment(ctx context.Context, messageID, attachmentID string, w io.Writer, progress func(mail.Progress)) error {
 	if err := s.wait(ctx); err != nil {
-		return "", err
+		return err
 	}
 
-	// Look the attachment up under the lock, then write the file without it: a
-	// slow filesystem must not stall every other operation, and a context that
-	// expires during the write is still observed before anything is committed.
+	// Look the attachment up under the lock, then write without it: a slow
+	// target must not stall every other operation, and a context that expires
+	// during the write is still observed before anything is committed.
 	s.mu.Lock()
 	if err := ctx.Err(); err != nil {
 		s.mu.Unlock()
-		return "", err
+		return err
 	}
 	var subject, filename string
 	var found bool
@@ -843,25 +842,35 @@ func (s *Service) SaveAttachment(ctx context.Context, messageID, attachmentID, d
 	})
 	s.mu.Unlock()
 	if !found {
-		return "", mail.ErrNotFound
+		return mail.ErrNotFound
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return err
 	}
 
-	name := filepath.Base(filename)
-	if name == "." || name == ".." || name == string(filepath.Separator) || name == "" {
-		name = "attachment.txt"
+	body := []byte(fmt.Sprintf("Yauzin 演示附件\n\n所属邮件：%s\n文件名：%s\n\n接入真实后端后，这里会是原始附件内容。\n", subject, filename))
+	return writeDemoAttachment(w, body, progress)
+}
+
+// writeDemoAttachment writes the demo payload in a few chunks, so the progress
+// callback reports more than the final size.
+func writeDemoAttachment(w io.Writer, data []byte, progress func(mail.Progress)) error {
+	total := int64(len(data))
+	step := max((len(data)+3)/4, 1)
+	for off := 0; off < len(data); off += step {
+		end := min(off+step, len(data))
+		n, err := w.Write(data[off:end])
+		if err != nil {
+			return err
+		}
+		if n != end-off {
+			return io.ErrShortWrite
+		}
+		if progress != nil {
+			progress(mail.Progress{Done: int64(end), Total: total})
+		}
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	path := filepath.Join(dir, name)
-	body := fmt.Sprintf("Yauzin 演示附件\n\n所属邮件：%s\n文件名：%s\n\n接入真实后端后，这里会是原始附件内容。\n", subject, filename)
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		return "", err
-	}
-	return path, nil
+	return nil
 }
 
 // RawMessage implements mail.Service. The demo data keeps no source, so the

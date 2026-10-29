@@ -151,6 +151,9 @@ type App struct {
 	reader  *readerView
 	status  *statusBar
 	perf    *perfMonitor
+	// downloads is the persistent record of attachment saves shown in the
+	// bottom left corner. It lives in memory only.
+	downloads *downloadPanel
 
 	// The floating layer: at most one panel or menu at a time.
 	overlay  overlay
@@ -488,6 +491,7 @@ func newAppWith(pref prefs.Settings, opts appOptions) *App {
 		expanded:      map[string]bool{},
 		decorated:     true,
 		status:        &statusBar{},
+		downloads:     newDownloadPanel(),
 		cursorThread:  -1,
 		openCh:        make(chan struct{}, 1),
 		quitCh:        make(chan struct{}, 1),

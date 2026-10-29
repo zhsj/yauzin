@@ -212,6 +212,11 @@
 
   "attachment.name": "attachment",
 
+  "download.title": "Tasks",
+  "download.savedTo": "Saved to {{.Path}}",
+  "download.failed": "Failed: {{.Error}}",
+  "download.failedPartial": "Failed: {{.Error}} — the target file may be incomplete",
+
   "error.notFound": "That mail no longer exists.",
   "error.unsupported": "This account does not support that action.",
   "error.invalidArgument": "The request was rejected. Check the recipients and try again.",
@@ -237,7 +242,6 @@
   "toast.pageMarkedUnread": "Marked this page as unread",
   "toast.saveFailed": "Could not save the attachment: {{.Error}}",
   "toast.openFailed": "Could not open the HTML version: {{.Error}}",
-  "toast.savedTo": "Saved to {{.Path}}",
   "toast.sent": "Message sent",
   "toast.accountSwitched": "Switched to {{.Name}}",
   "toast.accountAdded": "Added {{.Name}}",

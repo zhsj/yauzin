@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 )
@@ -293,6 +294,14 @@ var (
 	ErrUnauthorized = errors.New("mail: unauthorized")
 )
 
+// Progress is how far one transfer has come. Total is the expected number of
+// bytes and is not positive when the backend cannot tell; Done never exceeds a
+// known Total.
+type Progress struct {
+	Done  int64
+	Total int64
+}
+
 // Service is the single abstraction the UI depends on. Implementations must be
 // safe for concurrent use: the UI issues requests from several goroutines and
 // never serialises them. Every method honours ctx, including while it waits for
@@ -341,7 +350,12 @@ type Service interface {
 	// Delete moves the messages to the trash. It never deletes permanently.
 	Delete(ctx context.Context, ids []string) error
 	Send(ctx context.Context, draft Draft) error
-	SaveAttachment(ctx context.Context, messageID, attachmentID, dir string) (string, error)
+	// SaveAttachment writes one attachment of one message to w. attachmentID is
+	// the opaque ID the backend put in Attachment.ID. progress may be nil: when
+	// it is not, the backend calls it from the goroutine running this method as
+	// the transfer advances, with Done never going backwards and a last call
+	// reporting the complete size. A write error from w ends the save.
+	SaveAttachment(ctx context.Context, messageID, attachmentID string, w io.Writer, progress func(Progress)) error
 	// RawMessage returns the message source as the backend stores it, for the
 	// reader's "view original" page. It is a separate read from GetThread: the
 	// parsed bodies are all the reader shows, so the source is only fetched

@@ -86,52 +86,73 @@ func (s *sidebarView) toggleLabel(id string) {
 func (s *sidebarView) Layout(gtx layout.Context) layout.Dimensions {
 	th := s.app.th
 	return layout.Inset{Top: 8, Right: 8, Bottom: 8, Left: 8}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		// One scroll region for the whole column rather than nested lists: the
-		// compose pill scrolls out of the way with the folders it sits above.
-		// Folding a label changes the row count in the middle of the layout, so
-		// both the slice and the count are snapshotted before the first row.
-		labels := s.labels
-		folderStart := 2 // 0 is the compose pill, 1 is the gap under it
-		labelsStart := folderStart + len(s.folders)
-		rows := labelsStart
-		if len(labels) > 0 {
-			// A gap and the section header sit between the folders and the labels.
-			rows = labelsStart + 2 + len(labels)
+		if s.app.downloads.empty() {
+			return s.navLayout(gtx, th)
 		}
-		s.list.Axis = layout.Vertical
-		return s.list.Layout(gtx, rows, func(gtx layout.Context, i int) layout.Dimensions {
-			switch {
-			case i == 0:
+		// The task list is a fixed section at the bottom: the folders and
+		// labels above scroll in the remaining height instead of pushing it
+		// out of the window.
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return s.navLayout(gtx, th)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Left: 6, Right: 6}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return s.compose.Layout(gtx, th)
+					return s.app.downloads.LayoutSection(gtx, th)
 				})
-			case i == 1:
-				return vgap(gtx, 14)
-			case i < labelsStart:
-				item := s.folders[i-folderStart]
-				return layout.Inset{Left: 6, Right: 6}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return item.Layout(gtx, th)
-				})
-			case i == labelsStart:
-				return vgap(gtx, 8)
-			case i == labelsStart+1:
-				return layout.Inset{Top: 12, Bottom: 4, Left: 14, Right: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return th.sectionLabel(gtx, i18n.T("sidebar.labels"))
-						}),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return s.addLabel.Layout(gtx, th)
-						}),
-					)
-				})
-			default:
-				item := labels[i-labelsStart-2]
-				return layout.Inset{Left: 6, Right: 6}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return item.Layout(gtx, th)
-				})
-			}
-		})
+			}),
+		)
+	})
+}
+
+// navLayout is the scrolling part of the column: the compose pill, the system
+// folders and the labels.
+func (s *sidebarView) navLayout(gtx layout.Context, th *theme) layout.Dimensions {
+	// One scroll region for the whole column rather than nested lists: the
+	// compose pill scrolls out of the way with the folders it sits above.
+	// Folding a label changes the row count in the middle of the layout, so
+	// both the slice and the count are snapshotted before the first row.
+	labels := s.labels
+	folderStart := 2 // 0 is the compose pill, 1 is the gap under it
+	labelsStart := folderStart + len(s.folders)
+	rows := labelsStart
+	if len(labels) > 0 {
+		// A gap and the section header sit between the folders and the labels.
+		rows = labelsStart + 2 + len(labels)
+	}
+	s.list.Axis = layout.Vertical
+	return s.list.Layout(gtx, rows, func(gtx layout.Context, i int) layout.Dimensions {
+		switch {
+		case i == 0:
+			return layout.Inset{Left: 6, Right: 6}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return s.compose.Layout(gtx, th)
+			})
+		case i == 1:
+			return vgap(gtx, 14)
+		case i < labelsStart:
+			item := s.folders[i-folderStart]
+			return layout.Inset{Left: 6, Right: 6}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return item.Layout(gtx, th)
+			})
+		case i == labelsStart:
+			return vgap(gtx, 8)
+		case i == labelsStart+1:
+			return layout.Inset{Top: 12, Bottom: 4, Left: 14, Right: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						return th.sectionLabel(gtx, i18n.T("sidebar.labels"))
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return s.addLabel.Layout(gtx, th)
+					}),
+				)
+			})
+		default:
+			item := labels[i-labelsStart-2]
+			return layout.Inset{Left: 6, Right: 6}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return item.Layout(gtx, th)
+			})
+		}
 	})
 }
 

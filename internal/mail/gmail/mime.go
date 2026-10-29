@@ -84,8 +84,10 @@ func collectParts(p *MessagePart, out *mimeBodies) {
 	}
 }
 
-// attachment converts one file part into its metadata. The content itself is
-// out of scope: the backend does not download attachments yet.
+// attachment converts one file part into its metadata. Only a part with an
+// attachmentId names downloadable content; a file part the payload carries
+// itself (which Gmail does for some small parts) still shows up in the reader,
+// with an empty ID, and saving it reports that there is nothing to fetch.
 func attachment(p *MessagePart) mail.Attachment {
 	a := mail.Attachment{Filename: p.Filename, MIMEType: p.MIMEType}
 	if p.Body != nil {

@@ -3,6 +3,7 @@ package inboxwatch
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -51,8 +52,8 @@ func (f *fakeService) Archive(context.Context, []string) error                  
 func (f *fakeService) MarkSpam(context.Context, []string, bool) error           { return nil }
 func (f *fakeService) Delete(context.Context, []string) error                   { return nil }
 func (f *fakeService) Send(context.Context, mail.Draft) error                   { return nil }
-func (f *fakeService) SaveAttachment(context.Context, string, string, string) (string, error) {
-	return "", mail.ErrUnsupported
+func (f *fakeService) SaveAttachment(context.Context, string, string, io.Writer, func(mail.Progress)) error {
+	return mail.ErrUnsupported
 }
 
 func (f *fakeService) RawMessage(context.Context, string) ([]byte, error) {

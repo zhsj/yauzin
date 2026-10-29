@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -206,8 +207,8 @@ func (f *fakeService) sentDrafts() []mail.Draft {
 	return append([]mail.Draft{}, f.sent...)
 }
 
-func (f *fakeService) SaveAttachment(context.Context, string, string, string) (string, error) {
-	return "", mail.ErrUnsupported
+func (f *fakeService) SaveAttachment(context.Context, string, string, io.Writer, func(mail.Progress)) error {
+	return mail.ErrUnsupported
 }
 
 func (f *fakeService) RawMessage(context.Context, string) ([]byte, error) {

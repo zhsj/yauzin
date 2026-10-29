@@ -1034,13 +1034,6 @@ func TestRefreshWithoutGmailCredentialsIsUnauthorized(t *testing.T) {
 	}
 }
 
-func TestUnimplementedOperationsAreUnsupported(t *testing.T) {
-	svc, _ := newTestService(t, http.NotFoundHandler())
-	if _, err := svc.SaveAttachment(context.Background(), "m1", "a1", "/tmp"); !errors.Is(err, mail.ErrUnsupported) {
-		t.Fatalf("SaveAttachment = %v, want ErrUnsupported", err)
-	}
-}
-
 func TestServiceUsesProxy(t *testing.T) {
 	var hits int
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

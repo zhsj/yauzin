@@ -5,8 +5,7 @@
 //
 // The account is authorized with a user-supplied OAuth client (see SignIn) and
 // the gmail.modify scope, which covers the label changes behind those actions
-// but not permanent deletion. Sending and attachment download are not
-// implemented and report mail.ErrUnsupported.
+// but not permanent deletion.
 package gmail
 
 import (
@@ -487,12 +486,6 @@ func (s *Service) GetThread(ctx context.Context, threadID string) ([]*mail.Messa
 		out = append(out, s.message(m))
 	}
 	return out, nil
-}
-
-// SaveAttachment is not implemented: attachment download is out of the
-// backend's scope.
-func (s *Service) SaveAttachment(context.Context, string, string, string) (string, error) {
-	return "", mail.ErrUnsupported
 }
 
 // RawMessage returns the RFC 822 source of one message.

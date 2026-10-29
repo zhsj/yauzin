@@ -159,7 +159,7 @@ func catalogMeta(data []byte, fallback string) (string, map[string]bool) {
 // T translates id using the active language.
 //
 // Optional data is passed as template data, for example
-// T("toast.savedTo", map[string]string{"Path": p}).
+// T("download.savedTo", map[string]string{"Path": p}).
 func T(id string, data ...any) string {
 	return localize(id, nil, data...)
 }
