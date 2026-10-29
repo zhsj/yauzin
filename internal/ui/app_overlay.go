@@ -17,6 +17,9 @@ import (
 
 func (a *App) layout(gtx layout.Context) {
 	gtx.Constraints.Min = gtx.Constraints.Max
+	// A clipboard write staged by a selection menu runs here, where a layout
+	// context exists.
+	a.flushClipboard(gtx)
 	// Tips recorded last frame are stale; the hovered buttons queue fresh
 	// ones while this frame is laid out.
 	a.th.tips = a.th.tips[:0]

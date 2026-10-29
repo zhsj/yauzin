@@ -161,6 +161,8 @@
   "reader.menu.safePreview": "Safe preview",
   "reader.menu.fullPreview": "Full preview (unsafe)",
   "reader.menu.viewSource": "View original message",
+  "reader.menu.copy": "Copy",
+  "reader.menu.openLink": "Open link in browser",
   "reader.noPlainText": "This message has no plain-text part.",
   "reader.messageCount": {
     "one": "{{.Count}} message",

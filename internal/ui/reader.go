@@ -42,6 +42,10 @@ type readerView struct {
 	reply   *iconButton
 	forward *iconButton
 
+	// subject is the headline of the conversation, selectable like the text of
+	// the messages. It belongs to the thread currently shown.
+	subject textSelection
+
 	newestForReply *mail.Message
 }
 
@@ -108,7 +112,14 @@ func (r *readerView) Layout(gtx layout.Context) layout.Dimensions {
 			return layout.Inset{Top: 6, Bottom: 10, Left: 18, Right: 18}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return a.th.wrappedText(gtx, subjectOrPlaceholder(a.thread.Subject), textTitle, colText, font.Bold)
+						dims := r.subject.Wrap(gtx, a.th, a.thread.ID, subjectOrPlaceholder(a.thread.Subject), textTitle, 0, colText, font.Bold)
+						// The menu is opened after the headline was drawn: it
+						// belongs to the App, which lays it out below this view.
+						if text, ok := r.subject.Take(); ok {
+							a.showTextMenu(text)
+							invalidateAfterTap(gtx)
+						}
+						return dims
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 4) }),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -178,6 +189,7 @@ func (r *readerView) replySelection(id string) string {
 func (r *readerView) reset() {
 	r.cards = map[string]*messageCard{}
 	r.atts = map[string]*pillButton{}
+	r.subject = textSelection{}
 	r.list.Position = layout.Position{}
 }
 

@@ -159,6 +159,8 @@
   "reader.menu.safePreview": "安全预览",
   "reader.menu.fullPreview": "完整预览（不安全）",
   "reader.menu.viewSource": "查看原始邮件",
+  "reader.menu.copy": "复制",
+  "reader.menu.openLink": "在浏览器中打开链接",
   "reader.noPlainText": "此邮件没有纯文本正文。",
   "reader.messageCount": {
     "other": "{{.Count}} 封邮件"

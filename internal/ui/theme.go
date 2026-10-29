@@ -127,6 +127,21 @@ func (t *theme) selectableText(gtx layout.Context, sel *widget.Selectable, txt s
 	return l.Layout(gtx)
 }
 
+// selectableLine draws one line of selectable text that is cut with an ellipsis
+// when it does not fit, the same way theme.text does for plain labels. The
+// material label hands MaxLines and Truncator to the Selectable, so the head of
+// a card keeps its height while its sender stays selectable.
+func (t *theme) selectableLine(gtx layout.Context, sel *widget.Selectable, txt string, size unit.Sp, col color.NRGBA, weight font.Weight) layout.Dimensions {
+	sel.MaxLines = 1
+	sel.Truncator = "…"
+	l := material.Label(t.mat, size, txt)
+	l.Font = font.Font{Typeface: t.face, Weight: weight}
+	l.Color = col
+	l.State = sel
+	l.SelectionColor = colSelection
+	return labelLayout(gtx, l)
+}
+
 // glyph draws one Material Symbols codepoint.
 func (t *theme) glyph(gtx layout.Context, ic icon, size unit.Sp) layout.Dimensions {
 	face := t.iconFace

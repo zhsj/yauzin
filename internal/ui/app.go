@@ -221,6 +221,11 @@ type App struct {
 	// pointer is the pointer position in window coordinates, captured by the
 	// root pointer area. The tip replay anchors the hover labels next to it.
 	pointer image.Point
+
+	// clipPending is text staged for the clipboard by a selection menu. The
+	// menu callback has no layout context, so the write runs at the start of
+	// the next frame.
+	clipPending string
 }
 
 // headerHeight is the top bar height for the current decoration mode. Under a

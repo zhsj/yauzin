@@ -4,13 +4,11 @@ import (
 	"context"
 	"errors"
 	"image"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"gioui.org/font"
-	"gioui.org/io/clipboard"
 	"gioui.org/layout"
 	"gioui.org/widget"
 
@@ -557,10 +555,7 @@ func (d *accountDialog) authContent(gtx layout.Context, th *theme) layout.Dimens
 		if d.copyPending {
 			d.copyPending = false
 			if d.authURL != "" {
-				gtx.Execute(clipboard.WriteCmd{
-					Type: "application/text",
-					Data: io.NopCloser(strings.NewReader(d.authURL)),
-				})
+				writeClipboard(gtx, d.authURL)
 				d.app.notify(i18n.T("toast.linkCopied"), false)
 			}
 		}

@@ -102,35 +102,50 @@ func truncateName(name string, limit int) string {
 type messageCard struct {
 	reader *readerView
 	id     string
+	// header toggles the card while it is collapsed. The expanded card is
+	// folded from avatar, stamp and fold instead: the sender name and address
+	// are selectable, so a click on them must not toggle anything.
 	header widget.Clickable
-	reply  *pillButton
-	fwd    *pillButton
-	more   *iconButton
+	avatar widget.Clickable
+	stamp  widget.Clickable
+	fold   widget.Clickable
 
-	// sel is the selection state of the plain-text part. It belongs to one
-	// message, so it is replaced when the card shows a different one.
-	sel    *widget.Selectable
-	selFor string
+	reply *pillButton
+	fwd   *pillButton
+	more  *iconButton
+
+	// name, addr and bodyText are the selectable runs of this card. Each
+	// belongs to one message, so it is rebuilt when the card shows a different
+	// one.
+	name     textSelection
+	addr     textSelection
+	bodyText textSelection
 }
 
 // selectedText returns the text selected in the body of this card's message, or
 // "" when nothing is selected. A selection belonging to another message is
 // ignored: the card drops it when it shows a different one.
 func (c *messageCard) selectedText() string {
-	if c == nil || c.sel == nil || c.selFor != c.id || c.sel.SelectionLen() == 0 {
+	if c == nil {
 		return ""
 	}
-	return c.sel.SelectedText()
+	return c.bodyText.Selected(c.id)
 }
 
 // bodySelection returns the Selectable for msg, dropping any selection left
 // over from the previous message shown in this card.
 func (c *messageCard) bodySelection(msg *mail.Message) *widget.Selectable {
-	if c.sel == nil || c.selFor != msg.ID {
-		c.sel = &widget.Selectable{}
-		c.selFor = msg.ID
+	return c.bodyText.Select(msg.ID)
+}
+
+// selection reports the fragment a right click landed on in this card, if any.
+func (c *messageCard) selection() (string, bool) {
+	for _, s := range [...]*textSelection{&c.name, &c.addr, &c.bodyText} {
+		if text, ok := s.Take(); ok {
+			return text, true
+		}
 	}
-	return c.sel
+	return "", false
 }
 
 func (c *messageCard) Layout(gtx layout.Context, msg *mail.Message) layout.Dimensions {
@@ -142,11 +157,12 @@ func (c *messageCard) Layout(gtx layout.Context, msg *mail.Message) layout.Dimen
 
 	c.actions(a)
 	// Pointer events reach every handler under them, so a click on the ⋮ is
-	// also delivered to the header. The toggle therefore waits until the button
-	// has reported whether it consumed the click.
+	// also delivered to the area that folds the card. The toggle therefore
+	// waits until the button has reported whether it consumed the click.
 	clicked := c.header.Clicked(gtx)
+	folded := c.avatar.Clicked(gtx) || c.stamp.Clicked(gtx) || c.fold.Clicked(gtx)
 	c.more.hit = false
-	if clicked {
+	if clicked || folded {
 		invalidateAfterTap(gtx)
 	}
 
@@ -168,7 +184,7 @@ func (c *messageCard) Layout(gtx layout.Context, msg *mail.Message) layout.Dimen
 
 	// The controls have had their say: a click the ⋮ consumed must not also
 	// collapse or expand the card.
-	if clicked && !c.more.hit {
+	if (clicked || folded) && !c.more.hit {
 		a.expanded[msg.ID] = !open
 	}
 
@@ -181,6 +197,13 @@ func (c *messageCard) Layout(gtx layout.Context, msg *mail.Message) layout.Dimen
 	cardGtx.Constraints = layout.Exact(size)
 	strokeRect(cardGtx, fill, colBorder, 12, 1)
 	call.Add(gtx.Ops)
+	// A right click on one of the selectable runs opens the menu here: the menu
+	// belongs to the App, which draws it below the card, and its operations
+	// must not be recorded into the card's macro.
+	if text, ok := c.selection(); ok {
+		a.showTextMenu(text)
+		invalidateAfterTap(gtx)
+	}
 	return layout.Dimensions{Size: size}
 }
 
@@ -216,41 +239,50 @@ func (c *messageCard) collapsed(gtx layout.Context, msg *mail.Message) layout.Di
 	})
 }
 
+// expanded draws the open card. Its head is split on purpose: the sender name
+// and address are selectable runs, and a click on them places a caret instead
+// of folding the card. Folding therefore lives on the three non-text parts of
+// the row, each with its own Clickable, so no click has to be classified after
+// the fact.
 func (c *messageCard) expanded(gtx layout.Context, msg *mail.Message) layout.Dimensions {
 	a := c.reader.app
 	th := a.th
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return c.header.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				dims := layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return th.avatar(gtx, senderName(msg.From), 32) }),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 12) }),
-					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-						return column(gtx,
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return th.text(gtx, senderName(msg.From), textMain, colText, font.Bold, 1)
-							}),
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return th.text(gtx, msg.From.Email, textMeta, colMuted, font.Normal, 1)
-							}),
-						)
-					}),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return c.foldTarget(gtx, th, &c.avatar, func(gtx layout.Context) layout.Dimensions {
+						return th.avatar(gtx, senderName(msg.From), 32)
+					})
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 12) }),
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					return column(gtx,
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return c.name.Line(gtx, th, msg.ID, senderName(msg.From), textMain, colText, font.Bold)
+						}),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return c.addr.Line(gtx, th, msg.ID, msg.From.Email, textMeta, colMuted, font.Normal)
+						}),
+					)
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return c.foldTarget(gtx, th, &c.stamp, func(gtx layout.Context) layout.Dimensions {
 						return th.text(gtx, formatFullTime(msg.Date), textMeta, colMuted, font.Normal, 1)
-					}),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 6) }),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					})
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 6) }),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return c.foldTarget(gtx, th, &c.fold, func(gtx layout.Context) layout.Dimensions {
 						return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 							return th.glyph(gtx, iconExpandLess, 18)
 						})
-					}),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 2) }),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.more.Layout(gtx, th) }),
-				)
-				// The whole header toggles the card, so it advertises itself.
-				th.cursor(gtx, pointer.CursorPointer, dims.Size)
-				return dims
-			})
+					})
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 2) }),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.more.Layout(gtx, th) }),
+			)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layout.Inset{Top: 8, Bottom: 8}.Layout(gtx, hline)
@@ -278,6 +310,21 @@ func (c *messageCard) expanded(gtx layout.Context, msg *mail.Message) layout.Dim
 	)
 }
 
+// foldTarget wraps one non-text part of the open head in its Clickable and
+// advertises the fold with a hand cursor. The cursor belongs inside the
+// clickable's own area, so it is declared after the content was recorded and
+// replayed on top of it.
+func (c *messageCard) foldTarget(gtx layout.Context, th *theme, click *widget.Clickable, content layout.Widget) layout.Dimensions {
+	return click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		macro := op.Record(gtx.Ops)
+		dims := content(gtx)
+		call := macro.Stop()
+		th.cursor(gtx, pointer.CursorPointer, dims.Size)
+		call.Add(gtx.Ops)
+		return dims
+	})
+}
+
 // body shows the text/plain part. HTML bodies are never rendered in-app: the
 // card's "more" menu hands them to the browser instead. The body is the one
 // surface that gets bodyLineHeight: a placeholder hint is a single line, so it
@@ -285,11 +332,10 @@ func (c *messageCard) expanded(gtx layout.Context, msg *mail.Message) layout.Dim
 func (c *messageCard) body(gtx layout.Context, msg *mail.Message) layout.Dimensions {
 	th := c.reader.app.th
 	body := strings.TrimSpace(msg.TextBody)
-	sel := c.bodySelection(msg)
 	if body == "" {
-		return th.selectableText(gtx, sel, i18n.T("reader.noPlainText"), textMain, 0, colMuted, font.Normal)
+		return c.bodyText.Wrap(gtx, th, msg.ID, i18n.T("reader.noPlainText"), textMain, 0, colMuted, font.Normal)
 	}
-	return th.selectableText(gtx, sel, body, textMain, bodyLineHeight, colText, font.Normal)
+	return c.bodyText.Wrap(gtx, th, msg.ID, body, textMain, bodyLineHeight, colText, font.Normal)
 }
 
 func (c *messageCard) attachments(gtx layout.Context, msg *mail.Message) layout.Dimensions {
