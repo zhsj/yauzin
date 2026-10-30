@@ -52,8 +52,9 @@ func (f *inflightBatches) max() int32 { return atomic.LoadInt32(&f.peak) }
 
 // TestBatchesOfOneAccountStayWithinTheLimit runs the two loads that reloadAll
 // starts together and asserts the account never has more requests in flight
-// than maxConcurrent: the sidebar batch and the page batch may now overlap, but
-// an unbounded fan-out is what trips Gmail's per-user concurrency limit.
+// than maxConcurrent: the sidebar load (the label list plus its counters) and
+// the page load each send a batch, and an unbounded fan-out is what trips
+// Gmail's per-user concurrency limit.
 func TestBatchesOfOneAccountStayWithinTheLimit(t *testing.T) {
 	const labels = 120
 	const threads = 120
@@ -116,7 +117,14 @@ func TestBatchesOfOneAccountStayWithinTheLimit(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
+		// The counters are a second request of the same load, and the batch it
+		// sends is what makes the assertion meaningful: without it the sidebar
+		// side never sends a batch at all.
 		folders, errs[0] = svc.Folders(context.Background())
+		if errs[0] != nil {
+			return
+		}
+		folders, errs[0] = svc.FolderDetails(context.Background(), folders)
 	}()
 	go func() {
 		defer wg.Done()
