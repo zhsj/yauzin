@@ -156,6 +156,8 @@ rate limit（403 `rateLimitExceeded` / 429）与 5xx 按 1s / 2s / 4s 加抖动�
 
 每次请求的 DEBUG 日志行（`gmail request` / `gmail batch`）都带 `units`（本次调用或整批的花费）、`quota`（预留完成后最近 60 秒
 已花/窗口额度，满值 5,700）、`wait`（为等额度花的时间，0 也记），一条日志即可回答「这次请求贵不贵、这一分钟还剩多少」；
+额度不足、请求真要等待时，在开始等待前先记一条 INFO `gmail quota wait`（`account`、`op`、`units`、等待前的 `quota`、
+预计 `wait`），默认 info 级别即可看到「这次为什么慢」，一次等待只记一条，不改额度算法本身；
 后台被额度丢弃另记 `gmail quota skip`，批次内子调用重试另记 `gmail batch retry`。
 
 换算结论（6,000 单位/分钟/用户）：

@@ -133,8 +133,30 @@ type quotaSpend struct {
 // minus the safety margin, so 5,700 for the 6,000 limit). Unlike a bucket's
 // fill level, used can be compared with the server's own count directly.
 func (q quotaSpend) report() string {
-	return strconv.FormatFloat(q.used, 'f', 0, 64) + "/" +
-		strconv.FormatFloat(q.capacity, 'f', 0, 64)
+	return windowReport(q.used, q.capacity)
+}
+
+// windowReport renders a trailing-minute spend as "used/capacity".
+func windowReport(used, capacity float64) string {
+	return strconv.FormatFloat(used, 'f', 0, 64) + "/" +
+		strconv.FormatFloat(capacity, 'f', 0, 64)
+}
+
+// quotaWait is the window as it stood when the budget decided to hold a request
+// back, plus the wait it is about to take. reserve hands it over right before
+// sleeping, so a request a user is waiting on says why it is late: the request
+// line is DEBUG and only appears once the call has actually been sent.
+type quotaWait struct {
+	units    float64
+	used     float64
+	capacity float64
+	estimate time.Duration
+}
+
+// logAttrs renders the fields the request line also carries, so the wait line
+// and the line that eventually follows it read against each other.
+func (w quotaWait) logAttrs() []any {
+	return []any{"units", int64(w.units), "quota", windowReport(w.used, w.capacity), "wait", w.estimate}
 }
 
 // logAttrs renders the quota fields of a request log line. A request that did
@@ -253,10 +275,17 @@ func (b *budget) waitFor(now int64, need float64) time.Duration {
 // background request that would wait longer than budgetWaitLimit is dropped
 // with errBudgetSkip.
 //
+// onWait, when not nil, is called once, after the wait was decided and before
+// the first sleep: the loop below can wake up and wait again when another
+// request took the freed quota first, and a line per round would be noise on
+// top of a single stall. It is called outside the lock, so writing the line
+// cannot hold up the other requests. A request the budget drops for being
+// background never waits, so it never reaches onWait.
+//
 // The returned spend carries the window state as it stands right after the
 // deduction, taken under the same lock, so two concurrent requests cannot
 // report the same "used" figure.
-func (b *budget) reserve(ctx context.Context, units float64, class costClass) (quotaSpend, error) {
+func (b *budget) reserve(ctx context.Context, units float64, class costClass, onWait func(quotaWait)) (quotaSpend, error) {
 	spend := quotaSpend{units: units}
 	if units <= 0 {
 		return spend, nil
@@ -265,6 +294,7 @@ func (b *budget) reserve(ctx context.Context, units float64, class costClass) (q
 	// an oversized batch from waiting for something that can never happen.
 	units = math.Min(units, b.limit)
 	spend.units = units
+	notified := false
 	for {
 		b.mu.Lock()
 		now := b.now().Unix()
@@ -277,12 +307,17 @@ func (b *budget) reserve(ctx context.Context, units float64, class costClass) (q
 			return spend, nil
 		}
 		wait := b.waitFor(now, used+units-b.limit)
+		capacity := b.limit
 		b.mu.Unlock()
 		if wait < time.Millisecond {
 			wait = time.Millisecond
 		}
 		if class == classBackground && spend.waited+wait > budgetWaitLimit {
 			return spend, errBudgetSkip
+		}
+		if !notified && onWait != nil {
+			onWait(quotaWait{units: units, used: used, capacity: capacity, estimate: wait})
+			notified = true
 		}
 		if err := b.sleep(ctx, wait); err != nil {
 			return spend, err

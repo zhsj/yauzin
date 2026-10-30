@@ -362,13 +362,19 @@ func (c *client) requestOnce(ctx context.Context, op, method, base, path string,
 // reserveQuota spends the cost of one call before it is sent. A background
 // request the budget cannot afford right now is dropped instead of queued. The
 // returned spend rides on the request log line, so no separate quota line is
-// needed.
+// needed after the call; a request that has to wait is reported at INFO before
+// the wait starts, because the request line is DEBUG and a user watching a
+// stalled request sees neither.
 func (c *client) reserveQuota(ctx context.Context, op string, units float64) (quotaSpend, error) {
-	spend, err := c.budget.reserve(ctx, units, classOf(op))
+	account := logAccount(c.accountID)
+	spend, err := c.budget.reserve(ctx, units, classOf(op), func(w quotaWait) {
+		attrs := []any{"account", account, "op", op}
+		slog.Info("gmail quota wait", append(attrs, w.logAttrs()...)...)
+	})
 	if err != nil {
 		if errors.Is(err, errBudgetSkip) {
 			slog.Debug("gmail quota skip",
-				"account", logAccount(c.accountID), "op", op,
+				"account", account, "op", op,
 				"units", int64(spend.units), "wait", spend.waited)
 		}
 		return spend, err

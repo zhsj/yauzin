@@ -186,8 +186,8 @@ func TestSingleRequestLogsQuotaSpend(t *testing.T) {
 	if !strings.Contains(lines[1], "quota=2/5700") {
 		t.Errorf("second line %q does not report the accumulated spend", lines[1])
 	}
-	if n := len(quotaLines(buf, "gmail quota")); n != 0 {
-		t.Errorf("a separate gmail quota line is still written (%d)", n)
+	if n := len(quotaLines(buf, "gmail quota wait")); n != 0 {
+		t.Errorf("a request that did not wait still logged a wait (%d)", n)
 	}
 }
 
@@ -247,6 +247,50 @@ func TestLogRequestOmitsQuotaWhenNothingWasCharged(t *testing.T) {
 	}
 }
 
+// TestQuotaWaitIsLoggedBeforeTheRequest pins the line a stalled request writes
+// before it sleeps: the request line that follows is DEBUG and says nothing
+// until the call is sent, so without this one a user watching a frozen list at
+// the default info level sees no reason for the delay.
+func TestQuotaWaitIsLoggedBeforeTheRequest(t *testing.T) {
+	buf := captureLogs(t, slog.LevelDebug)
+	svc, _ := newTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, `{"labels":[]}`)
+	}), withQuotaPerMinute(600))
+	clock := newFakeClock()
+	svc.c.budget.now = clock.now
+	svc.c.budget.sleep = clock.sleep
+	// Fill the window so the next call has to wait for it to slide.
+	if _, err := svc.c.budget.reserve(context.Background(), 570, classInteractive, nil); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+
+	if _, err := svc.Folders(context.Background()); err != nil {
+		t.Fatalf("Folders: %v", err)
+	}
+
+	waits := quotaLines(buf, "gmail quota wait")
+	if len(waits) != 1 {
+		t.Fatalf("wait lines = %d, want 1", len(waits))
+	}
+	for _, want := range []string{
+		"level=INFO",
+		"account=user@example.com",
+		"op=labels.list",
+		"units=1 ",
+		"quota=570/570",
+		"wait=1m0s",
+	} {
+		if !strings.Contains(waits[0], want) {
+			t.Errorf("wait line %q does not contain %q", waits[0], want)
+		}
+	}
+	// The line explains the delay before the call it delays shows up.
+	all := buf.String()
+	if i, j := strings.Index(all, "gmail quota wait"), strings.Index(all, "gmail request"); i < 0 || j < 0 || i > j {
+		t.Errorf("wait line is not logged before the request (%d vs %d): %q", i, j, all)
+	}
+}
+
 // TestBackgroundQuotaSkipIsLogged checks a dropped background request still
 // leaves a trace, now with the wait it refused to take.
 func TestBackgroundQuotaSkipIsLogged(t *testing.T) {
@@ -257,7 +301,7 @@ func TestBackgroundQuotaSkipIsLogged(t *testing.T) {
 	ctx := context.Background()
 	// Empty the bucket, then ask as the background loop would: 40 units at
 	// 9 units/s is 4.4s of waiting, more than the 2s limit.
-	if _, err := svc.c.budget.reserve(ctx, 540, classInteractive); err != nil {
+	if _, err := svc.c.budget.reserve(ctx, 540, classInteractive, nil); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
 	buf := captureLogs(t, slog.LevelDebug)

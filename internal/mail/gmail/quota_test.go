@@ -53,7 +53,7 @@ func TestBudgetCountsTheSlidingWindow(t *testing.T) {
 
 	// The window is empty, so one page fits without waiting, and the spend
 	// reports what the window now holds.
-	spend, err := b.reserve(context.Background(), 1010, classInteractive)
+	spend, err := b.reserve(context.Background(), 1010, classInteractive, nil)
 	if err != nil || spend.waited != 0 {
 		t.Fatalf("first reserve = %+v, %v; want no wait", spend, err)
 	}
@@ -64,12 +64,12 @@ func TestBudgetCountsTheSlidingWindow(t *testing.T) {
 		t.Fatalf("report = %q, want 1010/5700", got)
 	}
 	// Drain what is left of the window.
-	if _, err := b.reserve(context.Background(), limit-1010, classInteractive); err != nil {
+	if _, err := b.reserve(context.Background(), limit-1010, classInteractive, nil); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
 	// The window is full: one more page waits for the first page's spend to
 	// fall out of it, which is the whole span, not a refill rate.
-	spend, err = b.reserve(context.Background(), 1010, classInteractive)
+	spend, err = b.reserve(context.Background(), 1010, classInteractive, nil)
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestBudgetNeverExceedsTheWindow(t *testing.T) {
 	for i := range 20 {
 		// The second the counter filed the spend under is the one it will age
 		// out on, so the assertion below uses the same clock.
-		if _, err := b.reserve(context.Background(), 1001, classInteractive); err != nil {
+		if _, err := b.reserve(context.Background(), 1001, classInteractive, nil); err != nil {
 			t.Fatalf("reserve %d: %v", i, err)
 		}
 		charges = append(charges, charge{sec: clock.at.Unix(), units: 1001})
@@ -120,17 +120,65 @@ func TestBudgetNeverExceedsTheWindow(t *testing.T) {
 func TestBudgetDropsBackgroundRequest(t *testing.T) {
 	clock := newFakeClock()
 	b := newBudget(600, clock.now, clock.sleep)
-	if _, err := b.reserve(context.Background(), 540, classInteractive); err != nil {
+	if _, err := b.reserve(context.Background(), 540, classInteractive, nil); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
 	// Freeing 70 units means waiting for the oldest spend to leave the window,
 	// which is far past the 2s a background call is allowed to wait.
-	if _, err := b.reserve(context.Background(), 100, classBackground); !errors.Is(err, errBudgetSkip) {
+	if _, err := b.reserve(context.Background(), 100, classBackground, nil); !errors.Is(err, errBudgetSkip) {
 		t.Fatalf("background reserve = %v, want errBudgetSkip", err)
 	}
 	// The same request is worth waiting for when a user asked for it.
-	if _, err := b.reserve(context.Background(), 100, classInteractive); err != nil {
+	if _, err := b.reserve(context.Background(), 100, classInteractive, nil); err != nil {
 		t.Fatalf("interactive reserve: %v", err)
+	}
+}
+
+// TestBudgetReportsTheWaitOnce pins the hook the INFO line rides on: it fires
+// once, before the first sleep, and carries the window as it stood when the
+// budget decided to hold the request back. A request that fits, and one the
+// budget drops instead of queueing, never report a wait.
+func TestBudgetReportsTheWaitOnce(t *testing.T) {
+	clock := newFakeClock()
+	b := newBudget(600, clock.now, clock.sleep)
+	var waits []quotaWait
+	report := func(w quotaWait) { waits = append(waits, w) }
+
+	// An empty window fits, so nothing is reported.
+	if _, err := b.reserve(context.Background(), 100, classInteractive, report); err != nil {
+		t.Fatalf("first reserve: %v", err)
+	}
+	if len(waits) != 0 {
+		t.Fatalf("waits reported for a request that fit: %d", len(waits))
+	}
+	// A background request the budget cannot afford is dropped, not queued, so
+	// it never reports a wait either.
+	if _, err := b.reserve(context.Background(), 1000, classBackground, report); !errors.Is(err, errBudgetSkip) {
+		t.Fatalf("background reserve = %v, want errBudgetSkip", err)
+	}
+	if len(waits) != 0 {
+		t.Fatalf("waits reported for a dropped request: %d", len(waits))
+	}
+	// Filling the window makes the next request wait for the oldest spend to
+	// age out, which is the whole span and takes a single sleep.
+	if _, err := b.reserve(context.Background(), b.limit-100, classInteractive, nil); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if _, err := b.reserve(context.Background(), 100, classInteractive, report); err != nil {
+		t.Fatalf("waiting reserve: %v", err)
+	}
+	if len(waits) != 1 {
+		t.Fatalf("waits reported = %d, want 1", len(waits))
+	}
+	w := waits[0]
+	if w.units != 100 || w.used != b.limit || w.capacity != b.limit {
+		t.Fatalf("wait snapshot = %+v, want 100 units against a full %v window", w, b.limit)
+	}
+	if w.estimate != quotaWindow {
+		t.Fatalf("estimate = %v, want %v", w.estimate, quotaWindow)
+	}
+	if got := windowReport(w.used, w.capacity); got != "570/570" {
+		t.Fatalf("report = %q, want 570/570", got)
 	}
 }
 
@@ -142,12 +190,12 @@ func TestBudgetHonoursContext(t *testing.T) {
 	b := newBudget(60, clock.now, func(ctx context.Context, _ time.Duration) error {
 		return ctx.Err()
 	})
-	if _, err := b.reserve(context.Background(), 54, classInteractive); err != nil {
+	if _, err := b.reserve(context.Background(), 54, classInteractive, nil); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := b.reserve(ctx, 54, classInteractive); !errors.Is(err, context.Canceled) {
+	if _, err := b.reserve(ctx, 54, classInteractive, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("reserve on cancelled context = %v, want context.Canceled", err)
 	}
 }
