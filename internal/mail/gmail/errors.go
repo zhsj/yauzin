@@ -13,19 +13,27 @@ import (
 // apiFailure is one rejected API call. It keeps the status and the reason the
 // retry layer reads, and unwraps to the category the domain layer reports.
 type apiFailure struct {
-	op     string
-	status int
-	reason string
-	detail string
-	kind   error
+	op string
+	// subject names the object of the call, such as a thread or label ID. It is
+	// empty for a call that addresses the mailbox as a whole.
+	subject string
+	status  int
+	reason  string
+	detail  string
+	kind    error
 }
 
-// Error renders the call the way the package always reported it.
+// Error renders the call the way the package always reported it, naming the
+// subject when the call had one.
 func (e *apiFailure) Error() string {
-	if e.detail == "" {
-		return fmt.Sprintf("gmail %s: %s", e.op, http.StatusText(e.status))
+	op := e.op
+	if e.subject != "" {
+		op += " " + e.subject
 	}
-	return fmt.Sprintf("gmail %s: %s: %s", e.op, http.StatusText(e.status), e.detail)
+	if e.detail == "" {
+		return fmt.Sprintf("gmail %s: %s", op, http.StatusText(e.status))
+	}
+	return fmt.Sprintf("gmail %s: %s: %s", op, http.StatusText(e.status), e.detail)
 }
 
 // Unwrap exposes the category to errors.Is.
@@ -35,6 +43,14 @@ func (e *apiFailure) Unwrap() error { return e.kind }
 // a Google error carries a human readable message, which is kept as detail for
 // anything that is not a category.
 func apiError(op string, resp *http.Response) error {
+	return apiErrorFor(op, "", resp)
+}
+
+// apiErrorFor is apiError for a call that names its object, such as one
+// embedded in a batch: subject keeps a rejection attributable to the row it
+// belongs to, and the returned error carries the same category, so the retry
+// layer can tell a rate limited part from a broken one.
+func apiErrorFor(op, subject string, resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 	var payload struct {
 		Error struct {
@@ -47,7 +63,12 @@ func apiError(op string, resp *http.Response) error {
 		} `json:"error"`
 	}
 	_ = json.Unmarshal(body, &payload)
-	failure := &apiFailure{op: op, status: resp.StatusCode, detail: payload.Error.Message}
+	failure := &apiFailure{
+		op:      op,
+		subject: subject,
+		status:  resp.StatusCode,
+		detail:  payload.Error.Message,
+	}
 	if failure.detail == "" {
 		failure.detail = strings.TrimSpace(string(body))
 	}

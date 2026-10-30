@@ -65,21 +65,96 @@ func (t batchTarget) methodName() string {
 // returned immediately and the remaining chunks are not sent. The first error
 // handle reports is returned after all chunks have run, without stopping the
 // remaining ones.
+//
+// A call that failed for a reason worth another try (a rate limited 403, a 429
+// or a 5xx) is sent again in a batch of its own after a jittered backoff, so one
+// rate limited row does not fail the whole page: the calls that answered keep
+// their result and only the failed ones are paid for again.
 func (c *client) batchFetch(ctx context.Context, op, endpoint string, targets []batchTarget, handle func(i int, resp *http.Response) error) error {
 	var firstErr error
-	for start := 0; start < len(targets); start += batchLimit {
-		end := min(start+batchLimit, len(targets))
-		chunkErr, fatal := c.batchChunk(ctx, op, endpoint, targets[start:end], func(i int, resp *http.Response) error {
-			return handle(start+i, resp)
-		})
+	pending := make([]int, len(targets))
+	for i := range pending {
+		pending[i] = i
+	}
+	for attempt := 0; len(pending) > 0; attempt++ {
+		out, fatal := c.batchRound(ctx, op, endpoint, targets, pending, handle)
 		if fatal != nil {
 			return fatal
 		}
-		if chunkErr != nil && firstErr == nil {
-			firstErr = chunkErr
+		if out.firstErr != nil && firstErr == nil {
+			firstErr = out.firstErr
 		}
+		if len(out.retry) == 0 {
+			break
+		}
+		if attempt >= retryAttempts {
+			// Out of retries: the remaining rate limited calls are the answer.
+			if firstErr == nil {
+				firstErr = out.retryErr
+			}
+			break
+		}
+		slog.Debug("gmail batch retry",
+			"account", logAccount(c.accountID), "op", op,
+			"calls", len(out.retry), "attempt", attempt+1, "err", out.retryErr)
+		if err := sleepContext(ctx, retryDelay(attempt)); err != nil {
+			if firstErr != nil {
+				return firstErr
+			}
+			return err
+		}
+		pending = out.retry
 	}
 	return firstErr
+}
+
+// batchOutcome is what one round of batch requests produced for the calls that
+// were still pending.
+type batchOutcome struct {
+	// firstErr is the first failure that is not worth another try.
+	firstErr error
+	// retry indexes the targets whose call failed in a way another try may fix,
+	// in the order they were sent.
+	retry []int
+	// retryErr is the first of those failures, reported when the retries run
+	// out.
+	retryErr error
+}
+
+// batchRound sends the pending targets as one batch request per batchLimit
+// calls and sorts what handle reported into "give up" and "try again". It
+// returns a fatal error when a request, envelope or part failed as a whole.
+func (c *client) batchRound(ctx context.Context, op, endpoint string, targets []batchTarget, pending []int, handle func(i int, resp *http.Response) error) (batchOutcome, error) {
+	var out batchOutcome
+	for start := 0; start < len(pending); start += batchLimit {
+		end := min(start+batchLimit, len(pending))
+		chunk := pending[start:end]
+		sub := make([]batchTarget, len(chunk))
+		for k, idx := range chunk {
+			sub[k] = targets[idx]
+		}
+		chunkErr, fatal := c.batchChunk(ctx, op, endpoint, sub, func(k int, resp *http.Response) error {
+			err := handle(chunk[k], resp)
+			if err != nil && retryable(err) {
+				// Swallowed here: the retry round reports this call instead, so
+				// a rate limited part does not fail the page while the window
+				// refills.
+				out.retry = append(out.retry, chunk[k])
+				if out.retryErr == nil {
+					out.retryErr = err
+				}
+				return nil
+			}
+			return err
+		})
+		if fatal != nil {
+			return out, fatal
+		}
+		if chunkErr != nil && out.firstErr == nil {
+			out.firstErr = chunkErr
+		}
+	}
+	return out, nil
 }
 
 // batchChunk performs one batch request for targets and drives handle with its
@@ -88,7 +163,8 @@ func (c *client) batchFetch(ctx context.Context, op, endpoint string, targets []
 //
 // The whole batch is priced and reserved before it is sent, and a rate-limited
 // or failed envelope is sent again after a jittered backoff. Errors of the
-// embedded calls are not retried: they are already the answer.
+// embedded calls are handed back untouched: batchRound decides which of them
+// are worth another try.
 func (c *client) batchChunk(ctx context.Context, op, endpoint string, targets []batchTarget, handle func(i int, resp *http.Response) error) (firstErr error, fatal error) {
 	body, boundary, err := batchBody(c.apiPath, targets)
 	if err != nil {
@@ -287,12 +363,9 @@ func (c *client) labelDetails(ctx context.Context, ids []string) (map[string]*La
 	}
 
 	// A label that disappeared between the list and the batch is logged and
-	// left out of the result; any other failure is counted. When nothing came
-	// back and something failed for a reason other than the label being gone,
-	// the first of those errors is returned, so the caller still reports a
-	// broken backend instead of silently showing zeros.
-	failed := 0
-	var firstErr error
+	// left out of the result. Any other failure is handed back as a classified
+	// error, so the batch layer can retry a rate limited label instead of
+	// losing the whole sidebar.
 	err := c.batchFetch(ctx, "labels.get", "/users/me/labels", targets, func(i int, resp *http.Response) error {
 		id := ids[i]
 		if resp.StatusCode == http.StatusNotFound {
@@ -300,33 +373,26 @@ func (c *client) labelDetails(ctx context.Context, ids []string) (map[string]*La
 			return nil
 		}
 		if resp.StatusCode != http.StatusOK {
-			detail, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 			slog.Warn("gmail label detail failed", "label", id, "status", resp.StatusCode)
-			if firstErr == nil {
-				firstErr = fmt.Errorf("gmail labels.get %s: %s: %s", id, http.StatusText(resp.StatusCode), strings.TrimSpace(string(detail)))
-			}
-			failed++
-			return nil
+			return apiErrorFor("labels.get", id, resp)
 		}
 		var label Label
 		if err := json.NewDecoder(resp.Body).Decode(&label); err != nil {
 			slog.Warn("gmail label detail decode failed", "label", id, "err", err)
-			if firstErr == nil {
-				firstErr = fmt.Errorf("gmail labels.get %s: decode response: %w", id, err)
-			}
-			failed++
-			return nil
+			return fmt.Errorf("gmail labels.get %s: decode response: %w", id, err)
 		}
 		out[id] = &label
 		return nil
 	})
 	if err != nil {
-		// The batch itself never got an answer: reporting zeros would hide a
-		// broken backend, which is exactly the bug this code fixes.
-		return out, err
-	}
-	if failed > 0 && len(out) == 0 {
-		return out, firstErr
+		// The batch itself never got an answer, or some labels kept failing:
+		// reporting zeros would hide a broken backend, which is exactly the bug
+		// this code fixes. A partial answer is still rendered, without counts
+		// for the labels that did not come back.
+		if len(out) == 0 {
+			return out, err
+		}
+		slog.Warn("gmail label detail incomplete", "labels", len(ids), "loaded", len(out), "err", err)
 	}
 	return out, nil
 }

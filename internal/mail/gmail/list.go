@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -236,9 +235,9 @@ func (s *Service) fetchThreads(ctx context.Context, ids []string) ([]*Thread, er
 			// drop the row and keep the rest of the page.
 			return nil
 		default:
-			detail, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
-			return fmt.Errorf("gmail threads.get %s: %s: %s",
-				ids[i], http.StatusText(resp.StatusCode), strings.TrimSpace(string(detail)))
+			// The answer is classified, not just formatted: a rate limited part
+			// is then retried by the batch layer instead of failing the page.
+			return apiErrorFor("threads.get", ids[i], resp)
 		}
 		var th Thread
 		if err := json.NewDecoder(resp.Body).Decode(&th); err != nil {
