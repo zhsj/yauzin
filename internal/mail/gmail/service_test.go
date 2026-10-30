@@ -841,7 +841,7 @@ func TestGetThreadErrorCategories(t *testing.T) {
 		store := newFakeStore(testAccountID, "stale-token")
 		svc, err := New(mail.Account{ID: testAccountID, Kind: mail.KindGmail}, store,
 			WithBaseURL(srv.URL),
-			func(o *options) { o.tokenURL = srv.URL + "/token" },
+			withTokenURL(srv.URL+"/token"),
 		)
 		if err != nil {
 			t.Fatalf("New: %v", err)
@@ -968,7 +968,7 @@ func TestUnauthorizedRefreshesOnceAndPersists(t *testing.T) {
 	store := newFakeStore(testAccountID, "stale-token")
 	svc, err := New(mail.Account{ID: testAccountID, Kind: mail.KindGmail}, store,
 		WithBaseURL(srv.URL),
-		func(o *options) { o.tokenURL = srv.URL + "/token" },
+		withTokenURL(srv.URL+"/token"),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1004,7 +1004,7 @@ func TestRefreshFailureIsUnauthorized(t *testing.T) {
 	store := newFakeStore(testAccountID, "stale-token")
 	svc, err := New(mail.Account{ID: testAccountID, Kind: mail.KindGmail}, store,
 		WithBaseURL(srv.URL),
-		func(o *options) { o.tokenURL = srv.URL + "/token" },
+		withTokenURL(srv.URL+"/token"),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1038,7 +1038,7 @@ func TestRefreshWithoutGmailCredentialsIsUnauthorized(t *testing.T) {
 	store.credentials = accounts.OAuth{Provider: mail.KindIMAP, ClientID: "id", ClientSecret: "secret"}
 	svc, err := New(mail.Account{ID: testAccountID, Kind: mail.KindGmail}, store,
 		WithBaseURL(srv.URL),
-		func(o *options) { o.tokenURL = srv.URL + "/token" },
+		withTokenURL(srv.URL+"/token"),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)

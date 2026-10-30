@@ -142,6 +142,16 @@ func withQuotaPerMinute(units float64) Option {
 	}
 }
 
+// withTokenURL points the token refresh at another endpoint. Tests use it so a
+// rejected token is refreshed by their own server instead of Google.
+func withTokenURL(raw string) Option {
+	return func(o *options) {
+		if raw != "" {
+			o.tokenURL = raw
+		}
+	}
+}
+
 // newClient builds the REST client of one account.
 func newClient(accountID string, store Store, opts []Option) (*client, error) {
 	o := options{

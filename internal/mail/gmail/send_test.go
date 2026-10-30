@@ -123,7 +123,7 @@ func TestSendRetriesRejectedToken(t *testing.T) {
 	store := newFakeStore(testAccountID, "access-token")
 	svc, err := New(mail.Account{ID: testAccountID, Kind: mail.KindGmail, Email: "user@example.com"}, store,
 		WithBaseURL(srv.URL),
-		func(o *options) { o.tokenURL = srv.URL + "/token" },
+		withTokenURL(srv.URL+"/token"),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)

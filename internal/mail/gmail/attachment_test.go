@@ -304,7 +304,7 @@ func TestSaveAttachmentRetriesUnauthorized(t *testing.T) {
 		_, _ = io.WriteString(w, body)
 	})
 
-	svc, _ := newTestService(t, mux, func(o *options) { o.tokenURL = tokenSrv.URL })
+	svc, _ := newTestService(t, mux, withTokenURL(tokenSrv.URL))
 	var out countingWriter
 	if err := svc.SaveAttachment(context.Background(), "m1", "a1", &out, nil); err != nil {
 		t.Fatalf("save attachment: %v", err)
