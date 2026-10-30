@@ -16,7 +16,7 @@
 - Gmail 接入：`internal/accounts` 保存 OAuth 凭据与令牌，`internal/mail/gmail` 实现文件夹/会话列表/会话全局搜索（独立缓存）/会话正文（PKCE 回环授权）、写操作（标记/归档/删除/发信）与附件下载（附件只有 blob 一种来源：附件接口流式解码、边读边写入调用方给定的目标 writer，带进度与失败原因的 DEBUG 日志），`mail.Service` 全量实现。
 - 侧栏底部固定「任务列表」分栏：附件保存先选位置再下载，进度、完成路径、取消与失败原因常驻内存（重启清空），无任务时不占位，最多显示 3 行；邮件发送同样进入该分栏（主题为标题，成功/失败结果常驻），每行可删除，运行中的任务删除即取消。
 - 通用代理设置：`settings.json` 的 `proxy`，账号条目只记 `useProxy`；保存后按新代理重建对应后端。
-- Gmail API 类型改由 Discovery 文档生成（`internal/cmd/gmailgen` + `//go:generate`），`api.go` 只剩领域映射辅助方法。
+- Gmail API 类型改由 Discovery 文档生成（`internal/cmd/gmailgen` + `//go:generate`），`message.go` 只剩领域映射辅助方法。
 - 托盘与单实例：`internal/tray` 的未读红点、关窗驻留，`internal/singleinstance` 经会话总线唤起已有窗口。
 - 进程级 1 分钟变更检查（`internal/ui/app_poll.go`）：`internal/inboxwatch` 维护未读快照，`internal/notify` 发送 D-Bus 桌面通知；只更新托盘与通知，不刷新窗口。
 - 顶栏跨全部文件夹搜索，与文件夹浏览共用游标分页、代际校验与同一个列表请求槽位。
