@@ -424,7 +424,7 @@ python3 scripts/gen_app_icons.py            # 需要 rsvg-convert（librsvg2-bin
 cmd/yauzin/main.go             入口：只有一行 uihost.Main(os.Args[1:])
 internal/mail/mail.go          领域模型（会话摘要 / 分页）与 Service 接口
 internal/mail/mock/            内存 mock 后端（140ms 模拟延迟，按会话聚合）
-internal/mail/gmail/           Gmail 后端：OAuth（PKCE 回环）、REST 客户端、请求日志 transport、MIME 解析、写操作（mutate.go：标记/归档/垃圾邮件/删除）、发信（send.go：messages.send 的 media 上传）、Discovery 生成的 API 类型
+internal/mail/gmail/           Gmail 后端：OAuth（PKCE 回环）、REST 客户端、请求日志 transport、MIME 解析、写操作（mutate.go：标记/归档/垃圾邮件/删除）、发信（upload.go：messages.send 的 resumable 上传）、Discovery 生成的 API 类型（doc.go 是 go:generate 入口）
 internal/mail/rfc822/          Draft → RFC 5322 报文（头编码、折行、附件 multipart、可选 Bcc 头）；Prepare 定长、WriteTo 流式，Gmail 与 SMTP 共用
 internal/mail/smtp/            SMTP 发信：三种加密、PLAIN/LOGIN、信封收件人（含 Bcc）、代理拨号
 internal/netproxy/             裸 TCP 代理拨号：http/https CONNECT 与 socks5（与 Gmail 共用的地址校验）
