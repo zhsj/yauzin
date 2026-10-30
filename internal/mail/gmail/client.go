@@ -8,14 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/oauth2"
 
 	"github.com/zhsj/yauzin/internal/accounts"
 	"github.com/zhsj/yauzin/internal/mail"
@@ -24,24 +21,11 @@ import (
 // defaultBaseURL is the Gmail REST root. Tests point it at an httptest server.
 const defaultBaseURL = "https://gmail.googleapis.com/gmail/v1"
 
-// refreshSkew refreshes an access token this long before it actually expires,
-// so a request is not sent with a token that dies in flight.
-const refreshSkew = 60 * time.Second
-
 // maxConcurrent is how many requests one account may have in flight. It used to
 // be one, which made the sidebar batch and the page batch queue behind each
 // other; the quota budget now meters the spend, so a small parallelism only
 // costs latency at the server, and the batch size stays bounded.
 const maxConcurrent = 3
-
-// retryAttempts bounds how many times one call is sent again before its error
-// reaches the caller: a call is therefore sent at most retryAttempts+1 times.
-const retryAttempts = 3
-
-// retryBaseDelay is the first backoff step; every attempt doubles it and adds
-// up to a quarter of the delay as jitter, so parallel clients drift apart.
-// Tests shorten it.
-var retryBaseDelay = time.Second
 
 // Store is the part of accounts.Store the backend needs. It is an interface so
 // tests can hand in a fake without touching the disk.
@@ -303,28 +287,6 @@ func (c *client) doRequestProgress(ctx context.Context, op, method, base, path s
 	})
 }
 
-// retryLoop runs one call and, while the answer is worth another try, runs it
-// again after a jittered backoff. attempt reports what one send produced: only
-// a rate-limited or failed answer makes it return an error at all. The loop is
-// therefore the one place that knows how often a call is sent and how long the
-// next attempt waits; a cancelled context ends the wait with its own error.
-func (c *client) retryLoop(ctx context.Context, op string, attempt func() error) error {
-	for try := 0; ; try++ {
-		err := attempt()
-		if err == nil {
-			return nil
-		}
-		if try >= retryAttempts || !retryable(err) {
-			return err
-		}
-		slog.Debug("gmail retry",
-			"account", logAccount(c.accountID), "op", op, "attempt", try+1, "err", err)
-		if waitErr := sleepContext(ctx, retryDelay(try)); waitErr != nil {
-			return waitErr
-		}
-	}
-}
-
 // doRequestHandle performs one authorized request against one of the API roots
 // and hands a successful response to handle. A rate-limited or failed call is
 // sent again after a jittered backoff; the token refresh retry is separate and
@@ -407,31 +369,6 @@ func (c *client) reserveQuota(ctx context.Context, op string, units float64) (qu
 		return spend, err
 	}
 	return spend, nil
-}
-
-// retryDelay is the pause before attempt+1: an exponential step with up to a
-// quarter of it as jitter, so repeated clients do not retry in lockstep.
-func retryDelay(attempt int) time.Duration {
-	base := retryBaseDelay << attempt
-	jitter := base / 4
-	if jitter > 0 {
-		base += time.Duration(rand.Int64N(int64(jitter) + 1))
-	}
-	return base
-}
-
-// retryable reports whether err is worth sending again. Only the server's own
-// rate limiting and its 5xx answers qualify: a transport failure is reported
-// to the caller, and a rejected request would fail the same way twice.
-func retryable(err error) bool {
-	var failure *apiFailure
-	if !errors.As(err, &failure) {
-		return false
-	}
-	if failure.status == http.StatusTooManyRequests || failure.status >= 500 {
-		return true
-	}
-	return failure.status == http.StatusForbidden && errors.Is(err, mail.ErrRateLimited)
 }
 
 // progressReportStep bounds how much a transfer without a known total may read
@@ -533,164 +470,4 @@ func (c *client) sendHeaders(ctx context.Context, op, method, rawURL string, hea
 	return c.sendAuthorized(ctx, op, func(token string) (*http.Response, error) {
 		return c.sendRaw(ctx, method, rawURL, headers, body, token, spend)
 	})
-}
-
-// logRequest reports one Gmail API call at DEBUG. endpoint is the API path
-// without host or query: the query carries search terms and must not be
-// logged. A failed round trip reports err instead of a status.
-//
-// The line also carries what the call cost and where the account's budget stood
-// right after it paid: units, "quota" as used/capacity, and the wait the
-// reservation took. A call that did not reserve anything of its own (an upload
-// chunk) leaves those three fields out.
-func logRequest(account, method, endpoint string, spend quotaSpend, resp *http.Response, err error) {
-	attrs := make([]any, 0, 10)
-	attrs = append(attrs, "account", logAccount(account), "method", method, "endpoint", endpoint)
-	attrs = append(attrs, spend.logAttrs()...)
-	if err != nil {
-		slog.Debug("gmail request", append(attrs, "err", err)...)
-		return
-	}
-	slog.Debug("gmail request", append(attrs, "status", resp.StatusCode)...)
-}
-
-// logAccount is the account label of a log line. The backend prefix repeats
-// what the message already says, so only the address is kept; an empty ID
-// (no stored account yet) is shown as "-".
-func logAccount(id string) string {
-	if id == "" {
-		return "-"
-	}
-	return strings.TrimPrefix(id, string(mail.KindGmail)+":")
-}
-
-// accessToken returns a usable access token, refreshing and persisting it when
-// it is close to expiry or force is set.
-func (c *client) accessToken(ctx context.Context, force bool) (string, error) {
-	c.refreshMu.Lock()
-	defer c.refreshMu.Unlock()
-
-	stored, ok := c.store.Token(c.accountID)
-	if !ok {
-		return "", fmt.Errorf("%w: account %s has no token", mail.ErrUnauthorized, c.accountID)
-	}
-	tok := oauthToken(stored)
-	// A token without an expiry is used as is: oauth2 treats a zero expiry as
-	// "never expires", and Google always sends expires_in, so this only
-	// affects hand-edited files.
-	if !force && tok.Valid() && (tok.Expiry.IsZero() || time.Now().Before(tok.Expiry.Add(-refreshSkew))) {
-		return tok.AccessToken, nil
-	}
-	if tok.RefreshToken == "" {
-		return "", fmt.Errorf("%w: account %s has no refresh token", mail.ErrUnauthorized, c.accountID)
-	}
-	client, ok := c.store.Credentials(mail.KindGmail)
-	if !ok || client.ClientID == "" {
-		return "", fmt.Errorf("%w: OAuth client credentials are missing", mail.ErrUnauthorized)
-	}
-	cfg := &oauth2.Config{
-		ClientID:     client.ClientID,
-		ClientSecret: client.ClientSecret,
-		Endpoint: oauth2.Endpoint{
-			TokenURL:  c.tokenURL,
-			AuthStyle: googleEndpoint.AuthStyle,
-		},
-	}
-	// A forced refresh needs a token oauth2 considers expired, or the token
-	// source returns the rejected one unchanged. A zero expiry means "never
-	// expires" to oauth2, so use a time in the past.
-	if force {
-		tok.Expiry = time.Now().Add(-time.Hour)
-	}
-	ctx = withHTTPClient(ctx, c.http)
-	fresh, err := cfg.TokenSource(ctx, tok).Token()
-	if err != nil {
-		return "", authError("refresh access token", err)
-	}
-	if err := c.store.SaveToken(c.accountID, tokenFromOAuth(fresh)); err != nil {
-		// The token works for this request; only the next start loses it.
-		slog.Warn("persist refreshed token", "account", logAccount(c.accountID), "err", err)
-	}
-	return fresh.AccessToken, nil
-}
-
-// apiFailure is one rejected API call. It keeps the status and the reason the
-// retry layer reads, and unwraps to the category the domain layer reports.
-type apiFailure struct {
-	op     string
-	status int
-	reason string
-	detail string
-	kind   error
-}
-
-// Error renders the call the way the package always reported it.
-func (e *apiFailure) Error() string {
-	if e.detail == "" {
-		return fmt.Sprintf("gmail %s: %s", e.op, http.StatusText(e.status))
-	}
-	return fmt.Sprintf("gmail %s: %s: %s", e.op, http.StatusText(e.status), e.detail)
-}
-
-// Unwrap exposes the category to errors.Is.
-func (e *apiFailure) Unwrap() error { return e.kind }
-
-// apiError maps a non-200 response onto the mail error categories. The body of
-// a Google error carries a human readable message, which is kept as detail for
-// anything that is not a category.
-func apiError(op string, resp *http.Response) error {
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
-	var payload struct {
-		Error struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-			Status  string `json:"status"`
-			Errors  []struct {
-				Reason string `json:"reason"`
-			} `json:"errors"`
-		} `json:"error"`
-	}
-	_ = json.Unmarshal(body, &payload)
-	failure := &apiFailure{op: op, status: resp.StatusCode, detail: payload.Error.Message}
-	if failure.detail == "" {
-		failure.detail = strings.TrimSpace(string(body))
-	}
-	for _, e := range payload.Error.Errors {
-		if e.Reason != "" {
-			failure.reason = e.Reason
-			break
-		}
-	}
-	switch resp.StatusCode {
-	case http.StatusNotFound:
-		failure.kind = mail.ErrNotFound
-	case http.StatusBadRequest, http.StatusRequestEntityTooLarge:
-		failure.kind = mail.ErrInvalidArgument
-	case http.StatusUnauthorized:
-		failure.kind = mail.ErrUnauthorized
-	case http.StatusForbidden:
-		// A token granted before a scope was added answers
-		// 403 insufficientPermissions: the credential still works, the grant
-		// does not, and only a new sign-in widens it. Rate limiting is the
-		// other 403 worth naming; anything else (a disabled account) stays
-		// uncategorised so the UI does not ask for a pointless sign-in.
-		switch {
-		case failure.reason == "insufficientPermissions":
-			failure.kind = mail.ErrUnauthorized
-		case isRateLimitReason(failure.reason) || payload.Error.Status == "RESOURCE_EXHAUSTED":
-			failure.kind = mail.ErrRateLimited
-		}
-	case http.StatusTooManyRequests:
-		failure.kind = mail.ErrRateLimited
-	}
-	return failure
-}
-
-// isRateLimitReason reports whether a Google error reason names rate limiting.
-func isRateLimitReason(reason string) bool {
-	switch reason {
-	case "rateLimitExceeded", "userRateLimitExceeded", "dailyLimitExceeded":
-		return true
-	}
-	return false
 }
