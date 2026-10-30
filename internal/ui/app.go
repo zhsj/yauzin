@@ -49,9 +49,11 @@ const (
 	composeForward  composeMode = "forward"
 )
 
-// perPage is the number of conversations one page requests. It is below
-// Gmail's default of 50 to keep the metadata batch small alongside the label
-// batch, which share the account's per-user concurrency budget.
+// perPage is the number of conversations one page requests. It stays below
+// Gmail's default of 50 because the first view of a page costs 10 units for
+// threads.list plus 40 per conversation (25 rows is 1,010 of the 6,000 units a
+// user may spend per minute), while a page whose rows are cached costs only the
+// 10. See docs/GMAIL-QUOTA.md.
 const perPage = 25
 
 // overlay is any full-window layer drawn above the mailbox.

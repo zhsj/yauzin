@@ -111,39 +111,53 @@ Cloud 项目继续沿用旧配额，2026-05-01 及之后新建的项目适用新
 `User-rate limit exceeded`）或 `429`。yauzin 的 `client.apiError` 目前只把 `403 insufficientPermissions` 归为
 `ErrUnauthorized`，速率错误保持未分类并把服务端消息带进 `detail`，因此界面会原样显示这句英文。
 
-## 6. yauzin 当前的成本
+## 6. yauzin 的成本
 
-按 `internal/mail/gmail` 现有实现换算（`perPage = 25`，`batchLimit = 25`，`modifyBatchSize = 1000`）：
+按 `internal/mail/gmail` 的实现换算（`perPage = 25`，`batchLimit = 25`，`modifyBatchSize = 1000`）：
 
 | 用户动作 | 实际请求 | 单位 |
 | --- | --- | --- |
 | 加载侧栏 | `labels.list` + 每个标签一次 `labels.get` | 1 + L |
-| 打开文件夹 / 翻页 / 搜索一页（N 行） | `threads.list` + N 次 `threads.get?format=metadata` | 10 + 40N |
-| 同上，一页 25 行 | | **1,010** |
+| 打开文件夹 / 翻页 / 搜索一页（N 行全部未缓存） | `threads.list` + N 次 `threads.get?format=metadata` | 10 + 40N |
+| 同上，一页 25 行冷加载 | | **1,010** |
+| 再次打开同一页（页与行都命中） | 无 | **0** |
+| 页序失效但行还在（收到新邮件后刷新） | `threads.list` + 变化会话数 × `threads.get` | 10 + 40k |
 | 变更检查（每分钟轮询、启动、切账号） | `users.getProfile?fields=historyId` | 1 |
-| 轮询发现变化后读未读收件箱 | `threads.list` + 3 次 `threads.get` | 130 |
-| 打开一个会话 | `threads.get?format=full` | **120** |
+| 检查发现变化 | 追加 `users.history.list`（2/页，最多 5 页） | 2–10 |
+| 打开一个会话（多封） | `threads.get?format=full` | **120** |
+| 打开一个单封会话 | `messages.get?format=full` | 60 |
+| 再次打开同一会话 | 无（正文缓存最近 8 个） | **0** |
 | 下载 `.eml` 原文 | `messages.get?format=raw` | 60 |
 | 下载一个附件 | `messages.attachments.get` | 20 |
-| 已读 / 星标 / 归档 / 垃圾邮件 | 一次 `messages.batchModify`（≤1000 个邮件 ID） | 50 |
-| 删除（移入垃圾箱） | 每个邮件一次 `messages.trash`，批量信封不减免 | 20 × 邮件数 |
+| 已读 / 星标单封 | `messages.modify` | 5 |
+| 已读 / 星标单会话多封 | `threads.modify` | 10 |
+| 已读 / 星标整页 | 一次 `messages.batchModify` | 50 |
+| 归档 / 垃圾邮件整页 | `messages.batchModify` + 页重建 | 50 + 10 |
+| 删除单会话多封 | `threads.trash` | 20 |
+| 删除整页（逐封 trash） | `messages.trash` 子请求 | 20 × 邮件数 |
 | 发信 | `messages.send`（含 resumable 上传） | 100 |
+
+调度：`client` 在每次请求前按上表单价向本账号的令牌桶（6,000/分钟 × 0.9，按秒补充）预留额度；前台请求额度不足时等待（尊重 ctx），
+`getProfile` / `history.list` 这类后台请求最多等 2 秒便放弃本次、由下一轮补上。rate limit（403 `rateLimitExceeded` / 429）与 5xx
+按 1s / 2s / 4s 加抖动退避重试，最多 3 次。
 
 换算结论（6,000 单位/分钟/用户）：
 
-- 一次 25 行的整页加载占一分钟额度的 **16.8%**，冷加载最多约 **5.9 页/分钟**；考虑 `getProfile`、侧栏标签与打开
-  会话，实际可用次数更低。连续切几个文件夹或每次写操作后的刷新就会打满，这就是 `User-rate limit exceeded` 的
-  直接来源。
-- 账单上最贵的单个动作是打开会话（120）与整页元数据（40/行）；`threads.get` 在整页成本里占 99%。
-- 写操作便宜（归档一类整页一次 50），但 `Delete` 按邮件计 20，删一页 25 封=500，是写路径里最贵的一个。
+- 冷启动首屏（侧栏 + 一页 25 行）约 1,020 单位，占一分钟额度的 17%，仍是最贵的一次操作。
+- 一页之后，同一批会话不再重复付 `threads.get`：翻回上一页、切到星标、搜索命中同一批会话，只付 10 单位的 `threads.list`，页命中则是 0。
+- 收到 1 封新邮件后刷新 = 1（检查）+ 2（history）+ 10（list）+ 40（那一行）= **53**，而不是 1,010。
+- 打开会话是最贵的单次读（多封 120、单封 60），所以正文按会话缓存最近 8 个。
+- 删除仍是写路径里最贵的一项（20/邮件），归档一类整页只有 50。
 
-## 7. 供后续设计参考的替代路径
+## 7. 未采纳的替代路径
 
-只记录数据，不作为已决定的方案：
+只记录数据与结论，供以后重估：
 
-- 行级元数据若改用 `messages.list?fields=messages(id,threadId)`（5）+ 每封邮件 `messages.get?format=metadata`（20），
-  一页 25 行约为 5 + 20×邮件数，比 25×40 低，但分页与「整段会话」语义需要重做，且搜索页会退化成按邮件而不是按会话。
-- 会话级写操作：`threads.modify` 10/次（一次只能一个会话）对比 `messages.batchModify` 50/次（一次整页），整页操作
-  用后者更省；`threads.trash` 20/会话对比 `messages.trash` 20/邮件，多邮件会话用前者更省。
-- `threads.get` 的 `format=full`（120）与 `messages.get` 的 `format=full`（60）之间差一倍，阅读器若要按邮件取正文
-  需要先确认调用面能拿到邮件 ID。
+- 消息级读取（`messages.list` 5 + 每封 `messages.get?format=metadata` 20）对平均 1.3 封/会话的收件箱只比 25×40 省约 35%，
+  但 `ThreadSummary.MessageIDs` 是写操作的必要输入（必须拿全整段会话），且分页语义会从「会话」退化成「消息」、跨页会话被拆开，
+  与 `mail.ThreadPage` 的契约冲突。**未采纳**。
+- 会话级写操作已按量使用：`threads.modify` 10/会话用于单会话多封，`messages.batchModify` 50/次用于整页；
+  删除单会话多封用 `threads.trash` 20/会话，逐封 `messages.trash` 20/封。
+- `threads.get?format=full`（120）与 `messages.get?format=full`（60）相差一倍：阅读器对单封会话改用后者，多封仍用前者
+  （2 封时等价，3 封起后者更贵）。
+- `watch`（100）+ Pub/Sub 推送可以让检查变成事件驱动，但桌面端没有公网回调地址。**未采纳**。
