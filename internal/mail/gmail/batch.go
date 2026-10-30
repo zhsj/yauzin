@@ -96,10 +96,11 @@ func (c *client) batchChunk(ctx context.Context, op, endpoint string, targets []
 	}
 	units := batchUnits(op, targets)
 	for attempt := 0; ; attempt++ {
-		if err := c.reserveQuota(ctx, op, units); err != nil {
+		spend, err := c.reserveQuota(ctx, op, units)
+		if err != nil {
 			return nil, err
 		}
-		resp, err := c.sendBatchAuth(ctx, op, endpoint, targets, body, boundary)
+		resp, err := c.sendBatchAuth(ctx, op, endpoint, targets, body, boundary, spend)
 		if err != nil {
 			return nil, err
 		}
@@ -121,13 +122,14 @@ func (c *client) batchChunk(ctx context.Context, op, endpoint string, targets []
 }
 
 // sendBatchAuth performs one authorized batch POST, refreshing the token once
-// when the server rejects it.
-func (c *client) sendBatchAuth(ctx context.Context, op, endpoint string, targets []batchTarget, body []byte, boundary string) (*http.Response, error) {
+// when the server rejects it. The spend of the batch it prices is what its log
+// line reports, including on the refreshed retry.
+func (c *client) sendBatchAuth(ctx context.Context, op, endpoint string, targets []batchTarget, body []byte, boundary string, spend quotaSpend) (*http.Response, error) {
 	token, err := c.accessToken(ctx, false)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.sendBatch(ctx, op, endpoint, targets, body, boundary, token)
+	resp, err := c.sendBatch(ctx, op, endpoint, targets, body, boundary, token, spend)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +143,7 @@ func (c *client) sendBatchAuth(ctx context.Context, op, endpoint string, targets
 	if err != nil {
 		return nil, err
 	}
-	return c.sendBatch(ctx, op, endpoint, targets, body, boundary, token)
+	return c.sendBatch(ctx, op, endpoint, targets, body, boundary, token, spend)
 }
 
 // batchUnits prices one batch: one unit for the envelope plus every embedded
@@ -200,8 +202,9 @@ func batchBody(apiPath string, targets []batchTarget) (body []byte, boundary str
 // sendBatch performs one authorized batch POST. Like send, it holds the
 // account's request slot for the HTTP round trip. It logs one line naming the
 // calls inside: the POST URL alone says nothing about what the batch does, and
-// endpoint is the collection path they share, so no ID reaches the log.
-func (c *client) sendBatch(ctx context.Context, op, endpoint string, targets []batchTarget, body []byte, boundary, token string) (*http.Response, error) {
+// endpoint is the collection path they share, so no ID reaches the log. spend is
+// the reservation the whole batch made, reported as units/quota/wait.
+func (c *client) sendBatch(ctx context.Context, op, endpoint string, targets []batchTarget, body []byte, boundary, token string, spend quotaSpend) (*http.Response, error) {
 	if err := c.acquireReq(ctx); err != nil {
 		return nil, err
 	}
@@ -215,15 +218,15 @@ func (c *client) sendBatch(ctx context.Context, op, endpoint string, targets []b
 	req.Header.Set("Accept", "multipart/mixed")
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := c.http.Do(req)
+	attrs := make([]any, 0, 10)
+	attrs = append(attrs,
+		"account", logAccount(c.accountID), "endpoint", c.apiPath+endpoint, "calls", len(targets))
+	attrs = append(attrs, spend.logAttrs()...)
 	if err != nil {
-		slog.Debug("gmail batch",
-			"account", logAccount(c.accountID), "endpoint", c.apiPath+endpoint,
-			"calls", len(targets), "err", err)
+		slog.Debug("gmail batch", append(attrs, "err", err)...)
 		return nil, fmt.Errorf("gmail %s batch: %w", op, err)
 	}
-	slog.Debug("gmail batch",
-		"account", logAccount(c.accountID), "endpoint", c.apiPath+endpoint,
-		"calls", len(targets), "status", resp.StatusCode)
+	slog.Debug("gmail batch", append(attrs, "status", resp.StatusCode)...)
 	return resp, nil
 }
 

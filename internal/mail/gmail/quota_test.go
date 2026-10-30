@@ -50,23 +50,30 @@ func TestBudgetRefillsOverTime(t *testing.T) {
 	perMinute := 6000.0
 	b := newBudget(perMinute, clock.now, clock.sleep)
 
-	// The bucket starts full, so one page fits without waiting.
-	waited, err := b.reserve(context.Background(), 1010, classInteractive)
-	if err != nil || waited != 0 {
-		t.Fatalf("first reserve = %v, %v; want no wait", waited, err)
+	// The bucket starts full, so one page fits without waiting, and the spend
+	// reports the state the request left behind.
+	spend, err := b.reserve(context.Background(), 1010, classInteractive)
+	if err != nil || spend.waited != 0 {
+		t.Fatalf("first reserve = %+v, %v; want no wait", spend, err)
+	}
+	if spend.units != 1010 || spend.used != 1010 || spend.capacity != perMinute*quotaMargin {
+		t.Fatalf("spend = %+v, want units/used 1010 of %v", spend, perMinute*quotaMargin)
+	}
+	if got := spend.report(); got != "1010/5400" {
+		t.Fatalf("report = %q, want 1010/5400", got)
 	}
 	// Drain what is left.
 	if _, err := b.reserve(context.Background(), 6000*quotaMargin-1010, classInteractive); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
 	// One more page has to wait for the refill: 1010 units at 90 units/s.
-	waited, err = b.reserve(context.Background(), 1010, classInteractive)
+	spend, err = b.reserve(context.Background(), 1010, classInteractive)
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
 	want := time.Duration(1010 / (perMinute * quotaMargin / 60) * float64(time.Second))
-	if waited < want-time.Second || waited > want+time.Second {
-		t.Fatalf("wait = %v, want about %v", waited, want)
+	if spend.waited < want-time.Second || spend.waited > want+time.Second {
+		t.Fatalf("wait = %v, want about %v", spend.waited, want)
 	}
 }
 

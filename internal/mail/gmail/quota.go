@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -102,6 +103,35 @@ const (
 // reaches the user: the caller treats it like a failed background read.
 var errBudgetSkip = errors.New("gmail: dropped by the quota budget")
 
+// quotaSpend is what one call costs and where the bucket stood right after the
+// call paid for it. It travels with the request, so a single log line answers
+// both "how expensive was this call" and "how much of the budget is gone".
+type quotaSpend struct {
+	units    float64
+	used     float64
+	capacity float64
+	waited   time.Duration
+}
+
+// report renders the bucket state as "used/capacity". The denominator is the
+// bucket's own capacity (the per-minute limit minus the safety margin, so 5,400
+// for the 6,000 limit), not the limit itself: it is what the counter really
+// holds.
+func (q quotaSpend) report() string {
+	return strconv.FormatFloat(q.used, 'f', 0, 64) + "/" +
+		strconv.FormatFloat(q.capacity, 'f', 0, 64)
+}
+
+// logAttrs renders the quota fields of a request log line. A request that did
+// not reserve anything on its own (an upload chunk, whose session paid once
+// already) renders nothing, so its line keeps the old shape.
+func (q quotaSpend) logAttrs() []any {
+	if q.units <= 0 {
+		return nil
+	}
+	return []any{"units", int64(q.units), "quota", q.report(), "wait", q.waited}
+}
+
 // classOf decides the priority of an operation. mail.Service carries no hint
 // about who called, so the decision is made per operation: the change check is
 // the one call the background loop owns, and it yields rather than delays a
@@ -162,22 +192,29 @@ func (b *budget) refill() {
 
 // reserve spends units, waiting for the bucket to refill when it is empty. A
 // background request that would wait longer than budgetWaitLimit is dropped
-// with errBudgetSkip. It returns how long the call had to wait.
-func (b *budget) reserve(ctx context.Context, units float64, class costClass) (time.Duration, error) {
+// with errBudgetSkip.
+//
+// The returned spend carries the bucket state as it stands right after the
+// deduction, taken under the same lock, so two concurrent requests cannot
+// report the same "used" figure.
+func (b *budget) reserve(ctx context.Context, units float64, class costClass) (quotaSpend, error) {
+	spend := quotaSpend{units: units}
 	if units <= 0 {
-		return 0, nil
+		return spend, nil
 	}
 	// A single call can never cost more than the bucket holds; clamping keeps
 	// an oversized batch from blocking forever.
 	units = math.Min(units, b.capacity)
-	var waited time.Duration
+	spend.units = units
 	for {
 		b.mu.Lock()
 		b.refill()
 		if b.tokens >= units {
 			b.tokens -= units
+			spend.used = b.capacity - b.tokens
+			spend.capacity = b.capacity
 			b.mu.Unlock()
-			return waited, nil
+			return spend, nil
 		}
 		missing := units - b.tokens
 		wait := time.Duration(missing / b.perSec * float64(time.Second))
@@ -185,12 +222,12 @@ func (b *budget) reserve(ctx context.Context, units float64, class costClass) (t
 		if wait < time.Millisecond {
 			wait = time.Millisecond
 		}
-		if class == classBackground && waited+wait > budgetWaitLimit {
-			return waited, errBudgetSkip
+		if class == classBackground && spend.waited+wait > budgetWaitLimit {
+			return spend, errBudgetSkip
 		}
 		if err := b.sleep(ctx, wait); err != nil {
-			return waited, err
+			return spend, err
 		}
-		waited += wait
+		spend.waited += wait
 	}
 }

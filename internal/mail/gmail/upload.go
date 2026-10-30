@@ -51,11 +51,14 @@ func (c *client) doResumableUpload(ctx context.Context, op, path, contentType st
 	}
 	// The whole session is one send as far as the quota is concerned: the
 	// chunked PUTs and the offset queries are not separate method calls, so the
-	// cost is reserved once here rather than per request.
-	if err := c.reserveQuota(ctx, op, methodUnits(op, "")); err != nil {
+	// cost is reserved once here rather than per request. Only the session
+	// request carries it on its log line; the chunks would otherwise repeat the
+	// same 100 units on every PUT.
+	spend, err := c.reserveQuota(ctx, op, methodUnits(op, ""))
+	if err != nil {
 		return err
 	}
-	session, err := c.startUpload(ctx, op, path, contentType, total)
+	session, err := c.startUpload(ctx, op, path, contentType, total, spend)
 	if err != nil {
 		return err
 	}
@@ -124,7 +127,7 @@ func (c *client) doResumableUpload(ctx context.Context, op, path, contentType st
 // startUpload opens a resumable session and returns its URI. The whole message
 // size is declared, so the server can reject a payload over its limit before a
 // single byte of it arrives.
-func (c *client) startUpload(ctx context.Context, op, path, contentType string, total int64) (string, error) {
+func (c *client) startUpload(ctx context.Context, op, path, contentType string, total int64, spend quotaSpend) (string, error) {
 	u := c.uploadURL + path + "?" + url.Values{"uploadType": {"resumable"}}.Encode()
 	var lastErr error
 	for attempt := 0; attempt <= uploadAttempts; attempt++ {
@@ -132,7 +135,7 @@ func (c *client) startUpload(ctx context.Context, op, path, contentType string, 
 		headers.Set("X-Upload-Content-Type", contentType)
 		headers.Set("X-Upload-Content-Length", strconv.FormatInt(total, 10))
 
-		resp, err := c.sendHeaders(ctx, op, http.MethodPost, u, headers, nil)
+		resp, err := c.sendHeaders(ctx, op, http.MethodPost, u, headers, nil, spend)
 		if err != nil {
 			lastErr = err
 		} else {
@@ -262,7 +265,8 @@ func (c *client) putChunk(ctx context.Context, op, session, contentType string, 
 	headers := make(http.Header)
 	headers.Set("Content-Type", contentType)
 	headers.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, start+int64(len(data))-1, total))
-	return c.sendHeaders(ctx, op, http.MethodPut, session, headers, data)
+	// The session already paid the send's quota; a chunk is not a method call.
+	return c.sendHeaders(ctx, op, http.MethodPut, session, headers, data, quotaSpend{})
 }
 
 // uploadOffset asks the session how many bytes it has stored, using the status
@@ -270,7 +274,7 @@ func (c *client) putChunk(ctx context.Context, op, session, contentType string, 
 func (c *client) uploadOffset(ctx context.Context, op, session string, total int64) (int64, error) {
 	headers := make(http.Header)
 	headers.Set("Content-Range", fmt.Sprintf("bytes */%d", total))
-	resp, err := c.sendHeaders(ctx, op, http.MethodPut, session, headers, nil)
+	resp, err := c.sendHeaders(ctx, op, http.MethodPut, session, headers, nil, quotaSpend{})
 	if err != nil {
 		return 0, err
 	}

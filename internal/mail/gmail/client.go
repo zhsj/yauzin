@@ -341,26 +341,28 @@ func (c *client) doRequestHandle(ctx context.Context, op, method, base, path str
 // requestOnce performs one authorized request, including the single token
 // refresh the server may ask for. It always closes the response body.
 func (c *client) requestOnce(ctx context.Context, op, method, base, path string, query url.Values, contentType string, body []byte, handle func(*http.Response) error) error {
-	if err := c.reserveQuota(ctx, op, methodUnits(op, query.Get("format"))); err != nil {
+	spend, err := c.reserveQuota(ctx, op, methodUnits(op, query.Get("format")))
+	if err != nil {
 		return err
 	}
 	token, err := c.accessToken(ctx, false)
 	if err != nil {
 		return err
 	}
-	resp, err := c.send(ctx, method, base, path, query, contentType, body, token)
+	resp, err := c.send(ctx, method, base, path, query, contentType, body, token, spend)
 	if err != nil {
 		return fmt.Errorf("gmail %s: %w", op, err)
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
 		// The server rejected a token the clock still considered valid. Drop it
-		// and try exactly once with a refreshed one.
+		// and try exactly once with a refreshed one, which the budget already
+		// paid for: the same spend goes on the retry's line.
 		_ = resp.Body.Close()
 		token, err = c.accessToken(ctx, true)
 		if err != nil {
 			return err
 		}
-		resp, err = c.send(ctx, method, base, path, query, contentType, body, token)
+		resp, err = c.send(ctx, method, base, path, query, contentType, body, token, spend)
 		if err != nil {
 			return fmt.Errorf("gmail %s: %w", op, err)
 		}
@@ -377,20 +379,20 @@ func (c *client) requestOnce(ctx context.Context, op, method, base, path string,
 }
 
 // reserveQuota spends the cost of one call before it is sent. A background
-// request the budget cannot afford right now is dropped instead of queued.
-func (c *client) reserveQuota(ctx context.Context, op string, units float64) error {
-	waited, err := c.budget.reserve(ctx, units, classOf(op))
-	if errors.Is(err, errBudgetSkip) {
-		slog.Debug("gmail quota skip",
-			"account", logAccount(c.accountID), "op", op, "units", units)
-		return err
-	}
+// request the budget cannot afford right now is dropped instead of queued. The
+// returned spend rides on the request log line, so no separate quota line is
+// needed.
+func (c *client) reserveQuota(ctx context.Context, op string, units float64) (quotaSpend, error) {
+	spend, err := c.budget.reserve(ctx, units, classOf(op))
 	if err != nil {
-		return err
+		if errors.Is(err, errBudgetSkip) {
+			slog.Debug("gmail quota skip",
+				"account", logAccount(c.accountID), "op", op,
+				"units", int64(spend.units), "wait", spend.waited)
+		}
+		return spend, err
 	}
-	slog.Debug("gmail quota",
-		"account", logAccount(c.accountID), "op", op, "units", units, "wait", waited)
-	return nil
+	return spend, nil
 }
 
 // retryDelay is the pause before attempt+1: an exponential step with up to a
@@ -469,7 +471,7 @@ func (p *progressReader) finish() {
 // send builds and performs one request with the given bearer token. A non-nil
 // body is sent with contentType. It holds the account's request slot for the
 // HTTP round trip, so single and batch requests never overlap.
-func (c *client) send(ctx context.Context, method, base, path string, query url.Values, contentType string, body []byte, token string) (*http.Response, error) {
+func (c *client) send(ctx context.Context, method, base, path string, query url.Values, contentType string, body []byte, token string, spend quotaSpend) (*http.Response, error) {
 	u := base + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
@@ -478,13 +480,13 @@ func (c *client) send(ctx context.Context, method, base, path string, query url.
 	if body != nil {
 		headers.Set("Content-Type", contentType)
 	}
-	return c.sendRaw(ctx, method, u, headers, body, token)
+	return c.sendRaw(ctx, method, u, headers, body, token, spend)
 }
 
 // sendRaw performs one request with whatever headers the caller needs. It is
 // what the resumable upload uses for its session and chunk requests, whose
 // content type and range headers differ from a JSON call.
-func (c *client) sendRaw(ctx context.Context, method, rawURL string, headers http.Header, body []byte, token string) (*http.Response, error) {
+func (c *client) sendRaw(ctx context.Context, method, rawURL string, headers http.Header, body []byte, token string, spend quotaSpend) (*http.Response, error) {
 	if err := c.acquireReq(ctx); err != nil {
 		return nil, err
 	}
@@ -506,18 +508,19 @@ func (c *client) sendRaw(ctx context.Context, method, rawURL string, headers htt
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.http.Do(req)
-	logRequest(c.accountID, method, req.URL.Path, resp, err)
+	logRequest(c.accountID, method, req.URL.Path, spend, resp, err)
 	return resp, err
 }
 
 // sendHeaders performs one authorized request and refreshes the token once
-// when the server rejects it. The caller owns the response body.
-func (c *client) sendHeaders(ctx context.Context, op, method, rawURL string, headers http.Header, body []byte) (*http.Response, error) {
+// when the server rejects it. The caller owns the response body. spend is the
+// reservation that request made, empty for a call the caller already paid for.
+func (c *client) sendHeaders(ctx context.Context, op, method, rawURL string, headers http.Header, body []byte, spend quotaSpend) (*http.Response, error) {
 	token, err := c.accessToken(ctx, false)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.sendRaw(ctx, method, rawURL, headers, body, token)
+	resp, err := c.sendRaw(ctx, method, rawURL, headers, body, token, spend)
 	if err != nil {
 		return nil, fmt.Errorf("gmail %s: %w", op, err)
 	}
@@ -529,7 +532,7 @@ func (c *client) sendHeaders(ctx context.Context, op, method, rawURL string, hea
 	if err != nil {
 		return nil, err
 	}
-	resp, err = c.sendRaw(ctx, method, rawURL, headers, body, token)
+	resp, err = c.sendRaw(ctx, method, rawURL, headers, body, token, spend)
 	if err != nil {
 		return nil, fmt.Errorf("gmail %s: %w", op, err)
 	}
@@ -539,14 +542,20 @@ func (c *client) sendHeaders(ctx context.Context, op, method, rawURL string, hea
 // logRequest reports one Gmail API call at DEBUG. endpoint is the API path
 // without host or query: the query carries search terms and must not be
 // logged. A failed round trip reports err instead of a status.
-func logRequest(account, method, endpoint string, resp *http.Response, err error) {
+//
+// The line also carries what the call cost and where the account's budget stood
+// right after it paid: units, "quota" as used/capacity, and the wait the
+// reservation took. A call that did not reserve anything of its own (an upload
+// chunk) leaves those three fields out.
+func logRequest(account, method, endpoint string, spend quotaSpend, resp *http.Response, err error) {
+	attrs := make([]any, 0, 10)
+	attrs = append(attrs, "account", logAccount(account), "method", method, "endpoint", endpoint)
+	attrs = append(attrs, spend.logAttrs()...)
 	if err != nil {
-		slog.Debug("gmail request",
-			"account", logAccount(account), "method", method, "endpoint", endpoint, "err", err)
+		slog.Debug("gmail request", append(attrs, "err", err)...)
 		return
 	}
-	slog.Debug("gmail request",
-		"account", logAccount(account), "method", method, "endpoint", endpoint, "status", resp.StatusCode)
+	slog.Debug("gmail request", append(attrs, "status", resp.StatusCode)...)
 }
 
 // logAccount is the account label of a log line. The backend prefix repeats
