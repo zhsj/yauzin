@@ -537,7 +537,7 @@ func (s *Service) SaveMessage(ctx context.Context, messageID string, w io.Writer
 		return err
 	}
 	slog.Debug("gmail message saved",
-		"account", s.acc.Email,
+		"account", logAccount(s.acc.ID),
 		"message", messageID,
 		"bytes", written)
 	return nil

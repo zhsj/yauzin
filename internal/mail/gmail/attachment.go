@@ -45,7 +45,7 @@ func (s *Service) SaveAttachment(ctx context.Context, messageID, attachmentID st
 		return err
 	}
 	slog.Debug("gmail attachment saved",
-		"account", s.acc.Email,
+		"account", logAccount(s.acc.ID),
 		"message", messageID,
 		"attachment", shortID(attachmentID),
 		"bytes", written)
@@ -61,7 +61,7 @@ func (s *Service) logSaveFailure(messageID, attachmentID string, err error) {
 		failure = attachmentFailure{stage: attachmentStageDownload, err: err}
 	}
 	slog.Debug("gmail attachment save failed",
-		"account", s.acc.Email,
+		"account", logAccount(s.acc.ID),
 		"message", messageID,
 		"attachment", shortID(attachmentID),
 		"stage", failure.stage,
