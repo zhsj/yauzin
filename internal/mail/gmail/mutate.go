@@ -75,12 +75,13 @@ func (s *Service) SetFlag(ctx context.Context, ids []string, flag mail.Flag, on 
 		s.cache.clear()
 		return err
 	}
-	// The order of a page does not change when a message is read or starred,
-	// so the rows are patched instead of read back: the write just told us the
-	// exact state, and reading it again would cost 40 units a conversation.
+	// The write just told us the exact state of the conversation, so the rows
+	// are patched instead of read back: reading them again would cost 40 units
+	// each. The page order stays, but a view that filters on the flag (the
+	// starred folder, an is:unread search) may no longer contain the row, so
+	// the listings are dropped and rebuilt from the patched rows for 10 units.
 	s.cache.applyFlag(threadIDs, flag, on)
-	// The sidebar counts did change, and they cost a unit each to read again.
-	s.cache.dropFolders()
+	s.cache.dropPages()
 	return nil
 }
 

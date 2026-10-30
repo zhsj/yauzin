@@ -537,11 +537,18 @@ type threadWriteServer struct {
 	modified []string
 	trashed  []string
 	batches  int
+	lists    int
 }
 
 func (s *threadWriteServer) handler(t *testing.T) http.Handler {
 	t.Helper()
 	mux := http.NewServeMux()
+	mux.HandleFunc("/users/me/threads", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		s.lists++
+		s.mu.Unlock()
+		writeJSON(t, w, `{"threads":[{"id":"t1"}],"resultSizeEstimate":1}`)
+	})
 	mux.HandleFunc("/users/me/threads/", func(w http.ResponseWriter, r *http.Request) {
 		id, action, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/users/me/threads/"), "/")
 		if !ok {
@@ -573,10 +580,10 @@ func (s *threadWriteServer) handler(t *testing.T) http.Handler {
 	return mux
 }
 
-func (s *threadWriteServer) counts() (modified, trashed []string, batches int) {
+func (s *threadWriteServer) counts() (modified, trashed []string, batches, lists int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]string(nil), s.modified...), append([]string(nil), s.trashed...), s.batches
+	return append([]string(nil), s.modified...), append([]string(nil), s.trashed...), s.batches, s.lists
 }
 
 // seedRow puts a conversation in the row cache the way a listing would.
@@ -591,8 +598,8 @@ func seedRow(svc *Service, id string, messageIDs ...string) {
 }
 
 // TestSetFlagPatchesTheCachedRow pins the write that pays 10 units instead of
-// 50 and then does not read the row back: the row cache is updated in place and
-// the page stays, so the follow-up listing costs nothing.
+// 50 and then does not read the row back: the row cache is patched, so the
+// listing that follows costs threads.list and no threads.get at all.
 func TestSetFlagPatchesTheCachedRow(t *testing.T) {
 	srv := &threadWriteServer{}
 	svc, _ := newTestService(t, srv.handler(t))
@@ -602,7 +609,7 @@ func TestSetFlagPatchesTheCachedRow(t *testing.T) {
 	if err := svc.SetFlag(context.Background(), []string{"t1-m0", "t1-m1"}, mail.FlagRead, true); err != nil {
 		t.Fatalf("SetFlag: %v", err)
 	}
-	modified, _, batches := srv.counts()
+	modified, _, batches, _ := srv.counts()
 	if len(modified) != 1 || modified[0] != "t1" {
 		t.Fatalf("thread writes = %v, want one threads.modify on t1", modified)
 	}
@@ -617,6 +624,8 @@ func TestSetFlagPatchesTheCachedRow(t *testing.T) {
 	if len(page.Threads) != 1 {
 		t.Fatalf("threads = %d, want 1", len(page.Threads))
 	}
+	// A metadata read would land on the thread path and fail this server, so a
+	// row that comes back as read proves it was patched rather than refetched.
 	row := page.Threads[0]
 	if row.UnreadCount != 0 || slices.Contains(row.Labels, labelUnread) {
 		t.Fatalf("row = %+v, want it read", row)
@@ -634,7 +643,7 @@ func TestArchiveUsesOneThreadCall(t *testing.T) {
 	if err := svc.Archive(context.Background(), []string{"t1-m0", "t1-m1"}); err != nil {
 		t.Fatalf("Archive: %v", err)
 	}
-	modified, _, batches := srv.counts()
+	modified, _, batches, _ := srv.counts()
 	if len(modified) != 1 || modified[0] != "t1" {
 		t.Fatalf("thread writes = %v, want one threads.modify on t1", modified)
 	}
@@ -659,7 +668,7 @@ func TestDeleteTrashesAWholeThread(t *testing.T) {
 	if err := svc.Delete(context.Background(), []string{"t1-m0", "t1-m1"}); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	_, trashed, _ := srv.counts()
+	_, trashed, _, _ := srv.counts()
 	if len(trashed) != 1 || trashed[0] != "t1" {
 		t.Fatalf("thread trash calls = %v, want one on t1", trashed)
 	}
