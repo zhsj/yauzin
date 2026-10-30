@@ -37,13 +37,18 @@ func (m *Message) hasFlag(labelID string) bool {
 
 // date returns the message timestamp. internalDate is authoritative; the Date
 // header is only a fallback when the API omitted it.
-func (m *Message) date() time.Time {
+func (m *Message) date() time.Time { return m.timestamp(m.headers()) }
+
+// timestamp is date for a caller that already parsed the headers, so folding a
+// conversation into a row reads each message's headers once instead of once per
+// field it needs.
+func (m *Message) timestamp(headers map[string]string) time.Time {
 	if raw := strings.TrimSpace(m.InternalDate); raw != "" {
 		if ms, err := strconv.ParseInt(raw, 10, 64); err == nil {
 			return time.UnixMilli(ms)
 		}
 	}
-	if raw := m.headers()["date"]; raw != "" {
+	if raw := headers["date"]; raw != "" {
 		if t, err := parseMailDate(raw); err == nil {
 			return t
 		}
