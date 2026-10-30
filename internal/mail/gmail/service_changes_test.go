@@ -32,7 +32,7 @@ type changesServer struct {
 	changed []string
 
 	profileCalls, labelCalls, listCalls, historyCalls int
-	threadCalls                                      int
+	threadCalls                                       int
 
 	profileGate    chan struct{}
 	profileStarted chan struct{}

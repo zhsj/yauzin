@@ -459,19 +459,22 @@ func (s *Service) listThreads(ctx context.Context, labelID, query, pageToken str
 // threads.get with format=full costs 120 quota units, so reopening one the user
 // just read must not pay again. A conversation the list already described as a
 // single message is read as that message instead, which costs half.
+//
+// The returned slice belongs to the caller, but the messages in it are shared
+// with the cache and must be treated as read-only.
 func (s *Service) GetThread(ctx context.Context, threadID string) ([]*mail.Message, error) {
 	if strings.TrimSpace(threadID) == "" {
 		return nil, mail.ErrInvalidArgument
 	}
 	if cached, ok := s.cache.bodies.get(threadID); ok {
-		return cloneMessages(cached), nil
+		return slices.Clone(cached), nil
 	}
 	if err := s.waitCheck(ctx); err != nil {
 		return nil, err
 	}
 	// A read that waited may have been beaten to the entry by another one.
 	if cached, ok := s.cache.bodies.get(threadID); ok {
-		return cloneMessages(cached), nil
+		return slices.Clone(cached), nil
 	}
 	gen := s.cache.bodies.epoch()
 	msgs, err := s.fetchThreadMessages(ctx, threadID)
@@ -479,7 +482,7 @@ func (s *Service) GetThread(ctx context.Context, threadID string) ([]*mail.Messa
 		return nil, err
 	}
 	s.cache.bodies.setAt(gen, threadID, msgs)
-	return cloneMessages(msgs), nil
+	return slices.Clone(msgs), nil
 }
 
 // fetchThreadMessages reads one whole conversation. A conversation the row

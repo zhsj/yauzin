@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 
 	"github.com/zhsj/yauzin/internal/mail"
@@ -124,10 +123,4 @@ func (s *Service) fetchThreads(ctx context.Context, ids []string) ([]*Thread, er
 		}
 	}
 	return live, nil
-}
-
-// cloneMessages copies the slice a caller receives. The messages themselves are
-// shared with the cache and must be treated as read-only.
-func cloneMessages(msgs []*mail.Message) []*mail.Message {
-	return slices.Clone(msgs)
 }

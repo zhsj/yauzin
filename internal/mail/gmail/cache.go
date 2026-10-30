@@ -115,7 +115,8 @@ func (c *lruCache[V]) get(key string) (V, bool) {
 }
 
 // set stores value under key, replacing an existing entry and evicting the
-// least recently used one when the cache is full.
+// least recently used one when the cache is full. Production writes go through
+// setAt, which honours the generation; set is what tests seed an entry with.
 func (c *lruCache[V]) set(key string, value V) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -386,20 +387,6 @@ func labelsWithout(labels []string, id string) []string {
 		}
 	}
 	return out
-}
-
-// cloneThreadPage deep-copies a page so a caller mutating the returned rows
-// cannot change the cached copy. The summary scalars are copied by the slice
-// clone; the three inner slices still share their backing arrays, so they are
-// cloned too.
-func cloneThreadPage(p mail.ThreadPage) mail.ThreadPage {
-	p.Threads = slices.Clone(p.Threads)
-	for i := range p.Threads {
-		p.Threads[i].Participants = slices.Clone(p.Threads[i].Participants)
-		p.Threads[i].Labels = slices.Clone(p.Threads[i].Labels)
-		p.Threads[i].MessageIDs = slices.Clone(p.Threads[i].MessageIDs)
-	}
-	return p
 }
 
 // cloneSummary deep-copies one row for a caller.

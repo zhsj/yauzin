@@ -2,8 +2,6 @@ package gmail
 
 import (
 	"testing"
-
-	"github.com/zhsj/yauzin/internal/mail"
 )
 
 func TestLRUCacheGetSetAndHit(t *testing.T) {
@@ -62,35 +60,6 @@ func TestLRUCacheClear(t *testing.T) {
 	}
 	if _, ok := c.get("b"); ok {
 		t.Fatal("get(b) hit after clear")
-	}
-}
-
-func TestCloneThreadPageIsDeep(t *testing.T) {
-	page := mail.ThreadPage{Threads: []mail.ThreadSummary{{
-		ID:           "t1",
-		Participants: []mail.Address{{Email: "a@example.com"}},
-		Labels:       []string{"INBOX"},
-		MessageIDs:   []string{"m1"},
-	}}}
-	clone := cloneThreadPage(page)
-
-	clone.Threads[0].ID = "changed"
-	clone.Threads[0].Participants[0].Email = "changed@example.com"
-	clone.Threads[0].Labels[0] = "CHANGED"
-	clone.Threads[0].MessageIDs[0] = "changed"
-
-	orig := page.Threads[0]
-	if orig.ID != "t1" {
-		t.Fatalf("ID leaked into the original: %q", orig.ID)
-	}
-	if orig.Participants[0].Email != "a@example.com" {
-		t.Fatalf("participant leaked into the original: %q", orig.Participants[0].Email)
-	}
-	if orig.Labels[0] != "INBOX" {
-		t.Fatalf("label leaked into the original: %q", orig.Labels[0])
-	}
-	if orig.MessageIDs[0] != "m1" {
-		t.Fatalf("message ID leaked into the original: %q", orig.MessageIDs[0])
 	}
 }
 
