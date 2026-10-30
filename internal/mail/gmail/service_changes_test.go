@@ -32,6 +32,7 @@ type changesServer struct {
 	changed []string
 
 	profileCalls, labelCalls, listCalls, historyCalls int
+	threadCalls                                      int
 
 	profileGate    chan struct{}
 	profileStarted chan struct{}
@@ -50,6 +51,7 @@ func newChangesService(t *testing.T) (*Service, *changesServer) {
 	mux.HandleFunc("/users/me/history", s.history(t))
 	mux.HandleFunc("/users/me/labels", s.labels(t))
 	mux.HandleFunc("/users/me/threads", s.threads(t))
+	mux.HandleFunc("/users/me/threads/", s.thread(t))
 	mux.HandleFunc("/batch", s.batch.handler(t))
 	svc, _ := newTestService(t, mux)
 	t.Cleanup(s.release)
@@ -96,6 +98,8 @@ func (s *changesServer) count(endpoint string) int {
 		return s.listCalls
 	case "history":
 		return s.historyCalls
+	case "thread":
+		return s.threadCalls
 	}
 	return -1
 }
@@ -166,6 +170,17 @@ func (s *changesServer) threads(t *testing.T) http.HandlerFunc {
 		s.listCalls++
 		s.mu.Unlock()
 		writeJSON(t, w, `{"threads":[{"id":"t1"}],"resultSizeEstimate":1}`)
+	}
+}
+
+// thread answers one threads.get, which is what opening a conversation costs.
+func (s *changesServer) thread(t *testing.T) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		s.threadCalls++
+		s.mu.Unlock()
+		writeJSON(t, w, t1Body)
 	}
 }
 
@@ -396,6 +411,54 @@ func TestUncachedReadWaitsForCheck(t *testing.T) {
 	<-checked
 	if got := srv.count("threads"); got != 1 {
 		t.Fatalf("threads.list calls = %d, want 1", got)
+	}
+}
+
+// TestUncachedThreadWaitsForCheck covers the same contract for the reader: a
+// conversation the cache does not hold must not pay for a body the check is
+// about to drop.
+func TestUncachedThreadWaitsForCheck(t *testing.T) {
+	svc, srv := newChangesService(t)
+	if _, err := svc.CheckChanges(context.Background()); err != nil {
+		t.Fatalf("baseline: %v", err)
+	}
+
+	gate, started := make(chan struct{}), make(chan struct{}, 1)
+	srv.mu.Lock()
+	srv.profileGate, srv.profileStarted = gate, started
+	srv.mu.Unlock()
+	checked := make(chan struct{})
+	go func() {
+		defer close(checked)
+		if _, err := svc.CheckChanges(context.Background()); err != nil {
+			t.Errorf("CheckChanges: %v", err)
+		}
+	}()
+	<-started
+
+	read := make(chan error, 1)
+	go func() {
+		_, err := svc.GetThread(context.Background(), "t1")
+		read <- err
+	}()
+	select {
+	case err := <-read:
+		t.Fatalf("a cache miss returned while a check was in flight: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(gate)
+	select {
+	case err := <-read:
+		if err != nil {
+			t.Fatalf("GetThread: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the read never resumed after the check finished")
+	}
+	<-checked
+	if got := srv.count("thread"); got != 1 {
+		t.Fatalf("threads.get calls = %d, want 1", got)
 	}
 }
 

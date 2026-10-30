@@ -466,6 +466,13 @@ func (s *Service) GetThread(ctx context.Context, threadID string) ([]*mail.Messa
 	if cached, ok := s.cache.bodies.get(threadID); ok {
 		return cloneMessages(cached), nil
 	}
+	if err := s.waitCheck(ctx); err != nil {
+		return nil, err
+	}
+	// A read that waited may have been beaten to the entry by another one.
+	if cached, ok := s.cache.bodies.get(threadID); ok {
+		return cloneMessages(cached), nil
+	}
 	gen := s.cache.bodies.epoch()
 	msgs, err := s.fetchThreadMessages(ctx, threadID)
 	if err != nil {
