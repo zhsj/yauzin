@@ -265,10 +265,11 @@ func partIndex(contentID string) (int, bool) {
 // a real account. One labels.get per label fills them in, and one batch request
 // keeps that at a single round trip (plus one more per batchLimit labels).
 //
-// A label that disappeared between the list and the batch is logged and left
-// out of the result: the caller then renders it without a count. Only when every
-// call failed is the first error returned, so the caller still reports a broken
-// backend instead of silently showing zeros.
+// A label that disappeared between the list and the batch is left out of the
+// result: the caller then renders it without a count, which is what a deleted
+// label means. Any other failure is remembered, and when nothing came back at
+// all the first of them is returned, so a broken backend is still reported
+// instead of silently showing zeros.
 func (c *client) labelDetails(ctx context.Context, ids []string) (map[string]*Label, error) {
 	out := make(map[string]*Label, len(ids))
 	if len(ids) == 0 {
@@ -282,13 +283,18 @@ func (c *client) labelDetails(ctx context.Context, ids []string) (map[string]*La
 	}
 
 	// A label that disappeared between the list and the batch is logged and
-	// left out of the result; only when every call failed is the first error
-	// returned, so the caller still reports a broken backend instead of
-	// silently showing zeros.
+	// left out of the result; any other failure is counted. When nothing came
+	// back and something failed for a reason other than the label being gone,
+	// the first of those errors is returned, so the caller still reports a
+	// broken backend instead of silently showing zeros.
 	failed := 0
 	var firstErr error
 	err := c.batchFetch(ctx, "labels.get", "/users/me/labels", targets, func(i int, resp *http.Response) error {
 		id := ids[i]
+		if resp.StatusCode == http.StatusNotFound {
+			slog.Debug("gmail label detail gone", "label", id)
+			return nil
+		}
 		if resp.StatusCode != http.StatusOK {
 			detail, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 			slog.Warn("gmail label detail failed", "label", id, "status", resp.StatusCode)
@@ -315,7 +321,7 @@ func (c *client) labelDetails(ctx context.Context, ids []string) (map[string]*La
 		// broken backend, which is exactly the bug this code fixes.
 		return out, err
 	}
-	if failed == len(ids) {
+	if failed > 0 && len(out) == 0 {
 		return out, firstErr
 	}
 	return out, nil

@@ -314,6 +314,29 @@ func TestFoldersToleratesADeletedLabel(t *testing.T) {
 	}
 }
 
+// TestFoldersToleratesTheOnlyLabelBeingDeleted pins the single-label edge: one
+// label that 404s leaves nothing to count, but nothing is broken either, so the
+// sidebar must not fail.
+func TestFoldersToleratesTheOnlyLabelBeingDeleted(t *testing.T) {
+	batch := &batchServer{
+		details:  folderDetails(),
+		statuses: map[string]int{"INBOX": http.StatusNotFound},
+	}
+	svc := newFolderService(t, batch, folderListBody)
+
+	folders, err := svc.Folders(context.Background())
+	if err != nil {
+		t.Fatalf("Folders: %v", err)
+	}
+	detail, err := svc.FolderDetails(context.Background(), folders[:1])
+	if err != nil {
+		t.Fatalf("FolderDetails of one deleted label: %v", err)
+	}
+	if len(detail) != 1 || detail[0].ID != "inbox" || detail[0].Unread != 0 {
+		t.Fatalf("detail = %+v, want the inbox without a count", detail)
+	}
+}
+
 func TestFoldersFailsWhenNoLabelDetailSucceeds(t *testing.T) {
 	statuses := make(map[string]int, len(folderDetails())+2)
 	for _, id := range []string{"INBOX", "STARRED", "SENT", "SPAM", "TRASH", "Label_1", "Label_2"} {
