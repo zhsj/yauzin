@@ -44,7 +44,7 @@ func (s *Service) Folders(ctx context.Context) ([]mail.Folder, error) {
 	var resp ListLabelsResponse
 	q := url.Values{}
 	q.Set("fields", "labels(id,name,type)")
-	if err := s.c.do(ctx, "labels.list", "GET", "/users/me/labels", q, &resp); err != nil {
+	if err := s.c.do(ctx, "labels.list", "/users/me/labels", q, &resp); err != nil {
 		return nil, err
 	}
 

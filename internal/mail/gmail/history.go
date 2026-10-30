@@ -50,7 +50,7 @@ func (s *Service) listChangedThreads(ctx context.Context, baseline string) ([]st
 			q.Set("pageToken", pageToken)
 		}
 		var resp ListHistoryResponse
-		if err := s.c.do(ctx, "users.history.list", "GET", "/users/me/history", q, &resp); err != nil {
+		if err := s.c.do(ctx, "users.history.list", "/users/me/history", q, &resp); err != nil {
 			if errors.Is(err, mail.ErrNotFound) || historyStartRejected(err) {
 				return nil, "", errHistoryExpired
 			}

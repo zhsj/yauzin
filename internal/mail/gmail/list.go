@@ -130,7 +130,7 @@ func (s *Service) listThreads(ctx context.Context, labelID, query, pageToken str
 	}
 
 	var list ListThreadsResponse
-	if err := s.c.do(ctx, "threads.list", "GET", "/users/me/threads", q, &list); err != nil {
+	if err := s.c.do(ctx, "threads.list", "/users/me/threads", q, &list); err != nil {
 		return pageEntry{}, err
 	}
 

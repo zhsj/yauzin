@@ -74,7 +74,7 @@ func (s *Service) CheckChanges(ctx context.Context) (bool, error) {
 	q := url.Values{}
 	q.Set("fields", "historyId")
 	var profile Profile
-	if err := s.c.do(ctx, "users.getProfile", "GET", "/users/me/profile", q, &profile); err != nil {
+	if err := s.c.do(ctx, "users.getProfile", "/users/me/profile", q, &profile); err != nil {
 		return false, err
 	}
 	id := strings.TrimSpace(profile.HistoryID)
@@ -214,7 +214,7 @@ func (s *Service) fetchThreadMessages(ctx context.Context, threadID string) ([]*
 		q := url.Values{}
 		q.Set("format", "full")
 		var m Message
-		if err := s.c.do(ctx, "messages.get", "GET",
+		if err := s.c.do(ctx, "messages.get",
 			"/users/me/messages/"+url.PathEscape(row.MessageIDs[0]), q, &m); err != nil {
 			return nil, err
 		}
@@ -223,7 +223,7 @@ func (s *Service) fetchThreadMessages(ctx context.Context, threadID string) ([]*
 	q := url.Values{}
 	q.Set("format", "full")
 	var th Thread
-	if err := s.c.do(ctx, "threads.get", "GET", "/users/me/threads/"+url.PathEscape(threadID), q, &th); err != nil {
+	if err := s.c.do(ctx, "threads.get", "/users/me/threads/"+url.PathEscape(threadID), q, &th); err != nil {
 		return nil, err
 	}
 	out := make([]*mail.Message, 0, len(th.Messages))

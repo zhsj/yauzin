@@ -200,9 +200,10 @@ func (c *client) acquireReq(ctx context.Context) error {
 // releaseReq gives the request slot back.
 func (c *client) releaseReq() { <-c.reqSem }
 
-// do performs one authorized JSON request without a body.
-func (c *client) do(ctx context.Context, op, method, path string, query url.Values, out any) error {
-	return c.doBody(ctx, op, method, path, query, nil, out)
+// do performs one authorized JSON GET without a body. Every caller of it reads,
+// so the method is not a parameter: a write goes through postJSON.
+func (c *client) do(ctx context.Context, op, path string, query url.Values, out any) error {
+	return c.doBody(ctx, op, http.MethodGet, path, query, nil, out)
 }
 
 // postJSON performs one authorized JSON POST with in as its body and decodes
@@ -234,8 +235,10 @@ const streamDrain = 64 << 10
 // doStream performs one authorized JSON GET and hands the response body to
 // handle as it arrives, instead of decoding the whole document into a value.
 // The body is counted for progress while handle reads it. Once handle is done
-// the rest of the document is drained, so the transfer completes and the
-// connection can be reused.
+// the rest of the document is drained up to streamDrain, so an ordinary tail
+// finishes the transfer and lets the connection be reused; a bigger tail is
+// dropped instead of read, which closes the connection rather than blocking on
+// bytes the caller does not need.
 func (c *client) doStream(ctx context.Context, op, path string, query url.Values, progress func(mail.Progress), handle func(io.Reader) error) error {
 	return c.doRequestHandle(ctx, op, http.MethodGet, c.baseURL, path, query, "application/json", nil, func(resp *http.Response) error {
 		src := io.Reader(resp.Body)
