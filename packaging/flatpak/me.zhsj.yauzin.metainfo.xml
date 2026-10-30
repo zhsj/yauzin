@@ -35,6 +35,13 @@
       <caption>A mailbox with an open compose window</caption>
     </screenshot>
   </screenshots>
+  <releases>
+    <release version="0.1.0" date="2026-10-31">
+      <description>
+        <p>Initial release.</p>
+      </description>
+    </release>
+  </releases>
   <supports>
     <control>keyboard</control>
     <control>pointing</control>
