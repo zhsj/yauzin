@@ -11,6 +11,7 @@ package gmail
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -102,12 +103,17 @@ func New(acc mail.Account, store Store, opts ...Option) (*Service, error) {
 func (s *Service) Account() mail.Account { return s.acc }
 
 // CheckChanges compares the mailbox history id with the one the previous call
-// recorded, dropping every cached response when it moved.
+// recorded and drops the cached rows of the conversations that moved.
 //
 // users.getProfile is the cheapest way to read the current history id: one
-// request, no message data, one quota unit. The first call records the id as
-// the baseline and drops whatever was cached before it, so a caller that checks
-// before it loads always holds data at least as new as the baseline.
+// request, no message data, one quota unit. Only when it moved does the check
+// ask the history which conversations changed (2 units per page), so an idle
+// minute costs one unit and a new message costs the history call plus the rows
+// it touched.
+//
+// The first call records the id as the baseline and drops whatever was cached
+// before it, so a caller that checks before it loads always holds data at least
+// as new as the baseline.
 func (s *Service) CheckChanges(ctx context.Context) (bool, error) {
 	s.beginCheck()
 	defer s.endCheck()
@@ -124,21 +130,55 @@ func (s *Service) CheckChanges(ctx context.Context) (bool, error) {
 	}
 
 	s.checkMu.Lock()
-	defer s.checkMu.Unlock()
 	baseline := s.historyID
+	s.checkMu.Unlock()
 	if baseline == id {
 		return false, nil
 	}
-	s.historyID = id
-	// Every entry predates the state this call observed, so it cannot be kept.
-	s.cache.clear()
+
 	if baseline == "" {
-		// Nothing to compare against yet: this call only sets the baseline.
+		// Nothing to compare against yet: this call only sets the baseline, and
+		// everything cached before it described an older state.
+		s.cache.clear()
+		s.setBaseline(id)
 		slog.Debug("gmail history baseline", "account", logAccount(s.acc.ID), "history_id", id)
 		return false, nil
 	}
-	slog.Debug("gmail mailbox changed", "account", logAccount(s.acc.ID), "from", baseline, "to", id)
+
+	ids, latest, err := s.listChangedThreads(ctx, baseline)
+	if err != nil {
+		if !errors.Is(err, errHistoryExpired) && !errors.Is(err, errHistoryTooLong) {
+			// The baseline stays where it was, so the next check covers the
+			// same range again instead of silently dropping a change.
+			return false, err
+		}
+		// The history cannot describe the range: drop everything and start
+		// over from the id this check observed.
+		s.cache.clear()
+		s.setBaseline(id)
+		slog.Debug("gmail history reset",
+			"account", logAccount(s.acc.ID), "from", baseline, "to", id)
+		return true, nil
+	}
+
+	// Only the conversations the history named can have changed: everything
+	// else in the cache still describes the mailbox.
+	s.cache.invalidateThreads(ids)
+	if latest == "" {
+		latest = id
+	}
+	s.setBaseline(latest)
+	slog.Debug("gmail mailbox changed",
+		"account", logAccount(s.acc.ID), "from", baseline, "to", latest,
+		"threads", len(ids))
 	return true, nil
+}
+
+// setBaseline records the history id the cache now describes.
+func (s *Service) setBaseline(id string) {
+	s.checkMu.Lock()
+	defer s.checkMu.Unlock()
+	s.historyID = id
 }
 
 // beginCheck registers a check in flight.

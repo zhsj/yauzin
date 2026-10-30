@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -24,7 +25,13 @@ type changesServer struct {
 	omitHistoryID bool
 	profileFields string
 
-	profileCalls, labelCalls, listCalls int
+	// historyStatus overrides the answer of users.history.list; 0 means 200.
+	historyStatus int
+	// changed lists the conversation IDs the history reports, empty when the
+	// check should find nothing specific.
+	changed []string
+
+	profileCalls, labelCalls, listCalls, historyCalls int
 
 	profileGate    chan struct{}
 	profileStarted chan struct{}
@@ -40,6 +47,7 @@ func newChangesService(t *testing.T) (*Service, *changesServer) {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/users/me/profile", s.profile(t))
+	mux.HandleFunc("/users/me/history", s.history(t))
 	mux.HandleFunc("/users/me/labels", s.labels(t))
 	mux.HandleFunc("/users/me/threads", s.threads(t))
 	mux.HandleFunc("/batch", s.batch.handler(t))
@@ -86,8 +94,38 @@ func (s *changesServer) count(endpoint string) int {
 		return s.labelCalls
 	case "threads":
 		return s.listCalls
+	case "history":
+		return s.historyCalls
 	}
 	return -1
+}
+
+// history answers users.history.list with the conversations the test named and
+// the current history id, which is what the check turns into the new baseline.
+func (s *changesServer) history(t *testing.T) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		s.historyCalls++
+		status, id := s.historyStatus, s.historyID
+		changed := append([]string(nil), s.changed...)
+		s.mu.Unlock()
+		if status != 0 && status != http.StatusOK {
+			writeErrorJSON(t, w, status,
+				`{"error":{"code":`+strconv.Itoa(status)+`,"message":"Requested entity was not found."}}`)
+			return
+		}
+		var body strings.Builder
+		body.WriteString(`{"historyId":"` + id + `","history":[`)
+		for i, threadID := range changed {
+			if i > 0 {
+				body.WriteString(",")
+			}
+			body.WriteString(`{"id":"` + id + `","messages":[{"threadId":"` + threadID + `"}]}`)
+		}
+		body.WriteString(`]}`)
+		writeJSON(t, w, body.String())
+	}
 }
 
 func (s *changesServer) profile(t *testing.T) http.HandlerFunc {

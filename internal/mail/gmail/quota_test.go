@@ -176,3 +176,45 @@ func fakeResponse(status int, body string) *http.Response {
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}
 }
+
+// TestClientRetriesARetryableAnswer checks a 500 is sent again and the caller
+// sees the retry's success instead of the first failure.
+func TestClientRetriesARetryableAnswer(t *testing.T) {
+	var calls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/me/labels", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			writeErrorJSON(t, w, http.StatusInternalServerError, `{"error":{"code":500,"message":"boom"}}`)
+			return
+		}
+		t.Helper()
+		writeJSON(t, w, `{"labels":[]}`)
+	})
+	svc, _ := newTestService(t, mux)
+
+	if _, err := svc.Folders(context.Background()); err != nil {
+		t.Fatalf("Folders: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2: one failure and one retry", calls)
+	}
+}
+
+// TestClientGivesUpAfterTheRetryBudget checks the loop is bounded.
+func TestClientGivesUpAfterTheRetryBudget(t *testing.T) {
+	var calls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/me/labels", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		writeErrorJSON(t, w, http.StatusInternalServerError, `{"error":{"code":500,"message":"boom"}}`)
+	})
+	svc, _ := newTestService(t, mux)
+
+	if _, err := svc.Folders(context.Background()); err == nil {
+		t.Fatal("Folders succeeded although every attempt failed")
+	}
+	if want := retryAttempts + 1; calls != want {
+		t.Fatalf("calls = %d, want %d", calls, want)
+	}
+}
