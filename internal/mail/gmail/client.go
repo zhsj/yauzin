@@ -364,7 +364,8 @@ func (c *client) requestOnce(ctx context.Context, op, method, base, path string,
 // returned spend rides on the request log line, so no separate quota line is
 // needed after the call; a request that has to wait is reported at INFO before
 // the wait starts, because the request line is DEBUG and a user watching a
-// stalled request sees neither.
+// stalled request sees neither. A request whose wait does not fit its remaining
+// time is refused before that line: nothing waited, so nothing is logged.
 func (c *client) reserveQuota(ctx context.Context, op string, units float64) (quotaSpend, error) {
 	account := logAccount(c.accountID)
 	spend, err := c.budget.reserve(ctx, units, classOf(op), func(w quotaWait) {

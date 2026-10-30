@@ -304,7 +304,28 @@ var (
 	// account is over its rate limit. It is usually transient; the backend
 	// retries on its own before it reports this.
 	ErrRateLimited = errors.New("mail: rate limited")
+	// ErrQuotaWait reports that a request was never sent: the quota it needs
+	// cannot be freed within the time the request has left, so the backend
+	// refused to wait for it.
+	ErrQuotaWait = errors.New("mail: quota wait exceeds the request deadline")
 )
+
+// QuotaWaitError reports a request abandoned because its own quota budget
+// needed longer to free the units than the request had left. Wait is the pause
+// the backend refused to take and Left the time the request was given; the two
+// are for logs only, because the UI renders its own sentence from Wait.
+type QuotaWaitError struct {
+	Wait time.Duration
+	Left time.Duration
+}
+
+func (e *QuotaWaitError) Error() string {
+	return fmt.Sprintf("mail: quota needs %s, more than the %s left", e.Wait, e.Left)
+}
+
+// Unwrap makes errors.Is(err, ErrQuotaWait) hold for callers that only need the
+// category.
+func (e *QuotaWaitError) Unwrap() error { return ErrQuotaWait }
 
 // Progress is how far one transfer has come. Total is the expected number of
 // bytes and is not positive when the backend cannot tell; Done never exceeds a

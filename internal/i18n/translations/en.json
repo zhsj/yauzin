@@ -219,6 +219,7 @@
   "error.invalidArgument": "The request was rejected. Check the recipients and try again.",
   "error.unauthorized": "This account has to be authorized again.",
   "error.rateLimited": "Too many requests right now. Please try again in a moment.",
+  "error.quotaWait": "Quota is used up. Try again in {{.Seconds}} seconds.",
   "error.authDenied": "Authorization was cancelled.",
   "error.authTimeout": "The browser did not finish the authorization in time.",
   "error.smtpAuth": "The sending server rejected the login. Check the username and password.",

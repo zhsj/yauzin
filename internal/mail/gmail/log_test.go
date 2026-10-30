@@ -291,6 +291,43 @@ func TestQuotaWaitIsLoggedBeforeTheRequest(t *testing.T) {
 	}
 }
 
+// TestQuotaGiveUpLogsNoWait pins that a request refused because it cannot wait
+// long enough never writes the INFO wait line: nothing waited, the caller
+// reports the failure.
+func TestQuotaGiveUpLogsNoWait(t *testing.T) {
+	buf := captureLogs(t, slog.LevelDebug)
+	calls := 0
+	svc, _ := newTestService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		writeJSON(t, w, `{"labels":[]}`)
+	}), withQuotaPerMinute(600))
+	// The deadlines below are real ones, so the injectable clock starts from now.
+	clock := newFakeClock()
+	clock.at = time.Now()
+	svc.c.budget.now = clock.now
+	svc.c.budget.sleep = clock.sleep
+	// Fill the window so the next call would have to wait a whole span.
+	if _, err := svc.c.budget.reserve(context.Background(), 570, classInteractive, nil); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+
+	ctx, cancel := context.WithDeadline(context.Background(), clock.at.Add(5*time.Second))
+	defer cancel()
+	if _, err := svc.Folders(ctx); !errors.Is(err, mail.ErrQuotaWait) {
+		t.Fatalf("Folders = %v, want mail.ErrQuotaWait", err)
+	}
+
+	if n := len(quotaLines(buf, "gmail quota wait")); n != 0 {
+		t.Errorf("a request that gave up still logged a wait (%d)", n)
+	}
+	if n := len(quotaLines(buf, "gmail request")); n != 0 {
+		t.Errorf("a request that gave up still logged a request (%d)", n)
+	}
+	if calls != 0 {
+		t.Errorf("server saw %d requests, want none", calls)
+	}
+}
+
 // TestBackgroundQuotaSkipIsLogged checks a dropped background request still
 // leaves a trace, now with the wait it refused to take.
 func TestBackgroundQuotaSkipIsLogged(t *testing.T) {

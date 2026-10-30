@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
@@ -29,6 +30,17 @@ func TestErrorTextMapsCategories(t *testing.T) {
 		{"unsupported", wrapped(mail.ErrUnsupported), i18n.T("error.unsupported")},
 		{"invalid argument", wrapped(mail.ErrInvalidArgument), i18n.T("error.invalidArgument")},
 		{"unauthorized", wrapped(mail.ErrUnauthorized), i18n.T("error.unauthorized")},
+		{
+			"quota wait",
+			wrapped(&mail.QuotaWaitError{Wait: 45 * time.Second, Left: 29 * time.Second}),
+			i18n.T("error.quotaWait", map[string]string{"Seconds": "45"}),
+		},
+		{
+			// The wait is rounded up so the user never retries too early.
+			"quota wait under a second",
+			wrapped(&mail.QuotaWaitError{Wait: 500 * time.Millisecond}),
+			i18n.T("error.quotaWait", map[string]string{"Seconds": "1"}),
+		},
 		{"unknown", errors.New("dial tcp 127.0.0.1:993: refused"), "dial tcp 127.0.0.1:993: refused"},
 	}
 	for _, tt := range tests {

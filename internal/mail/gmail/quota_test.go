@@ -200,6 +200,58 @@ func TestBudgetHonoursContext(t *testing.T) {
 	}
 }
 
+// TestBudgetGivesUpWhenTheWaitOutlastsTheDeadline pins the fail-fast rule: a
+// request whose quota needs longer than the time it has left is refused at
+// once instead of sleeping until its context expires, and the error carries the
+// pause the window still needed so the UI can say when to come back.
+func TestBudgetGivesUpWhenTheWaitOutlastsTheDeadline(t *testing.T) {
+	// The deadlines below are real ones the context compares against, so the
+	// injectable clock has to start from now as well.
+	clock := newFakeClock()
+	clock.at = time.Now()
+	b := newBudget(600, clock.now, clock.sleep)
+	if _, err := b.reserve(context.Background(), b.limit, classInteractive, nil); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	start := clock.at
+
+	var waits int
+	report := func(quotaWait) { waits++ }
+	ctx, cancel := context.WithDeadline(context.Background(), start.Add(10*time.Second))
+	defer cancel()
+	spend, err := b.reserve(ctx, 100, classInteractive, report)
+
+	var wait *mail.QuotaWaitError
+	if !errors.As(err, &wait) {
+		t.Fatalf("reserve = %v, want *mail.QuotaWaitError", err)
+	}
+	if !errors.Is(err, mail.ErrQuotaWait) {
+		t.Fatalf("reserve = %v, want mail.ErrQuotaWait", err)
+	}
+	if wait.Wait != quotaWindow || wait.Left != 10*time.Second {
+		t.Fatalf("give-up = %+v, want a %v wait against %v left", wait, quotaWindow, 10*time.Second)
+	}
+	if spend.waited != 0 {
+		t.Fatalf("waited = %v, want no sleep", spend.waited)
+	}
+	if !clock.at.Equal(start) {
+		t.Fatalf("clock moved to %v: the request slept anyway", clock.at)
+	}
+	if waits != 0 {
+		t.Fatalf("waits reported = %d, want none for a request that gave up", waits)
+	}
+
+	// The same wait is accepted once the request has the time to pay for it.
+	longCtx, longCancel := context.WithDeadline(context.Background(), start.Add(quotaWindow+time.Second))
+	defer longCancel()
+	if _, err := b.reserve(longCtx, 100, classInteractive, report); err != nil {
+		t.Fatalf("reserve with enough time: %v", err)
+	}
+	if waits != 1 {
+		t.Fatalf("waits reported = %d, want 1", waits)
+	}
+}
+
 // TestClassOfYieldsOnlyTheChecks pins which calls the background loop owns.
 func TestClassOfYieldsOnlyTheChecks(t *testing.T) {
 	if got := classOf("users.getProfile"); got != classBackground {

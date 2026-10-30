@@ -2,6 +2,8 @@ package ui
 
 import (
 	"errors"
+	"math"
+	"strconv"
 
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
@@ -29,6 +31,8 @@ func errorText(err error) string {
 		// The backend already retried with a backoff; what is left is a request
 		// the user can simply repeat a little later.
 		return i18n.T("error.rateLimited")
+	case errors.Is(err, mail.ErrQuotaWait):
+		return quotaWaitText(err)
 	case errors.Is(err, smtp.ErrAuth):
 		// The sending server refused the credentials: the protocol sentence
 		// below it is only noise for the user.
@@ -37,4 +41,19 @@ func errorText(err error) string {
 	// Anything else is a transport or filesystem failure; its text is the only
 	// detail the user can act on.
 	return err.Error()
+}
+
+// quotaWaitText says how long the account's quota needs before the request can
+// be sent again. The budget already refused to sit on the wait, so the number
+// tells the user when a retry will work instead of when the request expired.
+func quotaWaitText(err error) string {
+	var wait *mail.QuotaWaitError
+	if !errors.As(err, &wait) {
+		return i18n.T("error.rateLimited")
+	}
+	seconds := int(math.Ceil(wait.Wait.Seconds()))
+	if seconds < 1 {
+		seconds = 1
+	}
+	return i18n.T("error.quotaWait", map[string]string{"Seconds": strconv.Itoa(seconds)})
 }

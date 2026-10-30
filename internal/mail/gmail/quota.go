@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/zhsj/yauzin/internal/mail"
 )
 
 // Gmail bills quota units per method call and does not discount a batch: every
@@ -273,7 +275,9 @@ func (b *budget) waitFor(now int64, need float64) time.Duration {
 
 // reserve spends units, waiting for the window to slide when it is full. A
 // background request that would wait longer than budgetWaitLimit is dropped
-// with errBudgetSkip.
+// with errBudgetSkip, and any request whose wait does not fit the time it has
+// left is refused with a *mail.QuotaWaitError instead of sleeping until its
+// context expires.
 //
 // onWait, when not nil, is called once, after the wait was decided and before
 // the first sleep: the loop below can wake up and wait again when another
@@ -297,7 +301,8 @@ func (b *budget) reserve(ctx context.Context, units float64, class costClass, on
 	notified := false
 	for {
 		b.mu.Lock()
-		now := b.now().Unix()
+		at := b.now()
+		now := at.Unix()
 		used := b.spent(now)
 		if used+units <= b.limit {
 			b.spend(now, units)
@@ -314,6 +319,14 @@ func (b *budget) reserve(ctx context.Context, units float64, class costClass, on
 		}
 		if class == classBackground && spend.waited+wait > budgetWaitLimit {
 			return spend, errBudgetSkip
+		}
+		// A wait that fills what is left of the caller's time cannot be paid
+		// back: the request would expire the moment it is sent, so it is
+		// refused now instead of stalling the caller for nothing.
+		if deadline, ok := ctx.Deadline(); ok {
+			if left := deadline.Sub(at); spend.waited+wait >= left {
+				return spend, &mail.QuotaWaitError{Wait: wait, Left: left}
+			}
 		}
 		if !notified && onWait != nil {
 			onWait(quotaWait{units: units, used: used, capacity: capacity, estimate: wait})
