@@ -159,6 +159,18 @@ func (c *lruCache[V]) setLocked(key string, value V) {
 	}
 }
 
+// snapshot copies the cached entries in recency order, so a caller can scan the
+// cache without holding its lock while other requests keep using it.
+func (c *lruCache[V]) snapshot() []lruEntry[V] {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]lruEntry[V], 0, len(c.m))
+	for el := c.ll.Front(); el != nil; el = el.Next() {
+		out = append(out, *el.Value.(*lruEntry[V]))
+	}
+	return out
+}
+
 // remove drops the named entries and advances the generation, so a response
 // still in flight cannot write a row back that the mailbox already changed.
 // Keys that are not cached are ignored.
@@ -261,6 +273,13 @@ func (sc *serviceCache) clear() {
 func (sc *serviceCache) dropPages() {
 	sc.pages.clear()
 	sc.search.clear()
+	sc.dropFolders()
+}
+
+// dropFolders drops the label names and their unread and total counters. They
+// are cheap to read again (one unit per label), which is why a write that only
+// changes a flag can keep the rows and the pages.
+func (sc *serviceCache) dropFolders() {
 	sc.folders.clear()
 	sc.details.clear()
 }
@@ -273,6 +292,100 @@ func (sc *serviceCache) invalidateThreads(ids []string) {
 	sc.bodies.remove(ids...)
 	sc.dropPages()
 	sc.gone.clear()
+}
+
+// threadsForMessages maps message IDs back to the conversations the row cache
+// describes. whole is true when every ID is covered and the IDs cover whole
+// conversations, which is what makes a thread-level call equivalent to writing
+// each message on its own; anything less has to fall back to the message calls.
+func (sc *serviceCache) threadsForMessages(ids []string) (threads []string, whole bool) {
+	wanted := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		wanted[id] = struct{}{}
+	}
+	var matched []lruEntry[mail.ThreadSummary]
+	covered := 0
+	for _, e := range sc.rows.snapshot() {
+		hits := 0
+		for _, mid := range e.value.MessageIDs {
+			if _, ok := wanted[mid]; ok {
+				hits++
+			}
+		}
+		if hits == 0 {
+			continue
+		}
+		matched = append(matched, e)
+		covered += hits
+	}
+	if covered != len(wanted) {
+		return nil, false
+	}
+	for _, e := range matched {
+		for _, mid := range e.value.MessageIDs {
+			if _, ok := wanted[mid]; !ok {
+				// Part of this conversation is not in the write: a thread call
+				// would touch more than the caller asked for.
+				return nil, false
+			}
+		}
+		threads = append(threads, e.key)
+	}
+	return threads, true
+}
+
+// applyFlag patches the cached rows after a flag write. The write already told
+// us the resulting state, so reading the rows back (40 units each) would only
+// confirm it. A conversation with no cached row is left alone: the next listing
+// fetches it.
+func (sc *serviceCache) applyFlag(threadIDs []string, flag mail.Flag, on bool) {
+	gen := sc.rows.epoch()
+	for _, id := range threadIDs {
+		row, ok := sc.rows.get(id)
+		if !ok {
+			continue
+		}
+		switch flag {
+		case mail.FlagRead:
+			if on {
+				row.UnreadCount = 0
+				row.Labels = labelsWithout(row.Labels, labelUnread)
+			} else {
+				row.UnreadCount = max(row.MessageCount, 1)
+				row.Labels = labelsWith(row.Labels, labelUnread)
+			}
+		case mail.FlagStarred:
+			row.Starred = on
+			if on {
+				row.Labels = labelsWith(row.Labels, labelStarred)
+			} else {
+				row.Labels = labelsWithout(row.Labels, labelStarred)
+			}
+		}
+		sc.rows.setAt(gen, id, row)
+	}
+}
+
+// labelsWith returns labels with id present.
+func labelsWith(labels []string, id string) []string {
+	if slices.Contains(labels, id) {
+		return labels
+	}
+	return append(slices.Clone(labels), id)
+}
+
+// labelsWithout returns labels with id removed.
+func labelsWithout(labels []string, id string) []string {
+	if !slices.Contains(labels, id) {
+		return labels
+	}
+	out := make([]string, 0, len(labels))
+	for _, label := range labels {
+		if label != id {
+			out = append(out, label)
+		}
+	}
+	return out
 }
 
 // cloneThreadPage deep-copies a page so a caller mutating the returned rows

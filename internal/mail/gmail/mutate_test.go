@@ -174,6 +174,17 @@ func newMutationService(t *testing.T, batch *writeBatchServer, mods *modifyRecor
 		// Gmail answers a label-only batchModify with an empty 204.
 		w.WriteHeader(http.StatusNoContent)
 	})
+	// A single message is written with messages.modify, which names its target
+	// in the path instead of the body.
+	mux.HandleFunc("/users/me/messages/", func(w http.ResponseWriter, r *http.Request) {
+		target := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/users/me/messages/"), "/modify")
+		var req labelRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("messages.modify body: %v", err)
+		}
+		mods.add(modifyRequest{IDs: []string{target}, AddLabelIDs: req.AddLabelIDs, RemoveLabelIDs: req.RemoveLabelIDs})
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("/batch", batch.handler(t))
 	svc, _ := newTestService(t, mux)
 	return svc
@@ -399,6 +410,9 @@ func TestWriteClearsTheReadCache(t *testing.T) {
 	mux.HandleFunc("/users/me/messages/batchModify", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("/users/me/messages/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
 	svc, _ := newTestService(t, mux)
 
 	ctx := context.Background()
@@ -513,4 +527,159 @@ func nextPart(t *testing.T, mr *multipart.Reader) *multipart.Part {
 		t.Fatalf("next part: %v", err)
 	}
 	return part
+}
+
+// threadWriteServer records the conversation-level writes and waits for the
+// message-level fallback, which this mux does not serve: a test that reaches it
+// fails on the 404.
+type threadWriteServer struct {
+	mu       sync.Mutex
+	modified []string
+	trashed  []string
+	batches  int
+}
+
+func (s *threadWriteServer) handler(t *testing.T) http.Handler {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/me/threads/", func(w http.ResponseWriter, r *http.Request) {
+		id, action, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/users/me/threads/"), "/")
+		if !ok {
+			t.Errorf("thread write path = %q", r.URL.Path)
+			return
+		}
+		s.mu.Lock()
+		switch action {
+		case "modify":
+			s.modified = append(s.modified, id)
+		case "trash":
+			s.trashed = append(s.trashed, id)
+		default:
+			t.Errorf("unexpected thread action %q", action)
+		}
+		s.mu.Unlock()
+		if action == "trash" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		writeJSON(t, w, `{}`)
+	})
+	mux.HandleFunc("/users/me/messages/batchModify", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		s.batches++
+		s.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	return mux
+}
+
+func (s *threadWriteServer) counts() (modified, trashed []string, batches int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.modified...), append([]string(nil), s.trashed...), s.batches
+}
+
+// seedRow puts a conversation in the row cache the way a listing would.
+func seedRow(svc *Service, id string, messageIDs ...string) {
+	svc.cache.rows.set(id, mail.ThreadSummary{
+		ID:           id,
+		MessageCount: len(messageIDs),
+		MessageIDs:   messageIDs,
+		UnreadCount:  len(messageIDs),
+		Labels:       []string{labelInbox, labelUnread},
+	})
+}
+
+// TestSetFlagPatchesTheCachedRow pins the write that pays 10 units instead of
+// 50 and then does not read the row back: the row cache is updated in place and
+// the page stays, so the follow-up listing costs nothing.
+func TestSetFlagPatchesTheCachedRow(t *testing.T) {
+	srv := &threadWriteServer{}
+	svc, _ := newTestService(t, srv.handler(t))
+	seedRow(svc, "t1", "t1-m0", "t1-m1")
+	svc.cache.pages.set(threadsCacheKey(labelInbox, "", 20), pageEntry{IDs: []string{"t1"}, Total: 1})
+
+	if err := svc.SetFlag(context.Background(), []string{"t1-m0", "t1-m1"}, mail.FlagRead, true); err != nil {
+		t.Fatalf("SetFlag: %v", err)
+	}
+	modified, _, batches := srv.counts()
+	if len(modified) != 1 || modified[0] != "t1" {
+		t.Fatalf("thread writes = %v, want one threads.modify on t1", modified)
+	}
+	if batches != 0 {
+		t.Fatalf("batchModify calls = %d, want 0: one conversation is cheaper on the thread call", batches)
+	}
+
+	page, err := svc.ListThreads(context.Background(), mail.ListRequest{FolderID: "INBOX", Limit: 20})
+	if err != nil {
+		t.Fatalf("ListThreads: %v", err)
+	}
+	if len(page.Threads) != 1 {
+		t.Fatalf("threads = %d, want 1", len(page.Threads))
+	}
+	row := page.Threads[0]
+	if row.UnreadCount != 0 || slices.Contains(row.Labels, labelUnread) {
+		t.Fatalf("row = %+v, want it read", row)
+	}
+}
+
+// TestArchiveUsesOneThreadCall checks a whole conversation is moved with the
+// 10-unit thread call and that its cache entries are dropped afterwards.
+func TestArchiveUsesOneThreadCall(t *testing.T) {
+	srv := &threadWriteServer{}
+	svc, _ := newTestService(t, srv.handler(t))
+	seedRow(svc, "t1", "t1-m0", "t1-m1")
+	svc.cache.pages.set(threadsCacheKey(labelInbox, "", 20), pageEntry{IDs: []string{"t1"}, Total: 1})
+
+	if err := svc.Archive(context.Background(), []string{"t1-m0", "t1-m1"}); err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+	modified, _, batches := srv.counts()
+	if len(modified) != 1 || modified[0] != "t1" {
+		t.Fatalf("thread writes = %v, want one threads.modify on t1", modified)
+	}
+	if batches != 0 {
+		t.Fatalf("batchModify calls = %d, want 0", batches)
+	}
+	if _, ok := svc.cache.rows.get("t1"); ok {
+		t.Fatal("the archived conversation is still cached")
+	}
+	if _, ok := svc.cache.pages.get(threadsCacheKey(labelInbox, "", 20)); ok {
+		t.Fatal("the page is still cached after the conversation left the folder")
+	}
+}
+
+// TestDeleteTrashesAWholeThread checks the 20-unit thread trash replaces one
+// 20-unit message call per message.
+func TestDeleteTrashesAWholeThread(t *testing.T) {
+	srv := &threadWriteServer{}
+	svc, _ := newTestService(t, srv.handler(t))
+	seedRow(svc, "t1", "t1-m0", "t1-m1")
+
+	if err := svc.Delete(context.Background(), []string{"t1-m0", "t1-m1"}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	_, trashed, _ := srv.counts()
+	if len(trashed) != 1 || trashed[0] != "t1" {
+		t.Fatalf("thread trash calls = %v, want one on t1", trashed)
+	}
+}
+
+// TestWriteWithoutACachedRowFallsBack covers a conversation the cache cannot
+// describe: the label change goes out per message, and the cache is dropped
+// rather than patched with a guess.
+func TestWriteWithoutACachedRowFallsBack(t *testing.T) {
+	mods := &modifyRecorder{}
+	svc := newMutationService(t, &writeBatchServer{}, mods)
+
+	if err := svc.Archive(context.Background(), []string{"m1", "m2"}); err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+	calls := mods.calls()
+	if len(calls) != 1 || len(calls[0].IDs) != 2 {
+		t.Fatalf("batchModify calls = %+v, want one for both messages", calls)
+	}
+	if !slices.Equal(calls[0].RemoveLabelIDs, []string{labelInbox}) {
+		t.Fatalf("remove = %v, want INBOX", calls[0].RemoveLabelIDs)
+	}
 }
