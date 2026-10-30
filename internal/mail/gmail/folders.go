@@ -71,7 +71,7 @@ func (s *Service) Folders(ctx context.Context) ([]mail.Folder, error) {
 		}
 	}
 
-	entries := s.folders(selected, specs)
+	entries := s.foldersFrom(selected, specs)
 	s.cache.folders.setAt(gen, cacheKeyFolders, entries)
 	return slices.Clone(entries), nil
 }
@@ -128,8 +128,9 @@ func (s *Service) FolderDetails(ctx context.Context, folders []mail.Folder) ([]m
 	return out, nil
 }
 
-// folders assembles the sidebar entries from the labels labels.list returned.
-func (s *Service) folders(selected []*Label, specs map[string]folderSpec) []mail.Folder {
+// foldersFrom assembles the sidebar entries from the labels labels.list
+// returned.
+func (s *Service) foldersFrom(selected []*Label, specs map[string]folderSpec) []mail.Folder {
 	out := make([]mail.Folder, 0, len(selected))
 	for _, l := range selected {
 		if spec, ok := specs[l.ID]; ok {
