@@ -139,9 +139,11 @@ func TestSearchThreadsAreCached(t *testing.T) {
 	}
 }
 
-// TestSearchAndListCachesAreSeparate keeps the two views from answering for one
+// TestSearchAndListPagesAreSeparate keeps the two views from answering for one
 // another: a cached search must not serve a folder page or the other way round.
-func TestSearchAndListCachesAreSeparate(t *testing.T) {
+// The rows are shared, which is the point of caching them per conversation: the
+// conversation the search already described costs nothing in the folder page.
+func TestSearchAndListPagesAreSeparate(t *testing.T) {
 	var listCalls int
 	batch := &threadBatchServer{threads: map[string]string{"t1": t1Body}}
 	svc := newThreadService(t, batch, func(w http.ResponseWriter, r *http.Request) {
@@ -160,8 +162,8 @@ func TestSearchAndListCachesAreSeparate(t *testing.T) {
 	if listCalls != 2 {
 		t.Fatalf("threads.list calls = %d, want one per view", listCalls)
 	}
-	if got := batch.calls(); len(got) != 2 {
-		t.Fatalf("batch requests = %d, want one per view", len(got))
+	if got := batch.calls(); len(got) != 1 {
+		t.Fatalf("batch requests = %d, want one: the row is shared between views", len(got))
 	}
 }
 

@@ -11,11 +11,9 @@ package gmail
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
@@ -299,6 +297,10 @@ func (s *Service) folders(selected []*Label, specs map[string]folderSpec) []mail
 }
 
 // ListThreads returns one page of conversations of one folder, newest first.
+//
+// A page the cache still holds is assembled from the row cache and costs no
+// request at all; a page that has to be listed costs the threads.list call plus
+// a threads.get for every row the cache is missing.
 func (s *Service) ListThreads(ctx context.Context, req mail.ListRequest) (mail.ThreadPage, error) {
 	labelID, err := labelIDFor(req.FolderID)
 	if err != nil {
@@ -306,22 +308,22 @@ func (s *Service) ListThreads(ctx context.Context, req mail.ListRequest) (mail.T
 	}
 	limit := pageLimit(req.Limit)
 	key := threadsCacheKey(labelID, req.PageToken, limit)
-	if cached, ok := s.cache.threads.get(key); ok {
-		return cloneThreadPage(cached), nil
+	if page, ok := s.cache.pages.get(key); ok {
+		return s.pageFromIDs(ctx, page)
 	}
 	if err := s.waitCheck(ctx); err != nil {
 		return mail.ThreadPage{}, err
 	}
-	if cached, ok := s.cache.threads.get(key); ok {
-		return cloneThreadPage(cached), nil
+	if page, ok := s.cache.pages.get(key); ok {
+		return s.pageFromIDs(ctx, page)
 	}
-	gen := s.cache.threads.epoch()
+	gen := s.cache.pages.epoch()
 	page, err := s.listThreads(ctx, labelID, "", req.PageToken, limit)
 	if err != nil {
 		return mail.ThreadPage{}, err
 	}
-	s.cache.threads.setAt(gen, key, page)
-	return cloneThreadPage(page), nil
+	s.cache.pages.setAt(gen, key, page)
+	return s.pageFromIDs(ctx, page)
 }
 
 // SearchThreads returns one page of conversations matching the query, newest
@@ -335,15 +337,15 @@ func (s *Service) SearchThreads(ctx context.Context, req mail.SearchRequest) (ma
 	}
 	limit := pageLimit(req.Limit)
 	key := searchCacheKey(query, req.PageToken, limit)
-	if cached, ok := s.cache.search.get(key); ok {
-		return cloneThreadPage(cached), nil
+	if page, ok := s.cache.search.get(key); ok {
+		return s.pageFromIDs(ctx, page)
 	}
 	if err := s.waitCheck(ctx); err != nil {
 		return mail.ThreadPage{}, err
 	}
 	// A read that waited may have been beaten to the entry by another one.
-	if cached, ok := s.cache.search.get(key); ok {
-		return cloneThreadPage(cached), nil
+	if page, ok := s.cache.search.get(key); ok {
+		return s.pageFromIDs(ctx, page)
 	}
 	gen := s.cache.search.epoch()
 	page, err := s.listThreads(ctx, "", query, req.PageToken, limit)
@@ -351,7 +353,7 @@ func (s *Service) SearchThreads(ctx context.Context, req mail.SearchRequest) (ma
 		return mail.ThreadPage{}, err
 	}
 	s.cache.search.setAt(gen, key, page)
-	return cloneThreadPage(page), nil
+	return s.pageFromIDs(ctx, page)
 }
 
 // pageLimit clamps a requested page size to the backend's bounds.
@@ -365,15 +367,15 @@ func pageLimit(limit int) int {
 	return limit
 }
 
-// listThreads performs one threads.list call and fills the rows of the page. An
-// empty labelID does not filter by folder, which is what a search needs; an
-// empty query browses the label instead.
+// listThreads performs one threads.list call and returns the conversation IDs
+// of the page. An empty labelID does not filter by folder, which is what a
+// search needs; an empty query browses the label instead.
 //
 // includeSpamTrash is raised for the spam and trash folders: the API leaves
 // both out of the results by default, so labelIds=SPAM or TRASH would come back
 // empty. A search keeps the default false, which is what limits it to mail that
 // is neither spam nor in the trash.
-func (s *Service) listThreads(ctx context.Context, labelID, query, pageToken string, limit int) (mail.ThreadPage, error) {
+func (s *Service) listThreads(ctx context.Context, labelID, query, pageToken string, limit int) (pageEntry, error) {
 	q := url.Values{}
 	q.Set("maxResults", strconv.Itoa(limit))
 	q.Set("fields", "nextPageToken,resultSizeEstimate,threads/id")
@@ -392,94 +394,65 @@ func (s *Service) listThreads(ctx context.Context, labelID, query, pageToken str
 
 	var list ListThreadsResponse
 	if err := s.c.do(ctx, "threads.list", "GET", "/users/me/threads", q, &list); err != nil {
-		return mail.ThreadPage{}, err
+		return pageEntry{}, err
 	}
 
-	threads, err := s.fetchThreadMetadata(ctx, list.Threads)
-	if err != nil {
-		return mail.ThreadPage{}, err
+	ids := make([]string, 0, len(list.Threads))
+	for _, th := range list.Threads {
+		if th == nil || th.ID == "" {
+			continue
+		}
+		ids = append(ids, th.ID)
 	}
-
 	total := int(list.ResultSizeEstimate)
-	if list.ResultSizeEstimate <= 0 && len(list.Threads) > 0 {
+	if list.ResultSizeEstimate <= 0 && len(ids) > 0 {
 		// Gmail omits the estimate for some queries; the contract uses -1 to
 		// say the backend cannot tell.
 		total = -1
 	}
-	rows := make([]mail.ThreadSummary, 0, len(threads))
-	for _, th := range threads {
-		rows = append(rows, summarize(s.acc.ID, th))
-	}
-	return mail.ThreadPage{
-		Threads:       rows,
-		Total:         total,
-		NextPageToken: list.NextPageToken,
-	}, nil
-}
-
-// fetchThreadMetadata loads the messages of every listed conversation in one
-// batch request, keeping the list order. A conversation deleted between the two
-// calls is dropped instead of failing the whole page.
-func (s *Service) fetchThreadMetadata(ctx context.Context, refs []*Thread) ([]*Thread, error) {
-	if len(refs) == 0 {
-		return nil, nil
-	}
-	out := make([]*Thread, len(refs))
-	found := make([]bool, len(refs))
-	targets := make([]batchTarget, len(refs))
-	q := metadataQuery()
-	for i, ref := range refs {
-		targets[i] = batchTarget{path: "/users/me/threads/" + url.PathEscape(ref.ID), query: q}
-	}
-
-	// live returns the kept conversations, in list order, dropping the ones
-	// that were deleted between the list and the batch.
-	live := func() []*Thread {
-		rows := make([]*Thread, 0, len(refs))
-		for i := range out {
-			if found[i] {
-				rows = append(rows, out[i])
-			}
-		}
-		return rows
-	}
-
-	err := s.c.batchFetch(ctx, "threads.get", "/users/me/threads", targets, func(i int, resp *http.Response) error {
-		switch resp.StatusCode {
-		case http.StatusOK:
-		case http.StatusNotFound:
-			// The conversation was deleted between the list and the batch:
-			// drop the row and keep the rest of the page.
-			return nil
-		default:
-			detail, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
-			return fmt.Errorf("gmail threads.get %s: %s: %s",
-				refs[i].ID, http.StatusText(resp.StatusCode), strings.TrimSpace(string(detail)))
-		}
-		var th Thread
-		if err := json.NewDecoder(resp.Body).Decode(&th); err != nil {
-			return fmt.Errorf("gmail threads.get %s: decode response: %w", refs[i].ID, err)
-		}
-		out[i] = &th
-		found[i] = true
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return live(), nil
+	return pageEntry{IDs: ids, Total: total, NextPageToken: list.NextPageToken}, nil
 }
 
 // GetThread returns every message of one conversation, oldest first.
+//
+// The answer is cached for the few conversations the reader opened: a
+// threads.get with format=full costs 120 quota units, so reopening one the user
+// just read must not pay again. A conversation the list already described as a
+// single message is read as that message instead, which costs half.
 func (s *Service) GetThread(ctx context.Context, threadID string) ([]*mail.Message, error) {
 	if strings.TrimSpace(threadID) == "" {
 		return nil, mail.ErrInvalidArgument
 	}
+	if cached, ok := s.cache.bodies.get(threadID); ok {
+		return cloneMessages(cached), nil
+	}
+	gen := s.cache.bodies.epoch()
+	msgs, err := s.fetchThreadMessages(ctx, threadID)
+	if err != nil {
+		return nil, err
+	}
+	s.cache.bodies.setAt(gen, threadID, msgs)
+	return cloneMessages(msgs), nil
+}
+
+// fetchThreadMessages reads one whole conversation. A conversation the row
+// cache knows to hold a single message is fetched as that message: messages.get
+// costs 60 units, threads.get with format=full costs 120.
+func (s *Service) fetchThreadMessages(ctx context.Context, threadID string) ([]*mail.Message, error) {
+	if row, ok := s.cache.rows.get(threadID); ok && len(row.MessageIDs) == 1 {
+		q := url.Values{}
+		q.Set("format", "full")
+		var m Message
+		if err := s.c.do(ctx, "messages.get", "GET",
+			"/users/me/messages/"+url.PathEscape(row.MessageIDs[0]), q, &m); err != nil {
+			return nil, err
+		}
+		return []*mail.Message{s.message(&m)}, nil
+	}
 	q := url.Values{}
 	q.Set("format", "full")
 	var th Thread
-	err := s.c.do(ctx, "threads.get", "GET", "/users/me/threads/"+url.PathEscape(threadID), q, &th)
-	if err != nil {
+	if err := s.c.do(ctx, "threads.get", "GET", "/users/me/threads/"+url.PathEscape(threadID), q, &th); err != nil {
 		return nil, err
 	}
 	out := make([]*mail.Message, 0, len(th.Messages))
