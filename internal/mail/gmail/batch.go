@@ -95,55 +95,30 @@ func (c *client) batchChunk(ctx context.Context, op, endpoint string, targets []
 		return nil, fmt.Errorf("gmail %s batch: %w", op, err)
 	}
 	units := batchUnits(op, targets)
-	for attempt := 0; ; attempt++ {
+	fatal = c.retryLoop(ctx, op, func() error {
 		spend, err := c.reserveQuota(ctx, op, units)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		resp, err := c.sendBatchAuth(ctx, op, endpoint, targets, body, boundary, spend)
+		resp, err := c.sendAuthorized(ctx, op, func(token string) (*http.Response, error) {
+			return c.sendBatch(ctx, op, endpoint, targets, body, boundary, token, spend)
+		})
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if resp.StatusCode == http.StatusOK {
-			defer func() { _ = resp.Body.Close() }()
-			return parseBatch(resp, targets, op, handle)
+		if resp.StatusCode != http.StatusOK {
+			failure := apiError(op+" batch", resp)
+			_ = resp.Body.Close()
+			return failure
 		}
-		failure := apiError(op+" batch", resp)
-		_ = resp.Body.Close()
-		if attempt >= retryAttempts || !retryable(failure) {
-			return nil, failure
+		defer func() { _ = resp.Body.Close() }()
+		first, hard := parseBatch(resp, targets, op, handle)
+		if first != nil && firstErr == nil {
+			firstErr = first
 		}
-		slog.Debug("gmail retry",
-			"account", logAccount(c.accountID), "op", op, "attempt", attempt+1, "err", failure)
-		if waitErr := sleepContext(ctx, retryDelay(attempt)); waitErr != nil {
-			return nil, failure
-		}
-	}
-}
-
-// sendBatchAuth performs one authorized batch POST, refreshing the token once
-// when the server rejects it. The spend of the batch it prices is what its log
-// line reports, including on the refreshed retry.
-func (c *client) sendBatchAuth(ctx context.Context, op, endpoint string, targets []batchTarget, body []byte, boundary string, spend quotaSpend) (*http.Response, error) {
-	token, err := c.accessToken(ctx, false)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.sendBatch(ctx, op, endpoint, targets, body, boundary, token, spend)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusUnauthorized {
-		return resp, nil
-	}
-	// The server rejected a token the clock still considered valid: drop it and
-	// retry once, like a single call does.
-	_ = resp.Body.Close()
-	token, err = c.accessToken(ctx, true)
-	if err != nil {
-		return nil, err
-	}
-	return c.sendBatch(ctx, op, endpoint, targets, body, boundary, token, spend)
+		return hard
+	})
+	return firstErr, fatal
 }
 
 // batchUnits prices one batch: one unit for the envelope plus every embedded
@@ -224,7 +199,7 @@ func (c *client) sendBatch(ctx context.Context, op, endpoint string, targets []b
 	attrs = append(attrs, spend.logAttrs()...)
 	if err != nil {
 		slog.Debug("gmail batch", append(attrs, "err", err)...)
-		return nil, fmt.Errorf("gmail %s batch: %w", op, err)
+		return nil, err
 	}
 	slog.Debug("gmail batch", append(attrs, "status", resp.StatusCode)...)
 	return resp, nil

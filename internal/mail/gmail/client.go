@@ -34,8 +34,8 @@ const refreshSkew = 60 * time.Second
 // costs latency at the server, and the batch size stays bounded.
 const maxConcurrent = 3
 
-// retryAttempts bounds how often a rate-limited or failed call is sent again
-// before its error reaches the caller.
+// retryAttempts bounds how many times one call is sent again before its error
+// reaches the caller: a call is therefore sent at most retryAttempts+1 times.
 const retryAttempts = 3
 
 // retryBaseDelay is the first backoff step; every attempt doubles it and adds
@@ -293,55 +293,83 @@ func (c *client) doRequestProgress(ctx context.Context, op, method, base, path s
 	})
 }
 
+// retryLoop runs one call and, while the answer is worth another try, runs it
+// again after a jittered backoff. attempt reports what one send produced: only
+// a rate-limited or failed answer makes it return an error at all. The loop is
+// therefore the one place that knows how often a call is sent and how long the
+// next attempt waits; a cancelled context ends the wait with its own error.
+func (c *client) retryLoop(ctx context.Context, op string, attempt func() error) error {
+	for try := 0; ; try++ {
+		err := attempt()
+		if err == nil {
+			return nil
+		}
+		if try >= retryAttempts || !retryable(err) {
+			return err
+		}
+		slog.Debug("gmail retry",
+			"account", logAccount(c.accountID), "op", op, "attempt", try+1, "err", err)
+		if waitErr := sleepContext(ctx, retryDelay(try)); waitErr != nil {
+			return waitErr
+		}
+	}
+}
+
 // doRequestHandle performs one authorized request against one of the API roots
 // and hands a successful response to handle. A rate-limited or failed call is
 // sent again after a jittered backoff; the token refresh retry is separate and
 // happens once per attempt.
 func (c *client) doRequestHandle(ctx context.Context, op, method, base, path string, query url.Values, contentType string, body []byte, handle func(*http.Response) error) error {
-	for attempt := 0; ; attempt++ {
-		err := c.requestOnce(ctx, op, method, base, path, query, contentType, body, handle)
-		if err == nil {
-			return nil
-		}
-		if attempt >= retryAttempts || !retryable(err) {
-			return err
-		}
-		slog.Debug("gmail retry",
-			"account", logAccount(c.accountID), "op", op, "attempt", attempt+1, "err", err)
-		if waitErr := sleepContext(ctx, retryDelay(attempt)); waitErr != nil {
-			return err
-		}
-	}
+	return c.retryLoop(ctx, op, func() error {
+		return c.requestOnce(ctx, op, method, base, path, query, contentType, body, handle)
+	})
 }
 
-// requestOnce performs one authorized request, including the single token
-// refresh the server may ask for. It always closes the response body.
+// attempt sends one request with the given bearer token.
+type attempt func(token string) (*http.Response, error)
+
+// sendAuthorized runs one attempt and, when the server rejects a token the
+// clock still considered valid, drops it and tries exactly once with a
+// refreshed one. The retry is free as far as the budget is concerned: the
+// caller already paid for the call, and the same reservation rides on both
+// attempts. The response comes back whatever its status; its body belongs to
+// the caller.
+func (c *client) sendAuthorized(ctx context.Context, op string, send attempt) (*http.Response, error) {
+	token, err := c.accessToken(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := send(token)
+	if err != nil {
+		return nil, fmt.Errorf("gmail %s: %w", op, err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		return resp, nil
+	}
+	_ = resp.Body.Close()
+	token, err = c.accessToken(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	resp, err = send(token)
+	if err != nil {
+		return nil, fmt.Errorf("gmail %s: %w", op, err)
+	}
+	return resp, nil
+}
+
+// requestOnce performs one authorized request and hands a successful response
+// to handle. It always closes the response body.
 func (c *client) requestOnce(ctx context.Context, op, method, base, path string, query url.Values, contentType string, body []byte, handle func(*http.Response) error) error {
 	spend, err := c.reserveQuota(ctx, op, methodUnits(op, query.Get("format")))
 	if err != nil {
 		return err
 	}
-	token, err := c.accessToken(ctx, false)
+	resp, err := c.sendAuthorized(ctx, op, func(token string) (*http.Response, error) {
+		return c.send(ctx, method, base, path, query, contentType, body, token, spend)
+	})
 	if err != nil {
 		return err
-	}
-	resp, err := c.send(ctx, method, base, path, query, contentType, body, token, spend)
-	if err != nil {
-		return fmt.Errorf("gmail %s: %w", op, err)
-	}
-	if resp.StatusCode == http.StatusUnauthorized {
-		// The server rejected a token the clock still considered valid. Drop it
-		// and try exactly once with a refreshed one, which the budget already
-		// paid for: the same spend goes on the retry's line.
-		_ = resp.Body.Close()
-		token, err = c.accessToken(ctx, true)
-		if err != nil {
-			return err
-		}
-		resp, err = c.send(ctx, method, base, path, query, contentType, body, token, spend)
-		if err != nil {
-			return fmt.Errorf("gmail %s: %w", op, err)
-		}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -488,31 +516,13 @@ func (c *client) sendRaw(ctx context.Context, method, rawURL string, headers htt
 	return resp, err
 }
 
-// sendHeaders performs one authorized request and refreshes the token once
-// when the server rejects it. The caller owns the response body. spend is the
-// reservation that request made, empty for a call the caller already paid for.
+// sendHeaders performs one authorized request whose headers the caller built.
+// The caller owns the response body. spend is the reservation that request
+// made, empty for a call the caller already paid for.
 func (c *client) sendHeaders(ctx context.Context, op, method, rawURL string, headers http.Header, body []byte, spend quotaSpend) (*http.Response, error) {
-	token, err := c.accessToken(ctx, false)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.sendRaw(ctx, method, rawURL, headers, body, token, spend)
-	if err != nil {
-		return nil, fmt.Errorf("gmail %s: %w", op, err)
-	}
-	if resp.StatusCode != http.StatusUnauthorized {
-		return resp, nil
-	}
-	_ = resp.Body.Close()
-	token, err = c.accessToken(ctx, true)
-	if err != nil {
-		return nil, err
-	}
-	resp, err = c.sendRaw(ctx, method, rawURL, headers, body, token, spend)
-	if err != nil {
-		return nil, fmt.Errorf("gmail %s: %w", op, err)
-	}
-	return resp, nil
+	return c.sendAuthorized(ctx, op, func(token string) (*http.Response, error) {
+		return c.sendRaw(ctx, method, rawURL, headers, body, token, spend)
+	})
 }
 
 // logRequest reports one Gmail API call at DEBUG. endpoint is the API path
