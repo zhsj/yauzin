@@ -300,17 +300,13 @@ func (c *client) doRequestHandle(ctx context.Context, op, method, base, path str
 // attempt sends one request with the given bearer token.
 type attempt func(token string) (*http.Response, error)
 
-// sendAuthorized runs one attempt and, when the server rejects a token the
+// sendAuthorized sends with token and, when the server rejects a token the
 // clock still considered valid, drops it and tries exactly once with a
 // refreshed one. The retry is free as far as the budget is concerned: the
 // caller already paid for the call, and the same reservation rides on both
 // attempts. The response comes back whatever its status; its body belongs to
 // the caller.
-func (c *client) sendAuthorized(ctx context.Context, op string, send attempt) (*http.Response, error) {
-	token, err := c.accessToken(ctx, false)
-	if err != nil {
-		return nil, err
-	}
+func (c *client) sendAuthorized(ctx context.Context, op, token string, send attempt) (*http.Response, error) {
 	resp, err := send(token)
 	if err != nil {
 		return nil, fmt.Errorf("gmail %s: %w", op, err)
@@ -319,11 +315,11 @@ func (c *client) sendAuthorized(ctx context.Context, op string, send attempt) (*
 		return resp, nil
 	}
 	_ = resp.Body.Close()
-	token, err = c.accessToken(ctx, true)
+	fresh, err := c.accessToken(ctx, true)
 	if err != nil {
 		return nil, err
 	}
-	resp, err = send(token)
+	resp, err = send(fresh)
 	if err != nil {
 		return nil, fmt.Errorf("gmail %s: %w", op, err)
 	}
@@ -333,11 +329,17 @@ func (c *client) sendAuthorized(ctx context.Context, op string, send attempt) (*
 // requestOnce performs one authorized request and hands a successful response
 // to handle. It always closes the response body.
 func (c *client) requestOnce(ctx context.Context, op, method, base, path string, query url.Values, contentType string, body []byte, handle func(*http.Response) error) error {
+	// The token comes first: a credential that cannot be read or refreshed must
+	// not pay for a call it never sends.
+	token, err := c.accessToken(ctx, false)
+	if err != nil {
+		return err
+	}
 	spend, err := c.reserveQuota(ctx, op, methodUnits(op, query.Get("format")))
 	if err != nil {
 		return err
 	}
-	resp, err := c.sendAuthorized(ctx, op, func(token string) (*http.Response, error) {
+	resp, err := c.sendAuthorized(ctx, op, token, func(token string) (*http.Response, error) {
 		return c.send(ctx, method, base, path, query, contentType, body, token, spend)
 	})
 	if err != nil {
@@ -467,7 +469,11 @@ func (c *client) sendRaw(ctx context.Context, method, rawURL string, headers htt
 // The caller owns the response body. spend is the reservation that request
 // made, empty for a call the caller already paid for.
 func (c *client) sendHeaders(ctx context.Context, op, method, rawURL string, headers http.Header, body []byte, spend quotaSpend) (*http.Response, error) {
-	return c.sendAuthorized(ctx, op, func(token string) (*http.Response, error) {
+	token, err := c.accessToken(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	return c.sendAuthorized(ctx, op, token, func(token string) (*http.Response, error) {
 		return c.sendRaw(ctx, method, rawURL, headers, body, token, spend)
 	})
 }

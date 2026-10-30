@@ -96,11 +96,15 @@ func (c *client) batchChunk(ctx context.Context, op, endpoint string, targets []
 	}
 	units := batchUnits(op, targets)
 	fatal = c.retryLoop(ctx, op, func() error {
+		token, err := c.accessToken(ctx, false)
+		if err != nil {
+			return err
+		}
 		spend, err := c.reserveQuota(ctx, op, units)
 		if err != nil {
 			return err
 		}
-		resp, err := c.sendAuthorized(ctx, op, func(token string) (*http.Response, error) {
+		resp, err := c.sendAuthorized(ctx, op, token, func(token string) (*http.Response, error) {
 			return c.sendBatch(ctx, op, endpoint, targets, body, boundary, token, spend)
 		})
 		if err != nil {

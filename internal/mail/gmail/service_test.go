@@ -337,6 +337,29 @@ func TestFoldersToleratesTheOnlyLabelBeingDeleted(t *testing.T) {
 	}
 }
 
+// TestMissingTokenCostsNothing pins the order of the two steps: a credential
+// that cannot be read must not spend the units of a call it never sends.
+func TestMissingTokenCostsNothing(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users/me/labels", func(w http.ResponseWriter, r *http.Request) {
+		t.Error("a request was sent without a token")
+	})
+	svc, store := newTestService(t, mux)
+	store.mu.Lock()
+	delete(store.tokens, testAccountID)
+	store.mu.Unlock()
+
+	if _, err := svc.Folders(context.Background()); !errors.Is(err, mail.ErrUnauthorized) {
+		t.Fatalf("Folders = %v, want ErrUnauthorized", err)
+	}
+	svc.c.budget.mu.Lock()
+	spent := svc.c.budget.capacity - svc.c.budget.tokens
+	svc.c.budget.mu.Unlock()
+	if spent != 0 {
+		t.Fatalf("budget spent %v units on a call that was never sent", spent)
+	}
+}
+
 func TestFoldersFailsWhenNoLabelDetailSucceeds(t *testing.T) {
 	statuses := make(map[string]int, len(folderDetails())+2)
 	for _, id := range []string{"INBOX", "STARRED", "SENT", "SPAM", "TRASH", "Label_1", "Label_2"} {
