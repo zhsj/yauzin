@@ -74,7 +74,6 @@ type client struct {
 	// and the shared default transport must not be closed, so close works off
 	// this field rather than off the http.Client it ended up with.
 	ownTransport *http.Transport
-	now          func() time.Time
 
 	refreshMu sync.Mutex
 
@@ -95,10 +94,8 @@ type options struct {
 	tokenURL       string
 	client         *http.Client
 	proxyURL       string
-	now            func() time.Time
 	maxConcurrent  int
 	quotaPerMinute float64
-	sleep          func(context.Context, time.Duration) error
 }
 
 // Option customizes a Service.
@@ -124,15 +121,6 @@ func WithProxyURL(raw string) Option {
 	return func(o *options) { o.proxyURL = raw }
 }
 
-// WithNow replaces the clock used for the token expiry check.
-func WithNow(now func() time.Time) Option {
-	return func(o *options) {
-		if now != nil {
-			o.now = now
-		}
-	}
-}
-
 // WithMaxConcurrent bounds how many requests of one account are in flight. One
 // restores the old fully serialized behaviour, which is the fallback when a
 // proxy or an account turns out to reject concurrent calls.
@@ -154,22 +142,11 @@ func withQuotaPerMinute(units float64) Option {
 	}
 }
 
-// withBudgetSleep replaces the wait a spent budget takes. Tests use it so a
-// paced request does not turn into a real pause.
-func withBudgetSleep(sleep func(context.Context, time.Duration) error) Option {
-	return func(o *options) {
-		if sleep != nil {
-			o.sleep = sleep
-		}
-	}
-}
-
 // newClient builds the REST client of one account.
 func newClient(accountID string, store Store, opts []Option) (*client, error) {
 	o := options{
 		baseURL:        defaultBaseURL,
 		tokenURL:       googleEndpoint.TokenURL,
-		now:            time.Now,
 		maxConcurrent:  maxConcurrent,
 		quotaPerMinute: quotaPerMinute,
 	}
@@ -190,9 +167,8 @@ func newClient(accountID string, store Store, opts []Option) (*client, error) {
 		tokenURL:  o.tokenURL,
 		store:     store,
 		http:      o.client,
-		now:       o.now,
 		reqSem:    make(chan struct{}, o.maxConcurrent),
-		budget:    newBudget(o.quotaPerMinute, o.now, o.sleep),
+		budget:    newBudget(o.quotaPerMinute, time.Now, nil),
 	}
 	if c.http == nil {
 		tr, err := proxyTransport(o.proxyURL)
@@ -582,7 +558,7 @@ func (c *client) accessToken(ctx context.Context, force bool) (string, error) {
 	// A token without an expiry is used as is: oauth2 treats a zero expiry as
 	// "never expires", and Google always sends expires_in, so this only
 	// affects hand-edited files.
-	if !force && tok.Valid() && (tok.Expiry.IsZero() || c.now().Before(tok.Expiry.Add(-refreshSkew))) {
+	if !force && tok.Valid() && (tok.Expiry.IsZero() || time.Now().Before(tok.Expiry.Add(-refreshSkew))) {
 		return tok.AccessToken, nil
 	}
 	if tok.RefreshToken == "" {
