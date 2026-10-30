@@ -353,7 +353,7 @@ func TestMissingTokenCostsNothing(t *testing.T) {
 		t.Fatalf("Folders = %v, want ErrUnauthorized", err)
 	}
 	svc.c.budget.mu.Lock()
-	spent := svc.c.budget.capacity - svc.c.budget.tokens
+	spent := svc.c.budget.spent(svc.c.budget.now().Unix())
 	svc.c.budget.mu.Unlock()
 	if spent != 0 {
 		t.Fatalf("budget spent %v units on a call that was never sent", spent)

@@ -108,8 +108,13 @@ Cloud 项目继续沿用旧配额，2026-05-01 及之后新建的项目适用新
 ## 5. 错误表现
 
 超限返回 `403`（`status: RESOURCE_EXHAUSTED`，`errors[].reason: rateLimitExceeded`，消息形如
-`User-rate limit exceeded`）或 `429`。yauzin 的 `client.apiError` 目前只把 `403 insufficientPermissions` 归为
-`ErrUnauthorized`，速率错误保持未分类并把服务端消息带进 `detail`，因此界面会原样显示这句英文。
+`User-rate limit exceeded`）或 `429`。yauzin 的 `client.apiError` 把 `403 insufficientPermissions` 归为
+`ErrUnauthorized`、把速率类 403 / 429 归为 `ErrRateLimited`（界面显示「请求过于频繁，请稍后重试」），其余 403
+（账号被停用等）保持未分类并把服务端消息带进 `detail`。
+
+错误里的 `window_start_time` 说明限额是按**固定 60 秒窗口**计的（两次错误的该字段正好相差 60 秒），窗口内累计
+6,000 单位即拒。因此客户端必须按「最近 60 秒已花」计数，不能用「容量 + 按秒补充」的令牌桶：后者在窗口开头花光容量、
+中途又补满再花一次，一个固定窗口内最多能花近两倍额度。这正是早期版本在日志显示 3,728/5,400 时就收到 403 的原因。
 
 ## 6. yauzin 的成本
 
@@ -137,13 +142,17 @@ Cloud 项目继续沿用旧配额，2026-05-01 及之后新建的项目适用新
 | 删除整页（逐封 trash） | `messages.trash` 子请求 | 20 × 邮件数 |
 | 发信 | `messages.send`（含 resumable 上传） | 100 |
 
-调度：`client` 在每次请求前按上表单价向本账号的令牌桶（6,000/分钟 × 0.9，按秒补充）预留额度；前台请求额度不足时等待（尊重 ctx），
-`getProfile` / `history.list` 这类后台请求最多等 2 秒便放弃本次、由下一轮补上。rate limit（403 `rateLimitExceeded` / 429）与 5xx
-按 1s / 2s / 4s 加抖动退避重试，最多 3 次。
+调度：`client` 在每次请求前按上表单价向本账号的**60 秒滑动窗口**（6,000/分钟 × 0.95 = 5,700，按秒分槽记录）预留额度。
+窗口算的是「最近 60 秒已经花了多少」：只要这笔花费加进去不超过 5,700 就立即放行，否则等到最老的花费滑出窗口再发。
+这对应服务端的固定 60 秒窗口——任意 60 秒内不超过 5,700，任何一个 6,000 的固定窗口都不会被撑破；令牌桶（容量 5,400、按秒补充）
+做不到这一点，它允许在一个固定窗口内先花光容量、中途补满后再花一次，这正是 403 的来源。前台请求额度不足时等待（尊重 ctx），
+`getProfile` / `history.list` 这类后台请求最多等 2 秒便放弃本次、由下一轮补上。
 
-每次请求的 DEBUG 日志行（`gmail request` / `gmail batch`）都带 `units`（本次调用或整批的花费）、`quota`（预留完成后的桶内已用/容量，
-容量 5,400）、`wait`（为等额度花的时间，0 也记），一条日志即可回答「这次请求贵不贵、桶里还剩多少」；后台被额度丢弃另记
-`gmail quota skip`。
+rate limit（403 `rateLimitExceeded` / 429）与 5xx 按 1s / 2s / 4s 加抖动退避重试，最多 3 次。
+
+每次请求的 DEBUG 日志行（`gmail request` / `gmail batch`）都带 `units`（本次调用或整批的花费）、`quota`（预留完成后最近 60 秒
+已花/窗口额度，满值 5,700）、`wait`（为等额度花的时间，0 也记），一条日志即可回答「这次请求贵不贵、这一分钟还剩多少」；
+后台被额度丢弃另记 `gmail quota skip`。
 
 换算结论（6,000 单位/分钟/用户）：
 

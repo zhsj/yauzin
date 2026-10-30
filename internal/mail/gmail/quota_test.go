@@ -43,37 +43,75 @@ func TestMethodUnitsMatchesTheQuotaTable(t *testing.T) {
 	}
 }
 
-// TestBudgetRefillsOverTime checks the bucket stops a burst it cannot afford
-// and lets it through once the minute has earned the units.
-func TestBudgetRefillsOverTime(t *testing.T) {
+// TestBudgetCountsTheSlidingWindow checks the counter stops a burst it cannot
+// afford and lets it through once the spend falls out of the trailing minute.
+func TestBudgetCountsTheSlidingWindow(t *testing.T) {
 	clock := newFakeClock()
 	perMinute := 6000.0
 	b := newBudget(perMinute, clock.now, clock.sleep)
+	limit := perMinute * quotaMargin
 
-	// The bucket starts full, so one page fits without waiting, and the spend
-	// reports the state the request left behind.
+	// The window is empty, so one page fits without waiting, and the spend
+	// reports what the window now holds.
 	spend, err := b.reserve(context.Background(), 1010, classInteractive)
 	if err != nil || spend.waited != 0 {
 		t.Fatalf("first reserve = %+v, %v; want no wait", spend, err)
 	}
-	if spend.units != 1010 || spend.used != 1010 || spend.capacity != perMinute*quotaMargin {
-		t.Fatalf("spend = %+v, want units/used 1010 of %v", spend, perMinute*quotaMargin)
+	if spend.units != 1010 || spend.used != 1010 || spend.capacity != limit {
+		t.Fatalf("spend = %+v, want units/used 1010 of %v", spend, limit)
 	}
-	if got := spend.report(); got != "1010/5400" {
-		t.Fatalf("report = %q, want 1010/5400", got)
+	if got := spend.report(); got != "1010/5700" {
+		t.Fatalf("report = %q, want 1010/5700", got)
 	}
-	// Drain what is left.
-	if _, err := b.reserve(context.Background(), 6000*quotaMargin-1010, classInteractive); err != nil {
+	// Drain what is left of the window.
+	if _, err := b.reserve(context.Background(), limit-1010, classInteractive); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
-	// One more page has to wait for the refill: 1010 units at 90 units/s.
+	// The window is full: one more page waits for the first page's spend to
+	// fall out of it, which is the whole span, not a refill rate.
 	spend, err = b.reserve(context.Background(), 1010, classInteractive)
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
-	want := time.Duration(1010 / (perMinute * quotaMargin / 60) * float64(time.Second))
-	if spend.waited < want-time.Second || spend.waited > want+time.Second {
-		t.Fatalf("wait = %v, want about %v", spend.waited, want)
+	if spend.waited != quotaWindow {
+		t.Fatalf("wait = %v, want %v", spend.waited, quotaWindow)
+	}
+	if spend.used != 1010 {
+		t.Fatalf("used after the wait = %v, want 1010", spend.used)
+	}
+}
+
+// TestBudgetNeverExceedsTheWindow pins the property the refilling bucket did
+// not have: whatever the traffic, no 60 second window of granted calls exceeds
+// the window's limit. The bucket spent its capacity, refilled, and spent it
+// again inside one of Gmail's fixed minutes, which is what a 403 caught.
+func TestBudgetNeverExceedsTheWindow(t *testing.T) {
+	clock := newFakeClock()
+	perMinute := 6000.0
+	b := newBudget(perMinute, clock.now, clock.sleep)
+	limit := perMinute * quotaMargin
+
+	type charge struct {
+		sec   int64
+		units float64
+	}
+	charges := make([]charge, 0, 20)
+	for i := range 20 {
+		// The second the counter filed the spend under is the one it will age
+		// out on, so the assertion below uses the same clock.
+		if _, err := b.reserve(context.Background(), 1001, classInteractive); err != nil {
+			t.Fatalf("reserve %d: %v", i, err)
+		}
+		charges = append(charges, charge{sec: clock.at.Unix(), units: 1001})
+	}
+	for i := range charges {
+		var sum float64
+		for j := i; j < len(charges) && charges[j].sec-charges[i].sec < windowSeconds; j++ {
+			sum += charges[j].units
+		}
+		if sum > limit {
+			t.Fatalf("window at %d spent %v, over %v", charges[i].sec, sum, limit)
+		}
 	}
 }
 
@@ -85,7 +123,8 @@ func TestBudgetDropsBackgroundRequest(t *testing.T) {
 	if _, err := b.reserve(context.Background(), 540, classInteractive); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
-	// 100 units at 9 units/s is over the wait limit.
+	// Freeing 70 units means waiting for the oldest spend to leave the window,
+	// which is far past the 2s a background call is allowed to wait.
 	if _, err := b.reserve(context.Background(), 100, classBackground); !errors.Is(err, errBudgetSkip) {
 		t.Fatalf("background reserve = %v, want errBudgetSkip", err)
 	}

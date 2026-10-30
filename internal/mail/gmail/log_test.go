@@ -156,7 +156,7 @@ func quotaLines(buf *bytes.Buffer, msg string) []string {
 }
 
 // TestSingleRequestLogsQuotaSpend pins the merged line: a request reports what
-// it cost and where the bucket stood right after, so one line answers both
+// it cost and where the window stood right after, so one line answers both
 // questions.
 func TestSingleRequestLogsQuotaSpend(t *testing.T) {
 	buf := captureLogs(t, slog.LevelDebug)
@@ -177,13 +177,13 @@ func TestSingleRequestLogsQuotaSpend(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("request lines = %d, want 2", len(lines))
 	}
-	for _, want := range []string{"units=1 ", "quota=1/5400", "wait=0s", "status=200"} {
+	for _, want := range []string{"units=1 ", "quota=1/5700", "wait=0s", "status=200"} {
 		if !strings.Contains(lines[0], want) {
 			t.Errorf("first line %q does not contain %q", lines[0], want)
 		}
 	}
 	// The second call sees the first one's spending.
-	if !strings.Contains(lines[1], "quota=2/5400") {
+	if !strings.Contains(lines[1], "quota=2/5700") {
 		t.Errorf("second line %q does not report the accumulated spend", lines[1])
 	}
 	if n := len(quotaLines(buf, "gmail quota")); n != 0 {
@@ -215,7 +215,7 @@ func TestBatchRequestLogsQuotaSpend(t *testing.T) {
 		}
 	}
 	if !strings.Contains(lines[0], "/") || !strings.Contains(lines[0], "wait=") {
-		t.Errorf("batch line %q misses the bucket state", lines[0])
+		t.Errorf("batch line %q misses the window state", lines[0])
 	}
 }
 
@@ -238,10 +238,10 @@ func TestLogRequestOmitsQuotaWhenNothingWasCharged(t *testing.T) {
 
 	// The charged form renders all three.
 	logRequest("gmail:user@example.com", http.MethodPost, "/users/me/messages/send", quotaSpend{
-		units: 100, used: 100, capacity: 5400, waited: 250 * time.Millisecond,
+		units: 100, used: 100, capacity: 5700, waited: 250 * time.Millisecond,
 	}, &http.Response{StatusCode: http.StatusOK}, nil)
 	lines = quotaLines(buf, "gmail request")
-	if !strings.Contains(lines[1], "units=100 ") || !strings.Contains(lines[1], "quota=100/5400") ||
+	if !strings.Contains(lines[1], "units=100 ") || !strings.Contains(lines[1], "quota=100/5700") ||
 		!strings.Contains(lines[1], "wait=250ms") {
 		t.Errorf("charged line %q misses the quota fields", lines[1])
 	}

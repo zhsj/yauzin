@@ -19,16 +19,30 @@ import (
 // OAuth client is the project), which is what the budget below spends. The
 // project wide 1,200,000 units per minute is not modelled: one desktop user
 // with a handful of accounts cannot reach it.
+//
+// Gmail enforces the per-minute limit on fixed 60 second windows, so the
+// budget counts what the trailing minute spent instead of pacing a bucket. A
+// bucket with a minute's capacity refills while the same minute is still
+// running, which lets a busy client spend nearly twice the limit before the
+// window ends; that is what tripped 403 "quota exceeded" while the bucket still
+// reported 3,728 of 5,400 units used.
 const (
 	// quotaPerMinute is the per-user-per-project limit.
 	quotaPerMinute = 6000.0
-	// quotaMargin keeps a tenth of the limit in reserve, so a request the
-	// table underestimates still fits.
-	quotaMargin = 0.9
+	// quotaMargin keeps a twentieth of the limit in reserve for what the table
+	// cannot see: upload chunks, another instance of the same account, and the
+	// seconds the per-second slots round away.
+	quotaMargin = 0.95
+	// quotaWindow is how far back a reservation looks.
+	quotaWindow = time.Minute
 	// budgetWaitLimit bounds how long a background request waits for quota
 	// before it is dropped instead. The next poll retries it anyway.
 	budgetWaitLimit = 2 * time.Second
 )
+
+// windowSeconds is quotaWindow in whole seconds. The counter keeps one slot per
+// second, which is also the resolution of the wait it asks for.
+const windowSeconds = int64(quotaWindow / time.Second)
 
 // unitCosts lists the price of every call this package sends. threads.get and
 // messages.get depend on the format and are priced by methodUnits.
@@ -103,9 +117,9 @@ const (
 // reaches the user: the caller treats it like a failed background read.
 var errBudgetSkip = errors.New("gmail: dropped by the quota budget")
 
-// quotaSpend is what one call costs and where the bucket stood right after the
-// call paid for it. It travels with the request, so a single log line answers
-// both "how expensive was this call" and "how much of the budget is gone".
+// quotaSpend is what one call costs and how much of the window it left spent.
+// It travels with the request, so a single log line answers both "how expensive
+// was this call" and "how much of the minute is gone".
 type quotaSpend struct {
 	units    float64
 	used     float64
@@ -113,10 +127,11 @@ type quotaSpend struct {
 	waited   time.Duration
 }
 
-// report renders the bucket state as "used/capacity". The denominator is the
-// bucket's own capacity (the per-minute limit minus the safety margin, so 5,400
-// for the 6,000 limit), not the limit itself: it is what the counter really
-// holds.
+// report renders the window as "used/capacity". Both figures describe the
+// trailing minute, which is the window Gmail charges against: used is what the
+// last 60 seconds spent, capacity the window's own limit (the per-minute limit
+// minus the safety margin, so 5,700 for the 6,000 limit). Unlike a bucket's
+// fill level, used can be compared with the server's own count directly.
 func (q quotaSpend) report() string {
 	return strconv.FormatFloat(q.used, 'f', 0, 64) + "/" +
 		strconv.FormatFloat(q.capacity, 'f', 0, 64)
@@ -144,22 +159,33 @@ func classOf(op string) costClass {
 	return classInteractive
 }
 
-// budget is a token bucket holding the account's quota for one minute. It is
-// refilled continuously, so a burst is allowed up to the capacity and the
-// average settles at quotaPerMinute.
+// budget is the account's quota over a sliding window. It remembers what each
+// of the last 60 seconds spent, so a reservation is accepted exactly when the
+// trailing minute can still afford it: unlike a refilling bucket it cannot
+// spend the allowance twice inside one of Gmail's fixed minutes.
 type budget struct {
-	mu       sync.Mutex
-	capacity float64
-	tokens   float64
-	perSec   float64
-	last     time.Time
+	mu    sync.Mutex
+	limit float64
+
+	// slots holds the spend of the last windowSeconds seconds, one per second,
+	// indexed by sec % windowSeconds. slot.sec names the second a slot holds, so
+	// a slot that is older than the window is simply overwritten.
+	slots [windowSeconds]slot
 
 	now   func() time.Time
 	sleep func(context.Context, time.Duration) error
 }
 
-// newBudget builds the bucket of one account. perMinute is the limit the
-// account may spend; now and sleep are injectable so a test does not wait.
+// slot is what one second of the window spent.
+type slot struct {
+	// sec is the unix second the slot holds; zero means empty.
+	sec   int64
+	units float64
+}
+
+// newBudget builds the counter of one account. perMinute is the limit the
+// account may spend within any minute; now and sleep are injectable so a test
+// does not wait.
 func newBudget(perMinute float64, now func() time.Time, sleep func(context.Context, time.Duration) error) *budget {
 	if now == nil {
 		now = time.Now
@@ -167,34 +193,67 @@ func newBudget(perMinute float64, now func() time.Time, sleep func(context.Conte
 	if sleep == nil {
 		sleep = sleepContext
 	}
-	capacity := math.Max(perMinute*quotaMargin, 1)
 	return &budget{
-		capacity: capacity,
-		tokens:   capacity,
-		perSec:   capacity / 60,
-		now:      now,
-		sleep:    sleep,
+		limit: math.Max(perMinute*quotaMargin, 1),
+		now:   now,
+		sleep: sleep,
 	}
 }
 
-// refill adds the quota the elapsed time earned. The caller holds mu.
-func (b *budget) refill() {
-	now := b.now()
-	if b.last.IsZero() {
-		b.last = now
-		return
+// spent is the spend the trailing window still holds, and drops the slots that
+// fell out of it. The caller holds mu.
+func (b *budget) spent(now int64) float64 {
+	var used float64
+	for i := range b.slots {
+		s := &b.slots[i]
+		if s.units == 0 {
+			continue
+		}
+		// A spend at second s counts through second s+windowSeconds-1, so it
+		// leaves the window as the clock reaches s+windowSeconds.
+		if s.sec+windowSeconds <= now {
+			*s = slot{}
+			continue
+		}
+		used += s.units
 	}
-	if elapsed := now.Sub(b.last); elapsed > 0 {
-		b.tokens = math.Min(b.tokens+elapsed.Seconds()*b.perSec, b.capacity)
-		b.last = now
-	}
+	return used
 }
 
-// reserve spends units, waiting for the bucket to refill when it is empty. A
+// spend records units at second sec. The caller holds mu.
+func (b *budget) spend(sec int64, units float64) {
+	s := &b.slots[sec%windowSeconds]
+	if s.sec != sec {
+		*s = slot{sec: sec}
+	}
+	s.units += units
+}
+
+// waitFor is how long the oldest spend has to age out to free the shortfall
+// need = spent(now)+units-limit. Walking the seconds from the oldest to the
+// newest until it is covered gives the moment the request may go. The caller
+// holds mu and has called spent(now).
+func (b *budget) waitFor(now int64, need float64) time.Duration {
+	for sec := now - windowSeconds + 1; sec <= now; sec++ {
+		s := b.slots[sec%windowSeconds]
+		if s.sec != sec || s.units == 0 {
+			continue
+		}
+		need -= s.units
+		if need <= 0 {
+			return time.Duration(sec+windowSeconds-now) * time.Second
+		}
+	}
+	// Only reachable when a single call is larger than the whole window, which
+	// reserve clamps away; the full span is the most a caller could wait.
+	return quotaWindow
+}
+
+// reserve spends units, waiting for the window to slide when it is full. A
 // background request that would wait longer than budgetWaitLimit is dropped
 // with errBudgetSkip.
 //
-// The returned spend carries the bucket state as it stands right after the
+// The returned spend carries the window state as it stands right after the
 // deduction, taken under the same lock, so two concurrent requests cannot
 // report the same "used" figure.
 func (b *budget) reserve(ctx context.Context, units float64, class costClass) (quotaSpend, error) {
@@ -202,22 +261,22 @@ func (b *budget) reserve(ctx context.Context, units float64, class costClass) (q
 	if units <= 0 {
 		return spend, nil
 	}
-	// A single call can never cost more than the bucket holds; clamping keeps
-	// an oversized batch from blocking forever.
-	units = math.Min(units, b.capacity)
+	// A single call can never cost more than the whole window; clamping keeps
+	// an oversized batch from waiting for something that can never happen.
+	units = math.Min(units, b.limit)
 	spend.units = units
 	for {
 		b.mu.Lock()
-		b.refill()
-		if b.tokens >= units {
-			b.tokens -= units
-			spend.used = b.capacity - b.tokens
-			spend.capacity = b.capacity
+		now := b.now().Unix()
+		used := b.spent(now)
+		if used+units <= b.limit {
+			b.spend(now, units)
+			spend.used = used + units
+			spend.capacity = b.limit
 			b.mu.Unlock()
 			return spend, nil
 		}
-		missing := units - b.tokens
-		wait := time.Duration(missing / b.perSec * float64(time.Second))
+		wait := b.waitFor(now, used+units-b.limit)
 		b.mu.Unlock()
 		if wait < time.Millisecond {
 			wait = time.Millisecond

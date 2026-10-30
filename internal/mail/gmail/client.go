@@ -67,8 +67,8 @@ type client struct {
 	// limit, so the account keeps a small fixed parallelism.
 	reqSem chan struct{}
 
-	// budget meters the account's quota before anything is sent, so a full
-	// page never turns into a rate-limit error.
+	// budget meters the account's quota over the trailing minute before anything
+	// is sent, so a full page never turns into a rate-limit error.
 	budget *budget
 }
 
