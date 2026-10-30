@@ -6,13 +6,11 @@ import (
 	"time"
 )
 
-// The types in discovery_types.go mirror the Gmail REST documents: they are
-// generated from Google's Discovery document, so their fields are exactly the
-// ones the API sends. Most fields are only present when the request asks for
-// them through fields or a format.
-//
-// The helpers below are the hand-written half: they fold those documents into
-// the domain model and carry the rules the API leaves implicit.
+// The Message and MessagePart types come from discovery_types.go, which
+// gmailgen generates from Google's Discovery document. The helpers here are
+// the hand-written half: they read those documents and carry the rules the
+// API leaves implicit, such as which label stands for which flag and where the
+// timestamp of a message is found.
 
 // headers returns the message headers keyed by lower-case name.
 func (m *Message) headers() map[string]string {
