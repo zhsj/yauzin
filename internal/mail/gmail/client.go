@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strings"
@@ -25,6 +27,21 @@ const defaultBaseURL = "https://gmail.googleapis.com/gmail/v1"
 // refreshSkew refreshes an access token this long before it actually expires,
 // so a request is not sent with a token that dies in flight.
 const refreshSkew = 60 * time.Second
+
+// maxConcurrent is how many requests one account may have in flight. It used to
+// be one, which made the sidebar batch and the page batch queue behind each
+// other; the quota budget now meters the spend, so a small parallelism only
+// costs latency at the server, and the batch size stays bounded.
+const maxConcurrent = 3
+
+// retryAttempts bounds how often a rate-limited or failed call is sent again
+// before its error reaches the caller.
+const retryAttempts = 3
+
+// retryBaseDelay is the first backoff step; every attempt doubles it and adds
+// up to a quarter of the delay as jitter, so parallel clients drift apart.
+// Tests shorten it.
+var retryBaseDelay = time.Second
 
 // Store is the part of accounts.Store the backend needs. It is an interface so
 // tests can hand in a fake without touching the disk.
@@ -61,21 +78,27 @@ type client struct {
 
 	refreshMu sync.Mutex
 
-	// reqSem holds one token while a Gmail API request is in flight. Every
-	// request, single and batch alike, passes through it, so one account never
-	// sends two Gmail calls at once: Gmail runs the calls embedded in a batch
-	// concurrently and counts them against a per-user limit, and the sidebar
-	// and the page used to overlap their batches and trip it.
+	// reqSem bounds how many Gmail API requests of this account are in flight.
+	// Every request, single and batch alike, passes through it: Gmail runs the
+	// calls embedded in a batch concurrently and counts them against a per-user
+	// limit, so the account keeps a small fixed parallelism.
 	reqSem chan struct{}
+
+	// budget meters the account's quota before anything is sent, so a full
+	// page never turns into a rate-limit error.
+	budget *budget
 }
 
 // options collects the injected dependencies of Service.
 type options struct {
-	baseURL  string
-	tokenURL string
-	client   *http.Client
-	proxyURL string
-	now      func() time.Time
+	baseURL        string
+	tokenURL       string
+	client         *http.Client
+	proxyURL       string
+	now            func() time.Time
+	maxConcurrent  int
+	quotaPerMinute float64
+	sleep          func(context.Context, time.Duration) error
 }
 
 // Option customizes a Service.
@@ -110,9 +133,46 @@ func WithNow(now func() time.Time) Option {
 	}
 }
 
+// WithMaxConcurrent bounds how many requests of one account are in flight. One
+// restores the old fully serialized behaviour, which is the fallback when a
+// proxy or an account turns out to reject concurrent calls.
+func WithMaxConcurrent(n int) Option {
+	return func(o *options) {
+		if n > 0 {
+			o.maxConcurrent = n
+		}
+	}
+}
+
+// withQuotaPerMinute replaces the account's quota limit. Tests use it to keep
+// the budget from pacing their requests; production keeps the real 6,000.
+func withQuotaPerMinute(units float64) Option {
+	return func(o *options) {
+		if units > 0 {
+			o.quotaPerMinute = units
+		}
+	}
+}
+
+// withBudgetSleep replaces the wait a spent budget takes. Tests use it so a
+// paced request does not turn into a real pause.
+func withBudgetSleep(sleep func(context.Context, time.Duration) error) Option {
+	return func(o *options) {
+		if sleep != nil {
+			o.sleep = sleep
+		}
+	}
+}
+
 // newClient builds the REST client of one account.
 func newClient(accountID string, store Store, opts []Option) (*client, error) {
-	o := options{baseURL: defaultBaseURL, tokenURL: googleEndpoint.TokenURL, now: time.Now}
+	o := options{
+		baseURL:        defaultBaseURL,
+		tokenURL:       googleEndpoint.TokenURL,
+		now:            time.Now,
+		maxConcurrent:  maxConcurrent,
+		quotaPerMinute: quotaPerMinute,
+	}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -131,7 +191,8 @@ func newClient(accountID string, store Store, opts []Option) (*client, error) {
 		store:     store,
 		http:      o.client,
 		now:       o.now,
-		reqSem:    make(chan struct{}, 1),
+		reqSem:    make(chan struct{}, o.maxConcurrent),
+		budget:    newBudget(o.quotaPerMinute, o.now, o.sleep),
 	}
 	if c.http == nil {
 		tr, err := proxyTransport(o.proxyURL)
@@ -257,9 +318,32 @@ func (c *client) doRequestProgress(ctx context.Context, op, method, base, path s
 }
 
 // doRequestHandle performs one authorized request against one of the API roots
-// and hands a successful response to handle. It refreshes the token once when
-// the server rejects it and always closes the response body.
+// and hands a successful response to handle. A rate-limited or failed call is
+// sent again after a jittered backoff; the token refresh retry is separate and
+// happens once per attempt.
 func (c *client) doRequestHandle(ctx context.Context, op, method, base, path string, query url.Values, contentType string, body []byte, handle func(*http.Response) error) error {
+	for attempt := 0; ; attempt++ {
+		err := c.requestOnce(ctx, op, method, base, path, query, contentType, body, handle)
+		if err == nil {
+			return nil
+		}
+		if attempt >= retryAttempts || !retryable(err) {
+			return err
+		}
+		slog.Debug("gmail retry",
+			"account", logAccount(c.accountID), "op", op, "attempt", attempt+1, "err", err)
+		if waitErr := sleepContext(ctx, retryDelay(attempt)); waitErr != nil {
+			return err
+		}
+	}
+}
+
+// requestOnce performs one authorized request, including the single token
+// refresh the server may ask for. It always closes the response body.
+func (c *client) requestOnce(ctx context.Context, op, method, base, path string, query url.Values, contentType string, body []byte, handle func(*http.Response) error) error {
+	if err := c.reserveQuota(ctx, op, methodUnits(op, query.Get("format"))); err != nil {
+		return err
+	}
 	token, err := c.accessToken(ctx, false)
 	if err != nil {
 		return err
@@ -290,6 +374,48 @@ func (c *client) doRequestHandle(ctx context.Context, op, method, base, path str
 		return nil
 	}
 	return handle(resp)
+}
+
+// reserveQuota spends the cost of one call before it is sent. A background
+// request the budget cannot afford right now is dropped instead of queued.
+func (c *client) reserveQuota(ctx context.Context, op string, units float64) error {
+	waited, err := c.budget.reserve(ctx, units, classOf(op))
+	if errors.Is(err, errBudgetSkip) {
+		slog.Debug("gmail quota skip",
+			"account", logAccount(c.accountID), "op", op, "units", units)
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	slog.Debug("gmail quota",
+		"account", logAccount(c.accountID), "op", op, "units", units, "wait", waited)
+	return nil
+}
+
+// retryDelay is the pause before attempt+1: an exponential step with up to a
+// quarter of it as jitter, so repeated clients do not retry in lockstep.
+func retryDelay(attempt int) time.Duration {
+	base := retryBaseDelay << attempt
+	jitter := base / 4
+	if jitter > 0 {
+		base += time.Duration(rand.Int64N(int64(jitter) + 1))
+	}
+	return base
+}
+
+// retryable reports whether err is worth sending again. Only the server's own
+// rate limiting and its 5xx answers qualify: a transport failure is reported
+// to the caller, and a rejected request would fail the same way twice.
+func retryable(err error) bool {
+	var failure *apiFailure
+	if !errors.As(err, &failure) {
+		return false
+	}
+	if failure.status == http.StatusTooManyRequests || failure.status >= 500 {
+		return true
+	}
+	return failure.status == http.StatusForbidden && errors.Is(err, mail.ErrRateLimited)
 }
 
 // progressReportStep bounds how much a transfer without a known total may read
@@ -483,6 +609,27 @@ func (c *client) accessToken(ctx context.Context, force bool) (string, error) {
 	return fresh.AccessToken, nil
 }
 
+// apiFailure is one rejected API call. It keeps the status and the reason the
+// retry layer reads, and unwraps to the category the domain layer reports.
+type apiFailure struct {
+	op     string
+	status int
+	reason string
+	detail string
+	kind   error
+}
+
+// Error renders the call the way the package always reported it.
+func (e *apiFailure) Error() string {
+	if e.detail == "" {
+		return fmt.Sprintf("gmail %s: %s", e.op, http.StatusText(e.status))
+	}
+	return fmt.Sprintf("gmail %s: %s: %s", e.op, http.StatusText(e.status), e.detail)
+}
+
+// Unwrap exposes the category to errors.Is.
+func (e *apiFailure) Unwrap() error { return e.kind }
+
 // apiError maps a non-200 response onto the mail error categories. The body of
 // a Google error carries a human readable message, which is kept as detail for
 // anything that is not a category.
@@ -499,31 +646,46 @@ func apiError(op string, resp *http.Response) error {
 		} `json:"error"`
 	}
 	_ = json.Unmarshal(body, &payload)
-	detail := payload.Error.Message
-	if detail == "" {
-		detail = strings.TrimSpace(string(body))
+	failure := &apiFailure{op: op, status: resp.StatusCode, detail: payload.Error.Message}
+	if failure.detail == "" {
+		failure.detail = strings.TrimSpace(string(body))
+	}
+	for _, e := range payload.Error.Errors {
+		if e.Reason != "" {
+			failure.reason = e.Reason
+			break
+		}
 	}
 	switch resp.StatusCode {
 	case http.StatusNotFound:
-		return fmt.Errorf("%w: %s", mail.ErrNotFound, detail)
+		failure.kind = mail.ErrNotFound
 	case http.StatusBadRequest, http.StatusRequestEntityTooLarge:
-		return fmt.Errorf("%w: %s", mail.ErrInvalidArgument, detail)
+		failure.kind = mail.ErrInvalidArgument
 	case http.StatusUnauthorized:
-		return fmt.Errorf("%w: %s", mail.ErrUnauthorized, detail)
+		failure.kind = mail.ErrUnauthorized
 	case http.StatusForbidden:
 		// A token granted before a scope was added answers
 		// 403 insufficientPermissions: the credential still works, the grant
-		// does not, and only a new sign-in widens it. Every other 403
-		// (rate limiting, a disabled account) stays uncategorised so the UI
-		// does not send the user through a pointless re-authorization.
-		for _, e := range payload.Error.Errors {
-			if e.Reason == "insufficientPermissions" {
-				return fmt.Errorf("%w: %s", mail.ErrUnauthorized, detail)
-			}
+		// does not, and only a new sign-in widens it. Rate limiting is the
+		// other 403 worth naming; anything else (a disabled account) stays
+		// uncategorised so the UI does not ask for a pointless sign-in.
+		switch {
+		case failure.reason == "insufficientPermissions":
+			failure.kind = mail.ErrUnauthorized
+		case isRateLimitReason(failure.reason) || payload.Error.Status == "RESOURCE_EXHAUSTED":
+			failure.kind = mail.ErrRateLimited
 		}
+	case http.StatusTooManyRequests:
+		failure.kind = mail.ErrRateLimited
 	}
-	if detail == "" {
-		return fmt.Errorf("gmail %s: %s", op, resp.Status)
+	return failure
+}
+
+// isRateLimitReason reports whether a Google error reason names rate limiting.
+func isRateLimitReason(reason string) bool {
+	switch reason {
+	case "rateLimitExceeded", "userRateLimitExceeded", "dailyLimitExceeded":
+		return true
 	}
-	return fmt.Errorf("gmail %s: %s: %s", op, resp.Status, detail)
+	return false
 }

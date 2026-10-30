@@ -49,6 +49,12 @@ func (c *client) doResumableUpload(ctx context.Context, op, path, contentType st
 	if total < 0 {
 		return fmt.Errorf("%w: negative message size", mail.ErrInvalidArgument)
 	}
+	// The whole session is one send as far as the quota is concerned: the
+	// chunked PUTs and the offset queries are not separate method calls, so the
+	// cost is reserved once here rather than per request.
+	if err := c.reserveQuota(ctx, op, methodUnits(op, "")); err != nil {
+		return err
+	}
 	session, err := c.startUpload(ctx, op, path, contentType, total)
 	if err != nil {
 		return err

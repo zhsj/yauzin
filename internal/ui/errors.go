@@ -25,6 +25,10 @@ func errorText(err error) string {
 		return i18n.T("error.invalidArgument")
 	case errors.Is(err, mail.ErrUnauthorized):
 		return i18n.T("error.unauthorized")
+	case errors.Is(err, mail.ErrRateLimited):
+		// The backend already retried with a backoff; what is left is a request
+		// the user can simply repeat a little later.
+		return i18n.T("error.rateLimited")
 	case errors.Is(err, smtp.ErrAuth):
 		// The sending server refused the credentials: the protocol sentence
 		// below it is only noise for the user.

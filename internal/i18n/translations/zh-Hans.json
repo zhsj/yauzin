@@ -215,6 +215,7 @@
   "error.unsupported": "当前账号不支持该操作",
   "error.invalidArgument": "请求无效，请检查收件人后重试",
   "error.unauthorized": "该账号需要重新授权。",
+  "error.rateLimited": "请求过于频繁，请稍后重试。",
   "error.authDenied": "已取消授权。",
   "error.authTimeout": "浏览器未在限定时间内完成授权。",
   "error.smtpAuth": "发信服务器拒绝了登录，请检查用户名和密码。",

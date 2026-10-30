@@ -43,10 +43,11 @@ func (f *inflightBatches) wrap(next http.HandlerFunc) http.HandlerFunc {
 
 func (f *inflightBatches) max() int32 { return atomic.LoadInt32(&f.peak) }
 
-// TestBatchesOfOneAccountNeverOverlap runs the two loads that reloadAll starts
-// together and asserts the account never has both batches in flight: that
-// overlap is what tripped Gmail's per-user concurrency limit.
-func TestBatchesOfOneAccountNeverOverlap(t *testing.T) {
+// TestBatchesOfOneAccountStayWithinTheLimit runs the two loads that reloadAll
+// starts together and asserts the account never has more requests in flight
+// than maxConcurrent: the sidebar batch and the page batch may now overlap, but
+// an unbounded fan-out is what trips Gmail's per-user concurrency limit.
+func TestBatchesOfOneAccountStayWithinTheLimit(t *testing.T) {
 	const labels = 120
 	const threads = 120
 
@@ -128,22 +129,24 @@ func TestBatchesOfOneAccountNeverOverlap(t *testing.T) {
 	if len(page.Threads) != threads {
 		t.Fatalf("threads = %d, want %d", len(page.Threads), threads)
 	}
-	if peak := count.max(); peak != 1 {
-		t.Fatalf("batch requests in flight peaked at %d, want 1", peak)
+	if peak := count.max(); peak > int32(maxConcurrent) {
+		t.Fatalf("batch requests in flight peaked at %d, want at most %d", peak, maxConcurrent)
 	}
 }
 
 // TestReqSlotWaitHonoursContext covers a load that is superseded while it
-// waits for the account's request slot: it must stop at once instead of waiting
-// for the request ahead of it.
+// waits for the account's request slots: it must stop at once instead of
+// waiting for the requests ahead of it.
 func TestReqSlotWaitHonoursContext(t *testing.T) {
 	svc, _ := newTestService(t, http.NewServeMux())
 	c := svc.c
 
-	if err := c.acquireReq(context.Background()); err != nil {
-		t.Fatalf("acquire: %v", err)
+	for range maxConcurrent {
+		if err := c.acquireReq(context.Background()); err != nil {
+			t.Fatalf("acquire: %v", err)
+		}
+		defer c.releaseReq()
 	}
-	defer c.releaseReq()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()

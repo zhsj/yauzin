@@ -300,6 +300,10 @@ var (
 	// the token was revoked, expired without a usable refresh token, or the
 	// OAuth client was removed. The account has to be authorized again.
 	ErrUnauthorized = errors.New("mail: unauthorized")
+	// ErrRateLimited reports that the backend refused the request because the
+	// account is over its rate limit. It is usually transient; the backend
+	// retries on its own before it reports this.
+	ErrRateLimited = errors.New("mail: rate limited")
 )
 
 // Progress is how far one transfer has come. Total is the expected number of

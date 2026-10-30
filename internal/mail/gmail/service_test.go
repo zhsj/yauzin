@@ -81,7 +81,9 @@ func newTestService(t *testing.T, handler http.Handler, opts ...Option) (*Servic
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	store := newFakeStore(testAccountID, "access-token")
-	all := append([]Option{WithBaseURL(srv.URL)}, opts...)
+	// The budget is real in production but must not pace a test: a suite walks
+	// dozens of pages in milliseconds. quota_test.go exercises the limiter.
+	all := append([]Option{WithBaseURL(srv.URL), withQuotaPerMinute(1 << 30)}, opts...)
 	svc, err := New(mail.Account{ID: testAccountID, Kind: mail.KindGmail, Email: "user@example.com"}, store, all...)
 	if err != nil {
 		t.Fatalf("New: %v", err)

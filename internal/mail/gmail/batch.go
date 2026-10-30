@@ -85,11 +85,44 @@ func (c *client) batchFetch(ctx context.Context, op, endpoint string, targets []
 // batchChunk performs one batch request for targets and drives handle with its
 // embedded responses. It returns the first error handle reported, which does
 // not stop the remaining chunks, and a fatal error, which does.
+//
+// The whole batch is priced and reserved before it is sent, and a rate-limited
+// or failed envelope is sent again after a jittered backoff. Errors of the
+// embedded calls are not retried: they are already the answer.
 func (c *client) batchChunk(ctx context.Context, op, endpoint string, targets []batchTarget, handle func(i int, resp *http.Response) error) (firstErr error, fatal error) {
 	body, boundary, err := batchBody(c.apiPath, targets)
 	if err != nil {
 		return nil, fmt.Errorf("gmail %s batch: %w", op, err)
 	}
+	units := batchUnits(op, targets)
+	for attempt := 0; ; attempt++ {
+		if err := c.reserveQuota(ctx, op, units); err != nil {
+			return nil, err
+		}
+		resp, err := c.sendBatchAuth(ctx, op, endpoint, targets, body, boundary)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode == http.StatusOK {
+			defer func() { _ = resp.Body.Close() }()
+			return parseBatch(resp, targets, op, handle)
+		}
+		failure := apiError(op+" batch", resp)
+		_ = resp.Body.Close()
+		if attempt >= retryAttempts || !retryable(failure) {
+			return nil, failure
+		}
+		slog.Debug("gmail retry",
+			"account", logAccount(c.accountID), "op", op, "attempt", attempt+1, "err", failure)
+		if waitErr := sleepContext(ctx, retryDelay(attempt)); waitErr != nil {
+			return nil, failure
+		}
+	}
+}
+
+// sendBatchAuth performs one authorized batch POST, refreshing the token once
+// when the server rejects it.
+func (c *client) sendBatchAuth(ctx context.Context, op, endpoint string, targets []batchTarget, body []byte, boundary string) (*http.Response, error) {
 	token, err := c.accessToken(ctx, false)
 	if err != nil {
 		return nil, err
@@ -98,24 +131,27 @@ func (c *client) batchChunk(ctx context.Context, op, endpoint string, targets []
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode == http.StatusUnauthorized {
-		// The server rejected a token the clock still considered valid: drop it
-		// and retry once, like a single call does.
-		_ = resp.Body.Close()
-		token, err = c.accessToken(ctx, true)
-		if err != nil {
-			return nil, err
-		}
-		resp, err = c.sendBatch(ctx, op, endpoint, targets, body, boundary, token)
-		if err != nil {
-			return nil, err
-		}
+	if resp.StatusCode != http.StatusUnauthorized {
+		return resp, nil
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, apiError(op+" batch", resp)
+	// The server rejected a token the clock still considered valid: drop it and
+	// retry once, like a single call does.
+	_ = resp.Body.Close()
+	token, err = c.accessToken(ctx, true)
+	if err != nil {
+		return nil, err
 	}
-	return parseBatch(resp, targets, op, handle)
+	return c.sendBatch(ctx, op, endpoint, targets, body, boundary, token)
+}
+
+// batchUnits prices one batch: one unit for the envelope plus every embedded
+// call at its own method price.
+func batchUnits(op string, targets []batchTarget) float64 {
+	units := 1.0
+	for _, t := range targets {
+		units += methodUnits(op, t.query.Get("format"))
+	}
+	return units
 }
 
 // batchBody encodes one multipart/mixed request with one embedded call per
