@@ -6,7 +6,9 @@ package rfc822
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -58,12 +60,142 @@ type Message struct {
 	size    int64
 }
 
-// part is one section of the message: the text body, which carries its bytes,
-// or an attachment, which carries the path to stream from.
+// entity is the MIME entity of a draft: its own header block, the parts that
+// follow it and, when it is multipart, the closing boundary line. It is kept
+// apart from Message because a PGP/MIME signature covers exactly these bytes and
+// nothing else: the address and subject headers stay outside it.
+type entity struct {
+	header  []byte
+	parts   []part
+	closing []byte
+}
+
+// size is the exact number of bytes writeTo produces.
+func (e entity) size() int64 {
+	n := int64(len(e.header)) + int64(len(e.closing))
+	for _, p := range e.parts {
+		n += int64(len(p.prefix)) + p.size()
+	}
+	return n
+}
+
+// writeTo writes the entity: its header, every part and the closing line.
+func (e entity) writeTo(w io.Writer) error {
+	if len(e.header) > 0 {
+		if _, err := w.Write(e.header); err != nil {
+			return err
+		}
+	}
+	for _, p := range e.parts {
+		if len(p.prefix) > 0 {
+			if _, err := w.Write(p.prefix); err != nil {
+				return err
+			}
+		}
+		if err := p.writeTo(w); err != nil {
+			return err
+		}
+	}
+	if len(e.closing) > 0 {
+		if _, err := w.Write(e.closing); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// signedWriteTo writes the bytes a PGP/MIME signature covers.
+//
+// RFC 2046 §5.1.1 attaches the CRLF that precedes a boundary delimiter to the
+// delimiter itself, so a part that should end with a line break needs two CRLFs
+// before the next delimiter. The entity built here ends with one, which means the
+// receiver reconstructs it up to, but not including, that CRLF; RFC 3156 §5 says
+// the same from the signing side ("MUST NOT be included in the signature if
+// absent"). Signing the extra CRLF would make every verifier report a bad
+// signature, so it is dropped here and only here.
+func (e entity) signedWriteTo(w io.Writer) error {
+	tw := &crlfTailWriter{w: w}
+	if err := e.writeTo(tw); err != nil {
+		return err
+	}
+	return tw.Flush()
+}
+
+// digest is the SHA-256 of the signed bytes, the value a signature records so
+// the renderer can prove the draft did not change after it was signed.
+func (e entity) digest() ([32]byte, error) {
+	h := sha256.New()
+	if err := e.signedWriteTo(h); err != nil {
+		return [32]byte{}, err
+	}
+	var sum [32]byte
+	copy(sum[:], h.Sum(nil))
+	return sum, nil
+}
+
+// crlfTailWriter holds back the last two bytes it is given, so the caller can
+// drop them when they are the CRLF that belongs to the following boundary. Every
+// other byte passes straight through, and Write always reports the whole slice
+// as consumed: the count is what io.Copy and the pipe rely on, and it describes
+// the input rather than the output on purpose.
+type crlfTailWriter struct {
+	w    io.Writer
+	tail []byte
+}
+
+func (t *crlfTailWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	pending := append(t.tail, p...)
+	if len(pending) <= len(crlf) {
+		t.tail = pending
+		return len(p), nil
+	}
+	cut := len(pending) - len(crlf)
+	if _, err := t.w.Write(pending[:cut]); err != nil {
+		return len(p), err
+	}
+	// Keep the two held bytes without holding on to the caller's buffer.
+	t.tail = append(t.tail[:0], pending[cut:]...)
+	return len(p), nil
+}
+
+// Flush writes whatever is still held back, minus a trailing CRLF. The two held
+// bytes are either that CRLF or the entity's real ending, so nothing else can be
+// swallowed.
+func (t *crlfTailWriter) Flush() error {
+	tail := t.tail
+	t.tail = nil
+	if string(tail) == crlf {
+		return nil
+	}
+	if len(tail) == 0 {
+		return nil
+	}
+	_, err := t.w.Write(tail)
+	return err
+}
+
+// partKind says how the content of a part reaches the message. The zero value
+// is the common case: the text body and the attachments, base64 encoded on the
+// way out.
+type partKind uint8
+
+const (
+	// partRaw is written verbatim: the armored signature.
+	partRaw partKind = iota + 1
+	// partEntity is a nested MIME entity written verbatim: the part a
+	// multipart/signed message signs.
+	partEntity
+)
+
+// part is one section of the message.
 type part struct {
+	kind partKind
 	// prefix is the boundary line and the part headers, including the blank
 	// line before the content. It is empty for the body of a message without
-	// attachments, where the top-level headers already describe the body.
+	// attachments, where the entity header already describes the body.
 	prefix []byte
 	// name is the attachment name, used in errors only.
 	name string
@@ -74,6 +206,10 @@ type part struct {
 	// fileSize is the size of path when it was prepared, checked again when
 	// the file is read.
 	fileSize int64
+	// raw is the verbatim content of a partRaw part.
+	raw []byte
+	// nested is the content of a partEntity part.
+	nested *entity
 }
 
 // Build renders draft as a complete message. It is the buffered form of
@@ -88,6 +224,76 @@ func Build(draft mail.Draft, from mail.Address, opts Options) ([]byte, error) {
 		return nil, err
 	}
 	return b.Bytes(), nil
+}
+
+// Signer produces the detached signature of one MIME entity. The implementation
+// lives outside this package, because signing means running gpg: keeping process
+// execution out of the renderer is what lets tests inject a fake.
+type Signer interface {
+	// SignDetached signs the entity read from r and returns the armored
+	// signature together with the RFC 3156 hash name it was made with.
+	SignDetached(ctx context.Context, r io.Reader) (armored []byte, micalg string, err error)
+	// Key names the signing key, for the signature record and the logs.
+	Key() string
+}
+
+// Sign renders the entity of draft, signs it and returns the record the draft
+// carries until it is sent. Attachments are read once, here; the send then reads
+// them again to reproduce and check the signed bytes.
+//
+// The entity holds the body and the attachments only, so the identity, the
+// subject, the date and the recipients do not affect the signature: PGP/MIME
+// signs the MIME part and leaves the message headers outside it. What is signed
+// is signedWriteTo, which stops before the CRLF that the following boundary
+// takes with it.
+func Sign(ctx context.Context, draft mail.Draft, s Signer) (*mail.Signature, error) {
+	boundary := ""
+	if len(draft.Attachments) > 0 {
+		boundary = newBoundary()
+	}
+	ent, err := buildEntity(draft, boundary)
+	if err != nil {
+		return nil, err
+	}
+
+	// The entity is streamed into gpg through a pipe so an attachment never has
+	// to sit in memory, and the same bytes go through a hash for the record.
+	digest := sha256.New()
+	pr, pw := io.Pipe()
+	written := make(chan error, 1)
+	go func() {
+		err := ent.signedWriteTo(pw)
+		_ = pw.CloseWithError(err)
+		written <- err
+	}()
+
+	armored, micalg, signErr := s.SignDetached(ctx, io.TeeReader(pr, digest))
+	// A signer that stopped reading leaves the writer blocked; closing the read
+	// side releases it either way.
+	_ = pr.Close()
+	writeErr := <-written
+	if signErr != nil {
+		return nil, signErr
+	}
+	if writeErr != nil {
+		return nil, writeErr
+	}
+	if len(armored) == 0 {
+		return nil, fmt.Errorf("%w: signer returned no signature", mail.ErrInvalidArgument)
+	}
+	micalg = strings.TrimSpace(micalg)
+	if micalg == "" {
+		return nil, fmt.Errorf("%w: signer returned no hash name", mail.ErrInvalidArgument)
+	}
+
+	sig := &mail.Signature{
+		Data:     crlfLines(armored),
+		Micalg:   micalg,
+		Boundary: boundary,
+		Key:      s.Key(),
+	}
+	copy(sig.Digest[:], digest.Sum(nil))
+	return sig, nil
 }
 
 // Prepare validates draft and decides everything about the rendered message
@@ -124,38 +330,120 @@ func Prepare(draft mail.Draft, from mail.Address, opts Options) (*Message, error
 		messageID = mail.NewMessageID(from.Email)
 	}
 
-	msg := &Message{}
-	if len(draft.Attachments) == 0 {
-		msg.header = buildHeader(draft, from, date, messageID, opts.BccHeader, "", false)
-		msg.parts = []part{{data: []byte(draft.Body)}}
-		msg.size = int64(len(msg.header)) + encodedSize(int64(len(draft.Body)))
-		return msg, nil
+	if draft.Signature != nil {
+		return prepareSigned(draft, from, date, messageID, opts)
+	}
+
+	boundary := ""
+	if len(draft.Attachments) > 0 {
+		boundary = newBoundary()
+	}
+	ent, err := buildEntity(draft, boundary)
+	if err != nil {
+		return nil, err
+	}
+	msg := &Message{
+		header:  append(headerFields(draft, from, date, messageID, opts.BccHeader), ent.header...),
+		parts:   ent.parts,
+		closing: ent.closing,
+	}
+	msg.size = int64(len(msg.header)) + msg.partsSize() + int64(len(msg.closing))
+	return msg, nil
+}
+
+// prepareSigned wraps the drafted entity in multipart/signed. The signature was
+// made before the send, so the entity has to be reproduced byte for byte: the
+// boundary the signer used is reused and the digest is checked before a single
+// byte is written.
+func prepareSigned(draft mail.Draft, from mail.Address, date time.Time, messageID string, opts Options) (*Message, error) {
+	sig := draft.Signature
+	if sig.Micalg == "" || len(sig.Data) == 0 {
+		return nil, fmt.Errorf("%w: incomplete signature", mail.ErrSignatureStale)
+	}
+	if len(draft.Attachments) > 0 && sig.Boundary == "" {
+		return nil, fmt.Errorf("%w: signed entity has no boundary", mail.ErrSignatureStale)
+	}
+	ent, err := buildEntity(draft, sig.Boundary)
+	if err != nil {
+		return nil, err
+	}
+	sum, err := ent.digest()
+	if err != nil {
+		return nil, err
+	}
+	if sum != sig.Digest {
+		return nil, fmt.Errorf("%w: %s", mail.ErrSignatureStale, sig.Key)
 	}
 
 	boundary := newBoundary()
-	msg.header = buildHeader(draft, from, date, messageID, opts.BccHeader, boundary, true)
-	msg.parts = append(msg.parts, part{
-		prefix: bodyPartPrefix(boundary),
-		data:   []byte(draft.Body),
-	})
+	for boundary == sig.Boundary {
+		boundary = newBoundary()
+	}
+	var header bytes.Buffer
+	header.Write(headerFields(draft, from, date, messageID, opts.BccHeader))
+	writeLine(&header, "Content-Type",
+		`multipart/signed; micalg=`+sig.Micalg+`; protocol="application/pgp-signature"; boundary="`+boundary+`"`)
+	header.WriteString(crlf)
+
+	msg := &Message{
+		header: header.Bytes(),
+		parts: []part{
+			{kind: partEntity, prefix: []byte("--" + boundary + crlf), nested: &ent},
+			{kind: partRaw, prefix: signaturePartPrefix(boundary), raw: sig.Data},
+		},
+		closing: []byte("--" + boundary + "--" + crlf),
+	}
+	msg.size = int64(len(msg.header)) + msg.partsSize() + int64(len(msg.closing))
+	return msg, nil
+}
+
+// partsSize is the length of every part once written.
+func (m *Message) partsSize() int64 {
+	var n int64
+	for _, p := range m.parts {
+		n += int64(len(p.prefix)) + p.size()
+	}
+	return n
+}
+
+// buildEntity renders the MIME entity of a draft. boundary is empty for a
+// message without attachments, whose body is the whole entity.
+func buildEntity(draft mail.Draft, boundary string) (entity, error) {
+	if len(draft.Attachments) == 0 {
+		var b bytes.Buffer
+		writeLine(&b, "Content-Type", "text/plain; charset=utf-8")
+		writeLine(&b, "Content-Transfer-Encoding", "base64")
+		b.WriteString(crlf)
+		return entity{
+			header: b.Bytes(),
+			parts:  []part{{data: []byte(draft.Body)}},
+		}, nil
+	}
+
+	var b bytes.Buffer
+	writeLine(&b, "Content-Type", `multipart/mixed; boundary="`+boundary+`"`)
+	b.WriteString(crlf)
+	ent := entity{
+		header: b.Bytes(),
+		parts: []part{{
+			prefix: bodyPartPrefix(boundary),
+			data:   []byte(draft.Body),
+		}},
+	}
 	for _, att := range draft.Attachments {
 		size, err := attachmentSize(att)
 		if err != nil {
-			return nil, err
+			return entity{}, err
 		}
-		msg.parts = append(msg.parts, part{
+		ent.parts = append(ent.parts, part{
 			prefix:   attachmentPartPrefix(boundary, att),
 			name:     att.Name,
 			path:     att.Path,
 			fileSize: size,
 		})
 	}
-	msg.closing = []byte("--" + boundary + "--" + crlf)
-	msg.size = int64(len(msg.header)) + int64(len(msg.closing))
-	for _, p := range msg.parts {
-		msg.size += int64(len(p.prefix)) + encodedSize(p.rawSize())
-	}
-	return msg, nil
+	ent.closing = []byte("--" + boundary + "--" + crlf)
+	return ent, nil
 }
 
 // Size is the exact number of bytes WriteTo produces. A resumable upload
@@ -192,6 +480,18 @@ func (m *Message) WriteTo(w io.Writer) (int64, error) {
 	return cw.n, nil
 }
 
+// size is the exact number of bytes the part's content occupies once written.
+func (p part) size() int64 {
+	switch p.kind {
+	case partRaw:
+		return int64(len(p.raw))
+	case partEntity:
+		return p.nested.size()
+	default:
+		return encodedSize(p.rawSize())
+	}
+}
+
 // rawSize is the number of bytes before transfer encoding.
 func (p part) rawSize() int64 {
 	if p.path == "" {
@@ -200,8 +500,16 @@ func (p part) rawSize() int64 {
 	return p.fileSize
 }
 
-// writeTo writes one part's content, base64 encoded.
+// writeTo writes one part's content: verbatim for the two kinds that carry
+// already rendered bytes, base64 encoded otherwise.
 func (p part) writeTo(w io.Writer) error {
+	switch p.kind {
+	case partRaw:
+		_, err := w.Write(p.raw)
+		return err
+	case partEntity:
+		return p.nested.writeTo(w)
+	}
 	if p.path == "" {
 		if err := writeBase64(w, bytes.NewReader(p.data)); err != nil {
 			return fmt.Errorf("rfc822: encode body: %w", err)
@@ -232,10 +540,11 @@ func (p part) writeTo(w io.Writer) error {
 	return nil
 }
 
-// buildHeader renders the top-level headers through the blank line. boundary
-// is empty for a message without attachments, whose body is the top-level
-// content instead of a part.
-func buildHeader(draft mail.Draft, from mail.Address, date time.Time, messageID string, bcc bool, boundary string, multipart bool) []byte {
+// headerFields renders the message headers that stay outside the MIME entity:
+// addresses, subject, date, message ID, the thread headers and MIME-Version.
+// The Content-Type of the entity follows them without a blank line between, so
+// an unsigned message is still the same bytes it always was.
+func headerFields(draft mail.Draft, from mail.Address, date time.Time, messageID string, bcc bool) []byte {
 	var b bytes.Buffer
 	writeAddresses(&b, "From", []mail.Address{from})
 	writeAddresses(&b, "To", draft.To)
@@ -248,14 +557,29 @@ func buildHeader(draft mail.Draft, from mail.Address, date time.Time, messageID 
 	writeLine(&b, "Message-ID", messageID)
 	writeThreadHeaders(&b, draft)
 	writeLine(&b, "MIME-Version", "1.0")
-	if multipart {
-		writeLine(&b, "Content-Type", `multipart/mixed; boundary="`+boundary+`"`)
-	} else {
-		writeLine(&b, "Content-Type", "text/plain; charset=utf-8")
-		writeLine(&b, "Content-Transfer-Encoding", "base64")
-	}
+	return b.Bytes()
+}
+
+// signaturePartPrefix is the second part of a multipart/signed message: the
+// armored detached signature.
+func signaturePartPrefix(boundary string) []byte {
+	var b bytes.Buffer
+	b.WriteString("--" + boundary + crlf)
+	writeLine(&b, "Content-Type", "application/pgp-signature")
+	writeLine(&b, "Content-Description", "OpenPGP digital signature")
 	b.WriteString(crlf)
 	return b.Bytes()
+}
+
+// crlfLines returns data with every line ending as CRLF, which is the only form
+// allowed inside a MIME message. gpg prints the armored text with plain LF, so
+// the signature has to be converted once, here, where its length also comes
+// from.
+func crlfLines(data []byte) []byte {
+	text := strings.ReplaceAll(string(data), crlf, "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.ReplaceAll(text, "\n", crlf)
+	return []byte(text)
 }
 
 // bodyPartPrefix is the boundary line and headers of the text part of a

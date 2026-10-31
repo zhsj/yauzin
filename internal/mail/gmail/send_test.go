@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	netmail "net/mail"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/zhsj/yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/mail/rfc822"
 )
 
 func TestSendUploadsRawMessage(t *testing.T) {
@@ -56,6 +58,78 @@ func TestSendUploadsRawMessage(t *testing.T) {
 	subject, err := dec.DecodeHeader(msg.Header.Get("Subject"))
 	if err != nil || subject != draft.Subject {
 		t.Fatalf("Subject = %q/%v, want %q", subject, err, draft.Subject)
+	}
+}
+
+// signingFake stands in for gpg: the backend only carries the signature record,
+// so the bytes just have to look like an armored signature.
+type signingFake struct{}
+
+func (signingFake) SignDetached(_ context.Context, r io.Reader) ([]byte, string, error) {
+	// Like gpg, the signer consumes the whole entity: the renderer hashes what
+	// is read, so a signer that stopped early would sign a prefix.
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return nil, "", err
+	}
+	return []byte("-----BEGIN PGP SIGNATURE-----\n\nAAAA\n-----END PGP SIGNATURE-----\n"), "pgp-sha256", nil
+}
+
+func (signingFake) Key() string { return "0123456789ABCDEF" }
+
+// TestSendUploadsSignedMessage checks that a signed draft reaches the API as
+// multipart/signed, that the declared length still matches the upload, and that
+// the Bcc header stays outside the signed part.
+func TestSendUploadsSignedMessage(t *testing.T) {
+	rec := &uploadRecorder{t: t}
+	svc, _ := newTestService(t, rec.handler())
+
+	draft := mail.Draft{
+		To:      []mail.Address{{Email: "to@example.com"}},
+		Bcc:     []mail.Address{{Email: "bcc@example.com"}},
+		Subject: "signed",
+		Body:    "hello there",
+	}
+	sig, err := rfc822.Sign(context.Background(), draft, signingFake{})
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	draft.Signature = sig
+
+	if err := svc.Send(context.Background(), draft); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if got, want := int64(rec.received.Len()), rec.total; got != want {
+		t.Fatalf("uploaded %d bytes, want the declared %d", got, want)
+	}
+
+	msg, err := netmail.ReadMessage(bytes.NewReader(rec.received.Bytes()))
+	if err != nil {
+		t.Fatalf("parse uploaded message: %v", err)
+	}
+	mediaType, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type"))
+	if err != nil {
+		t.Fatalf("Content-Type: %v", err)
+	}
+	if mediaType != "multipart/signed" || params["micalg"] != "pgp-sha256" {
+		t.Fatalf("Content-Type = %q/%v", mediaType, params)
+	}
+	if bcc := msg.Header.Get("Bcc"); !strings.Contains(bcc, "bcc@example.com") {
+		t.Fatalf("Bcc = %q, want it in the outer header", bcc)
+	}
+	// The signed part is the body; the Bcc must not appear inside it.
+	first, err := multipart.NewReader(msg.Body, params["boundary"]).NextPart()
+	if err != nil {
+		t.Fatalf("first part: %v", err)
+	}
+	signed, err := io.ReadAll(first)
+	if err != nil {
+		t.Fatalf("read first part: %v", err)
+	}
+	if strings.Contains(string(signed), "bcc@example.com") {
+		t.Fatalf("Bcc ended up inside the signed part:\n%s", signed)
+	}
+	if ct := first.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Fatalf("first part Content-Type = %q", ct)
 	}
 }
 

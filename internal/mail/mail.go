@@ -236,6 +236,35 @@ type DraftAttachment struct {
 	Path string
 }
 
+// Signature is the detached OpenPGP signature of one rendered MIME entity,
+// produced before the send and reused verbatim by the transport.
+//
+// Signing is a step of its own because only gpg-agent can reach the desktop
+// pinentry, and the passphrase prompt must not appear in the middle of a send.
+// The composer signs the entity, keeps this record, and hands it to the
+// renderer, which wraps the message in multipart/signed without running gpg
+// again.
+type Signature struct {
+	// Data is the armored signature with CRLF line endings, ready to be
+	// written into the message.
+	Data []byte
+	// Micalg is the RFC 3156 hash name written into the Content-Type, such as
+	// "pgp-sha256".
+	Micalg string
+	// Digest is the SHA-256 of the entity bytes the signature covers, which
+	// stop before the CRLF that belongs to the following boundary (RFC 2046
+	// §5.1.1), exactly what a receiver reconstructs. The renderer re-renders
+	// the entity and compares, so a draft edited after signing cannot go out
+	// under a signature that no longer matches it.
+	Digest [32]byte
+	// Boundary is the multipart boundary of the signed entity, empty for a
+	// message without attachments. The renderer reuses it: a fresh random
+	// boundary would change the bytes the signature covers.
+	Boundary string
+	// Key names the signing key as configured, for logs and the interface.
+	Key string
+}
+
 // Draft is a message being composed.
 type Draft struct {
 	// From is the identity the draft is sent as. A backend that can only send
@@ -262,6 +291,10 @@ type Draft struct {
 	// ancestor chain ending with it. A forward carries neither.
 	InReplyTo  string
 	References []string
+	// Signature, when set, makes the renderer wrap the message in
+	// multipart/signed. It is nil for an unsigned draft, which is the normal
+	// case: the composer only signs when the user asks for it.
+	Signature *Signature
 }
 
 // Recipients returns every address the draft has to be delivered to: To, Cc
@@ -308,6 +341,10 @@ var (
 	// cannot be freed within the time the request has left, so the backend
 	// refused to wait for it.
 	ErrQuotaWait = errors.New("mail: quota wait exceeds the request deadline")
+	// ErrSignatureStale reports that the draft no longer matches the signature
+	// it carries. Sending it would deliver a signature over different content,
+	// so the draft has to be signed again.
+	ErrSignatureStale = errors.New("mail: signature does not match the draft")
 )
 
 // QuotaWaitError reports a request abandoned because its own quota budget

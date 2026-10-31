@@ -2,6 +2,7 @@ package smtp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -15,12 +16,14 @@ import (
 	"io"
 	"math/big"
 	"net"
+	netmail "net/mail"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/zhsj/yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/mail/rfc822"
 )
 
 func TestSendPlain(t *testing.T) {
@@ -63,6 +66,67 @@ func TestSendPlain(t *testing.T) {
 		if !strings.Contains(data, want) {
 			t.Fatalf("message lacks %q:\n%s", want, data)
 		}
+	}
+}
+
+// signingFake stands in for gpg: the transport only carries the signature
+// record, so the bytes just have to look like an armored signature.
+type signingFake struct{}
+
+func (signingFake) SignDetached(_ context.Context, r io.Reader) ([]byte, string, error) {
+	// Like gpg, the signer consumes the whole entity: the renderer hashes what
+	// is read, so a signer that stopped early would sign a prefix.
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return nil, "", err
+	}
+	return []byte("-----BEGIN PGP SIGNATURE-----\n\nAAAA\n-----END PGP SIGNATURE-----\n"), "pgp-sha256", nil
+}
+
+func (signingFake) Key() string { return "0123456789ABCDEF" }
+
+// TestSendSignedDraft checks that a draft carrying a signature leaves as
+// multipart/signed on the wire, with the Bcc still outside it.
+func TestSendSignedDraft(t *testing.T) {
+	srv := newServer(t, serverOptions{})
+	defer srv.stop()
+
+	sender := newSender(t, srv, Config{
+		Host:     srv.host(),
+		Port:     srv.port(),
+		Security: SecurityNone,
+		From:     mail.Address{Email: "ada@example.com"},
+	})
+	draft := mail.Draft{
+		To:      []mail.Address{{Email: "to@example.com"}},
+		Bcc:     []mail.Address{{Email: "bcc@example.com"}},
+		Subject: "signed",
+		Body:    "body text",
+	}
+	sig, err := rfc822.Sign(context.Background(), draft, signingFake{})
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	draft.Signature = sig
+
+	if err := sender.Send(context.Background(), draft); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	data := srv.session().data
+	if strings.Contains(string(data), "bcc@example.com") {
+		t.Fatalf("Bcc leaked into the message:\n%s", data)
+	}
+	for _, want := range []string{
+		`multipart/signed; micalg=pgp-sha256; protocol="application/pgp-signature"`,
+		"Content-Type: application/pgp-signature",
+		"-----BEGIN PGP SIGNATURE-----",
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("message lacks %q:\n%s", want, data)
+		}
+	}
+	if _, err := netmail.ReadMessage(bytes.NewReader(data)); err != nil {
+		t.Fatalf("parse signed message: %v", err)
 	}
 }
 
