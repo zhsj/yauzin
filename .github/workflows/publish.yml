@@ -19,4 +19,5 @@ jobs:
       manifest-path: packaging/flatpak/me.zhsj.yauzin.json
       arches: x86_64
       remote-name: yauzin
+      index-template: site/index.html
       branch: ${{ github.ref_type == 'tag' && 'stable' || 'beta' }}

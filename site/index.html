@@ -1,0 +1,1415 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{range .Apps}}{{.Name}}{{else}}Yauzin{{end}} — Flatpak for Linux</title>
+<meta name="description" content="{{range .Apps}}{{.Summary}}{{else}}Native desktop email client{{end}}">
+<meta property="og:title" content="{{range .Apps}}{{.Name}}{{else}}Yauzin{{end}}">
+<meta property="og:description" content="{{range .Apps}}{{.Summary}}{{else}}Native desktop email client{{end}}">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#FBF8F5">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='26' fill='none' stroke='%23D24B3E' stroke-width='5'/%3E%3C/svg%3E">
+<script>
+(function () {
+  try {
+    var pref = localStorage.getItem('yauzin-theme') || 'auto';
+    var dark = pref === 'dark' || (pref === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    document.documentElement.dataset.themePref = pref;
+  } catch (e) {}
+})();
+</script>
+<style>
+/* ── tokens ─────────────────────────────────────────────────────────── */
+:root {
+  --font-serif: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  --paper: #FBF8F5;
+  --paper-soft: #F4EEE8;
+  --surface: #FFFFFF;
+  --surface-2: #F8F4EF;
+  --ink: #1B1513;
+  --ink-2: #4A3E38;
+  --ink-3: #6B5D57;
+  --line: #E7DFD6;
+  --line-2: #D8CCC1;
+  --accent: #D24B3E;
+  --accent-2: #B33F34;
+  --accent-3: #8E2F27;
+  --accent-soft: #FBEDEA;
+  --ok: #2E7D5B;
+  --code-bg: #171311;
+  --code-ink: #F3EDE7;
+  --code-line: #302823;
+  --glow: rgba(210, 75, 62, 0.10);
+  --texture: rgba(27, 21, 19, 0.022);
+  --header-bg: rgba(251, 248, 245, 0.82);
+  --shimmer: rgba(255, 255, 255, 0.65);
+  --shadow-sm: 0 1px 2px rgba(27, 21, 19, 0.05);
+  --shadow-md: 0 22px 48px -28px rgba(27, 21, 19, 0.5);
+  --radius: 14px;
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  --paper: #141010;
+  --paper-soft: #1A1614;
+  --surface: #1D1817;
+  --surface-2: #241E1C;
+  --ink: #F5EFEA;
+  --ink-2: #D8CEC6;
+  --ink-3: #B3A79F;
+  --line: #312A27;
+  --line-2: #3D3531;
+  --accent: #E4635A;
+  --accent-2: #C95248;
+  --accent-3: #FFA79D;
+  --accent-soft: #2A1A18;
+  --ok: #6FBF97;
+  --code-bg: #0E0B0A;
+  --code-ink: #F3EDE7;
+  --code-line: #2B2420;
+  --glow: rgba(228, 99, 90, 0.14);
+  --texture: rgba(245, 239, 234, 0.032);
+  --header-bg: rgba(20, 16, 16, 0.78);
+  --shimmer: rgba(245, 239, 234, 0.10);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 22px 48px -28px rgba(0, 0, 0, 0.85);
+  color-scheme: dark;
+}
+
+/* ── base ───────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+  scroll-padding-top: 96px;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--ink);
+  background-color: var(--paper);
+  background-image:
+    radial-gradient(1100px 620px at 84% -12%, var(--glow), transparent 62%),
+    repeating-linear-gradient(135deg, var(--texture) 0 1px, transparent 1px 8px);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+img { max-width: 100%; height: auto; }
+
+a { color: var(--accent-3); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:hover { color: var(--accent); }
+
+h1, h2, h3 { font-family: var(--font-serif); font-weight: 600; line-height: 1.1; letter-spacing: -0.02em; margin: 0; }
+
+p { margin: 0; }
+
+::selection { background: var(--accent-soft); color: var(--accent-3); }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.skip-link {
+  position: absolute; left: 16px; top: -48px; z-index: 100;
+  padding: 10px 16px; border-radius: 999px;
+  background: var(--ink); color: var(--paper); font-size: 14px; text-decoration: none;
+}
+.skip-link:focus { top: 12px; color: var(--paper); }
+
+.wrap { width: min(1120px, 100% - 48px); margin-inline: auto; }
+
+/* ── header ─────────────────────────────────────────────────────────── */
+.site-header {
+  position: sticky; top: 0; z-index: 40;
+  background: var(--header-bg);
+  backdrop-filter: saturate(140%) blur(14px);
+  -webkit-backdrop-filter: saturate(140%) blur(14px);
+  border-bottom: 1px solid transparent;
+  transition: border-color 200ms ease, background-color 200ms ease;
+}
+.site-header.is-stuck { border-bottom-color: var(--line); }
+
+.header-inner {
+  display: flex; align-items: center; gap: 24px;
+  min-height: 64px;
+}
+
+.brand { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; }
+.brand:hover { color: var(--ink); }
+.brand-icon { width: 28px; height: 28px; border-radius: 8px; }
+.brand-name { font-family: var(--font-serif); font-size: 21px; letter-spacing: -0.01em; }
+
+.site-nav { display: flex; align-items: center; gap: 4px; margin-left: 8px; }
+.site-nav a {
+  padding: 7px 12px; border-radius: 999px;
+  color: var(--ink-3); text-decoration: none; font-size: 14px;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+.site-nav a:hover { color: var(--ink); background: var(--surface-2); }
+.site-nav a[aria-current="true"] { color: var(--accent-3); background: var(--accent-soft); }
+
+.header-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px; padding: 0;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--ink-2);
+  cursor: pointer; transition: color 150ms ease, border-color 150ms ease, transform 150ms ease;
+}
+.icon-btn:hover { color: var(--accent-3); border-color: var(--line-2); transform: translateY(-1px); }
+
+.theme-icon { display: none; width: 18px; height: 18px; }
+html[data-theme-pref="auto"] .theme-icon-auto,
+html[data-theme-pref="light"] .theme-icon-light,
+html[data-theme-pref="dark"] .theme-icon-dark { display: block; }
+
+/* ── buttons ────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 12px 20px; border: 1px solid transparent; border-radius: 999px;
+  font-size: 15px; font-weight: 600; line-height: 1.2;
+  text-decoration: none; cursor: pointer;
+  transition: transform 150ms ease, background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+}
+.btn-primary {
+  background: var(--accent-2); color: #fff;
+  box-shadow: 0 14px 30px -18px rgba(210, 75, 62, 0.95);
+}
+.btn-primary:hover { background: var(--accent-3); color: #fff; transform: translateY(-1px); }
+.btn-ghost { background: var(--surface); border-color: var(--line-2); color: var(--ink); }
+.btn-ghost:hover { border-color: var(--ink-3); color: var(--ink); transform: translateY(-1px); }
+.btn-block { width: 100%; }
+.btn-sm { padding: 9px 16px; font-size: 14px; }
+
+/* ── hero ───────────────────────────────────────────────────────────── */
+.hero { padding: 72px 0 40px; }
+
+.hero-grid {
+  display: grid; grid-template-columns: minmax(0, 1fr) 336px;
+  gap: 56px; align-items: start;
+}
+
+.app-icon {
+  display: block; width: 128px; height: 128px;
+  border-radius: 28px; border: 1px solid var(--line);
+  background: var(--surface); box-shadow: var(--shadow-md);
+}
+
+.eyebrow {
+  margin-top: 28px;
+  font-size: 12px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--accent-3);
+}
+
+.app-name {
+  margin-top: 10px;
+  font-size: clamp(40px, 5vw, 58px);
+  letter-spacing: -0.03em;
+}
+
+.app-summary {
+  margin-top: 14px; max-width: 40ch;
+  font-size: 20px; line-height: 1.45; color: var(--ink-2);
+}
+
+.meta-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
+  margin: 24px 0 0; padding: 0; list-style: none;
+  font-size: 13.5px; color: var(--ink-3);
+}
+.meta-row li { display: inline-flex; align-items: center; gap: 14px; }
+.meta-row li + li::before {
+  content: ""; width: 4px; height: 4px; border-radius: 50%;
+  background: var(--line-2);
+}
+
+.install-card {
+  position: relative;
+  padding: 22px; border: 1px solid var(--line); border-radius: 18px;
+  background: var(--surface); box-shadow: var(--shadow-sm);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.install-card::before {
+  content: ""; position: absolute; inset: 0 0 auto; height: 3px;
+  border-radius: 18px 18px 0 0;
+  background: linear-gradient(90deg, var(--accent), transparent 70%);
+  opacity: 0.85;
+}
+.card-kicker {
+  font-family: var(--font-serif); font-size: 18px; font-weight: 600;
+  margin-bottom: 2px;
+}
+.repo-link { font-size: 13.5px; text-align: center; color: var(--ink-3); }
+.repo-link:hover { color: var(--accent-3); }
+.card-note {
+  margin-top: 6px; padding-top: 12px; border-top: 1px dashed var(--line);
+  font-size: 12.5px; line-height: 1.55; color: var(--ink-3);
+}
+.card-note code {
+  font-family: var(--font-mono); font-size: 12px;
+  padding: 1px 5px; border-radius: 5px; background: var(--surface-2); border: 1px solid var(--line);
+}
+
+/* ── layout ─────────────────────────────────────────────────────────── */
+.columns {
+  display: grid; grid-template-columns: minmax(0, 1fr) 296px;
+  gap: 64px; align-items: start;
+  padding-bottom: 24px;
+}
+
+.section { padding-top: 72px; }
+.section:first-child { padding-top: 40px; }
+
+.section-head { margin-bottom: 26px; }
+.section-head .eyebrow { margin-top: 0; }
+.section-head h2 { margin-top: 8px; font-size: clamp(26px, 3vw, 34px); }
+.section-lede { margin-top: 10px; max-width: 60ch; color: var(--ink-3); font-size: 15px; }
+
+/* ── prose ──────────────────────────────────────────────────────────── */
+.prose { max-width: 68ch; font-size: 16.5px; line-height: 1.75; color: var(--ink-2); }
+.prose > * + * { margin-top: 1em; }
+.prose p:first-child { font-size: 18px; line-height: 1.7; color: var(--ink); }
+.prose ul, .prose ol { margin: 1em 0 0; padding-left: 1.25em; }
+.prose li + li { margin-top: 0.4em; }
+.prose li::marker { color: var(--accent); }
+.prose em { font-style: italic; }
+.prose strong { font-weight: 650; color: var(--ink); }
+.prose code, .prose tt {
+  font-family: var(--font-mono); font-size: 0.9em;
+  padding: 1px 6px; border-radius: 6px;
+  background: var(--surface-2); border: 1px solid var(--line); color: var(--ink);
+}
+.prose a { color: var(--accent-3); }
+
+.prose-release { font-size: 15.5px; line-height: 1.7; }
+.prose-release p:first-child { font-size: 15.5px; color: var(--ink-2); }
+
+/* ── screenshots ────────────────────────────────────────────────────── */
+.gallery { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+
+.shot {
+  display: block; width: 100%; padding: 0; margin: 0;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface); overflow: hidden; cursor: zoom-in;
+  text-align: left; color: var(--ink);
+  transition: transform 200ms ease, box-shadow 200ms ease, border-color 200ms ease;
+}
+.shot:first-child { grid-column: 1 / -1; }
+.shot:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); border-color: var(--line-2); }
+.shot img { display: block; width: 100%; aspect-ratio: 10 / 7; object-fit: cover; background: var(--surface-2); }
+.shot-caption {
+  display: block; padding: 10px 14px 12px;
+  font-size: 13px; color: var(--ink-3);
+  border-top: 1px solid var(--line);
+}
+
+/* ── releases ───────────────────────────────────────────────────────── */
+.release-card {
+  position: relative;
+  padding: 22px 24px 24px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface); box-shadow: var(--shadow-sm);
+  max-width: 72ch;
+}
+.release-card::before {
+  content: ""; position: absolute; inset: 0 0 auto; height: 2px;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: linear-gradient(90deg, var(--accent), transparent 65%);
+}
+.release-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.version-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent-3);
+  font-family: var(--font-mono); font-size: 12.5px; font-weight: 600;
+}
+.release-date { font-size: 13px; color: var(--ink-3); }
+.release-card .prose { margin-top: 16px; }
+
+.history { margin-top: 8px; max-width: 72ch; }
+.release-item { border-bottom: 1px solid var(--line); }
+.release-item summary {
+  display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+  padding: 14px 2px; cursor: pointer; list-style: none;
+  transition: color 150ms ease;
+}
+.release-item summary::-webkit-details-marker { display: none; }
+.release-item summary::marker { content: ""; }
+.release-item summary:hover { color: var(--accent-3); }
+.release-version { font-family: var(--font-mono); font-size: 13.5px; font-weight: 600; min-width: 72px; }
+.release-item summary .release-date { margin-left: auto; }
+.release-item .prose { padding: 0 2px 18px; }
+.release-item[open] summary { color: var(--ink); }
+
+.history-toggle {
+  margin-top: 18px; padding: 8px 14px;
+  border: 1px solid var(--line-2); border-radius: 999px;
+  background: var(--surface); color: var(--ink-2);
+  font: inherit; font-size: 13.5px; cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease;
+}
+.history-toggle:hover { color: var(--accent-3); border-color: var(--accent); }
+.history[data-collapsed="true"] .release-item.is-extra { display: none; }
+
+/* ── install ────────────────────────────────────────────────────────── */
+.channels { border-top: 1px solid var(--line); }
+.channel {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 18px; align-items: center;
+  padding: 18px 2px; border-bottom: 1px solid var(--line);
+}
+.channel-name { font-family: var(--font-serif); font-size: 18px; font-weight: 600; }
+.channel-arches { margin-top: 4px; display: flex; gap: 6px; flex-wrap: wrap; }
+.badge {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  border: 1px solid var(--line-2); background: var(--surface-2);
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-3);
+}
+.channel-meta {
+  display: flex; gap: 16px; font-size: 13px; color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.code-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 26px; }
+
+.code-card {
+  border-radius: var(--radius); overflow: hidden;
+  background: var(--code-bg); color: var(--code-ink);
+  border: 1px solid var(--code-line);
+}
+.code-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 14px; border-bottom: 1px solid var(--code-line);
+  font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: #B9A79B;
+}
+.copy-btn {
+  padding: 4px 10px; border-radius: 999px;
+  border: 1px solid #3A312C; background: transparent; color: var(--code-ink);
+  font: inherit; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  cursor: pointer; transition: background-color 150ms ease, border-color 150ms ease;
+}
+.copy-btn:hover { background: #2A231F; border-color: #574A43; }
+.copy-btn[data-state="done"] { color: #8FD3B0; border-color: #2E7D5B; }
+.copy-btn[data-state="fail"] { color: #F09A90; border-color: #8E2F27; }
+
+.code-card pre { margin: 0; padding: 16px 18px; overflow-x: auto; }
+.code-card code {
+  font-family: var(--font-mono); font-size: 13px; line-height: 1.7;
+  color: var(--code-ink); white-space: pre;
+}
+.code-hint { margin-top: 12px; font-size: 13px; color: var(--ink-3); }
+.code-hint code { font-family: var(--font-mono); font-size: 12.5px; }
+
+/* ── details ────────────────────────────────────────────────────────── */
+.details {
+  position: sticky; top: 92px;
+  padding: 20px 22px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface); box-shadow: var(--shadow-sm);
+}
+.details-title {
+  font-size: 18px; margin-bottom: 10px;
+}
+.detail-list { margin: 0; }
+.detail-row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+  padding: 9px 0; border-bottom: 1px dashed var(--line);
+}
+.detail-row:last-of-type { border-bottom: 0; }
+.detail-row dt { font-size: 12.5px; color: var(--ink-3); }
+.detail-row dd {
+  margin: 0; font-size: 13.5px; color: var(--ink); text-align: right;
+  font-variant-numeric: tabular-nums; word-break: break-word;
+}
+.detail-links { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.detail-links-title { font-size: 12.5px; color: var(--ink-3); margin-bottom: 8px; }
+.detail-links ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+.detail-links a { font-size: 13.5px; }
+
+/* ── footer ─────────────────────────────────────────────────────────── */
+.site-footer {
+  margin-top: 88px; padding: 28px 0 48px;
+  border-top: 1px solid var(--line);
+  font-size: 13px; color: var(--ink-3);
+}
+.footer-inner { display: flex; flex-wrap: wrap; gap: 10px 24px; align-items: center; justify-content: space-between; }
+.footer-inner a { color: var(--ink-2); }
+.footer-inner a:hover { color: var(--accent-3); }
+.footer-meta { display: flex; gap: 8px; align-items: center; }
+
+/* ── lightbox ───────────────────────────────────────────────────────── */
+.lightbox {
+  width: min(1200px, 94vw); max-width: none; padding: 0;
+  border: 1px solid var(--line); border-radius: 18px;
+  background: var(--surface); color: var(--ink);
+  box-shadow: 0 40px 80px -40px rgba(0, 0, 0, 0.8);
+}
+.lightbox::backdrop { background: rgba(20, 16, 16, 0.82); backdrop-filter: blur(5px); }
+.lightbox-figure { margin: 0; }
+.lightbox img { display: block; width: 100%; max-height: 76vh; object-fit: contain; background: var(--surface-2); }
+.lightbox-bar {
+  display: flex; align-items: center; gap: 16px;
+  padding: 12px 16px; border-top: 1px solid var(--line);
+}
+.lightbox-caption { flex: 1; font-size: 13.5px; color: var(--ink-3); }
+.lightbox-counter { font-family: var(--font-mono); font-size: 12px; color: var(--ink-3); }
+.lightbox-btn {
+  padding: 6px 12px; border-radius: 999px;
+  border: 1px solid var(--line-2); background: var(--surface); color: var(--ink-2);
+  font: inherit; font-size: 13px; cursor: pointer;
+}
+.lightbox-btn:hover { border-color: var(--accent); color: var(--accent-3); }
+.lightbox[data-single="true"] .lightbox-step { display: none; }
+.lightbox-close {
+  position: absolute; top: 10px; right: 10px;
+  width: 34px; height: 34px; border-radius: 999px;
+  border: 1px solid var(--line-2); background: var(--surface); color: var(--ink-2);
+  font-size: 18px; line-height: 1; cursor: pointer;
+}
+
+/* ── states ─────────────────────────────────────────────────────────── */
+.skeleton {
+  position: relative; overflow: hidden;
+  border-radius: 10px; background: var(--surface-2);
+  min-height: 16px;
+}
+.skeleton::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, var(--shimmer), transparent);
+  transform: translateX(-100%);
+  animation: shimmer 1.7s ease-in-out infinite;
+}
+.skeleton-line { height: 14px; margin-top: 10px; max-width: 62ch; }
+.skeleton-line:first-child { width: 88%; }
+.skeleton-line:nth-child(2) { width: 96%; }
+.skeleton-line:nth-child(3) { width: 74%; }
+.skeleton-line:nth-child(4) { width: 52%; }
+.skeleton-shot { aspect-ratio: 10 / 7; }
+
+.notice {
+  margin-top: 18px; padding: 12px 16px;
+  border: 1px dashed var(--line-2); border-radius: 10px;
+  background: var(--surface-2); color: var(--ink-3); font-size: 13.5px;
+}
+.notice[hidden] { display: none; }
+.muted { color: var(--ink-3); }
+
+/* ── motion ─────────────────────────────────────────────────────────── */
+@keyframes shimmer { to { transform: translateX(100%); } }
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+
+.rise { animation: rise 480ms cubic-bezier(0.22, 0.7, 0.3, 1) both; }
+.hero-copy > *:nth-child(1) { animation-delay: 0ms; }
+.hero-copy > *:nth-child(2) { animation-delay: 60ms; }
+.hero-copy > *:nth-child(3) { animation-delay: 120ms; }
+.hero-copy > *:nth-child(4) { animation-delay: 180ms; }
+.hero-copy > *:nth-child(5) { animation-delay: 240ms; }
+.install-card { animation-delay: 120ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ── responsive ─────────────────────────────────────────────────────── */
+@media (max-width: 1040px) {
+  .hero-grid { grid-template-columns: minmax(0, 1fr); gap: 36px; }
+  .install-card { max-width: 420px; }
+  .columns { grid-template-columns: minmax(0, 1fr); gap: 40px; }
+  .details { position: static; order: 2; max-width: 420px; }
+  .code-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 760px) {
+  .wrap { width: calc(100% - 32px); }
+  .site-nav { display: none; }
+  .hero { padding-top: 48px; }
+  .app-icon { width: 104px; height: 104px; border-radius: 24px; }
+  .app-summary { font-size: 18px; }
+  .gallery { grid-template-columns: minmax(0, 1fr); }
+  .shot:first-child { grid-column: auto; }
+  .channel { grid-template-columns: minmax(0, 1fr) auto; }
+  .channel-meta { grid-column: 1 / -1; order: 3; }
+  .channel .btn { grid-column: 2; grid-row: 1; }
+  .details { max-width: none; }
+  .footer-inner { flex-direction: column; align-items: flex-start; }
+}
+
+@media (max-width: 480px) {
+  .meta-row { font-size: 13px; }
+  .meta-row li { flex-wrap: wrap; }
+  .btn { width: 100%; }
+  .channel .btn { width: auto; }
+}
+</style>
+</head>
+<body>
+<noscript><style>.skeleton { display: none; } .skeleton::after { animation: none; }</style></noscript>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header" id="top">
+  <div class="wrap header-inner">
+    <a class="brand" href="#top">
+      <img class="brand-icon" data-app-icon="small" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='26' fill='none' stroke='%23D24B3E' stroke-width='5'/%3E%3C/svg%3E" alt="" width="28" height="28">
+      <span class="brand-name">{{range .Apps}}{{.Name}}{{else}}Yauzin{{end}}</span>
+    </a>
+
+    <nav class="site-nav" aria-label="Sections">
+      <a href="#about">Overview</a>
+      <a href="#screenshots">Screenshots</a>
+      <a href="#releases">Releases</a>
+      <a href="#install">Install</a>
+    </nav>
+
+    <div class="header-actions">
+      <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch theme">
+        <svg class="theme-icon theme-icon-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17" /><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none"/></svg>
+        <svg class="theme-icon theme-icon-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.4 5.4l1.6 1.6M17 17l1.6 1.6M18.6 5.4L17 7M7 17l-1.6 1.6"/></svg>
+        <svg class="theme-icon theme-icon-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20.5 14.4A8.6 8.6 0 0 1 9.6 3.5 8.7 8.7 0 1 0 20.5 14.4z"/></svg>
+      </button>
+      <a class="btn btn-primary btn-sm" href="#install">Install</a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <img class="app-icon rise" data-app-icon="large" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Ccircle cx='64' cy='64' r='38' fill='none' stroke='%23D24B3E' stroke-width='6'/%3E%3C/svg%3E" alt="" width="128" height="128">
+        <p class="eyebrow rise">Flatpak for Linux</p>
+        <h1 class="app-name rise">{{range .Apps}}{{.Name}}{{else}}Yauzin{{end}}</h1>
+        <p class="app-summary rise">{{range .Apps}}{{.Summary}}{{else}}Native desktop email client{{end}}</p>
+        <ul class="meta-row rise">
+          <li data-meta="developer">zhsj</li>
+          <li data-meta="license">MIT</li>
+          <li><span data-meta="updated">—</span></li>
+          <li><span data-meta="size" data-bytes="{{range .Apps}}{{range $i, $b := .Branches}}{{if eq $i 0}}{{$b.DownloadSize}}{{end}}{{end}}{{end}}">—</span></li>
+        </ul>
+      </div>
+
+      <aside class="install-card rise" aria-label="Install">
+        <p class="card-kicker">Install</p>
+        <a class="btn btn-primary btn-block" {{if .Apps}}download{{end}}
+           {{range .Apps}}{{range $i, $b := .Branches}}{{if eq $i 0}}href="{{$b.RefFile}}"{{end}}{{end}}{{else}}href="#install"{{end}}>
+          Install {{range .Apps}}{{.Name}}{{else}}Yauzin{{end}}
+        </a>
+        <a class="btn btn-ghost btn-block" href="#install">Command line</a>
+        <a class="repo-link" href="{{if .RemoteName}}{{.RemoteName}}{{else}}yauzin{{end}}.flatpakrepo" download>Download .flatpakrepo</a>
+        <p class="card-note">
+          {{if .Signing.Enabled}}Signed repository — flatpak verifies every install.
+          {{else}}Unsigned build — the command line section adds the remote with <code>--no-gpg-verify</code>.{{end}}
+        </p>
+      </aside>
+    </div>
+  </section>
+
+  <div class="wrap columns">
+    <div class="primary-col">
+      <section class="section" id="about">
+        <div class="section-head">
+          <p class="eyebrow">Overview</p>
+          <h2>About {{range .Apps}}{{.Name}}{{else}}Yauzin{{end}}</h2>
+        </div>
+        <div class="prose" data-description>
+          <div class="skeleton skeleton-line"></div>
+          <div class="skeleton skeleton-line"></div>
+          <div class="skeleton skeleton-line"></div>
+        </div>
+        <p class="notice" data-data-note hidden></p>
+        <noscript>
+          <p class="notice">The long description, screenshots and release history are read from the repository index and need JavaScript. The install links above work without it.</p>
+        </noscript>
+      </section>
+
+      <section class="section" id="screenshots">
+        <div class="section-head">
+          <p class="eyebrow">Screenshots</p>
+          <h2>In use</h2>
+        </div>
+        <div class="gallery" data-gallery>
+          <div class="skeleton skeleton-shot"></div>
+        </div>
+      </section>
+
+      <section class="section" id="releases">
+        <div class="section-head">
+          <p class="eyebrow">Releases</p>
+          <h2>What's new</h2>
+        </div>
+        <article class="release-card" data-latest-release>
+          <div class="skeleton skeleton-line"></div>
+          <div class="skeleton skeleton-line"></div>
+        </article>
+
+        <div class="section-head" style="margin-top:48px">
+          <h2>Version history</h2>
+        </div>
+        <div class="history" data-release-history data-collapsed="true">
+          <div class="skeleton skeleton-line"></div>
+          <div class="skeleton skeleton-line"></div>
+        </div>
+        <button class="history-toggle" type="button" data-history-toggle hidden>Show all versions</button>
+      </section>
+
+      <section class="section" id="install">
+        <div class="section-head">
+          <p class="eyebrow">Install</p>
+          <h2>Add the repository</h2>
+          <p class="section-lede">
+            Pick a channel below, or add the whole repository once and install from the command line.
+          </p>
+        </div>
+
+        <div class="channels">
+          {{range .Apps}}{{range .Branches}}
+          <div class="channel">
+            <div>
+              <p class="channel-name">{{.Branch}}</p>
+              <p class="channel-arches">{{range .Arches}}<span class="badge">{{.}}</span>{{end}}</p>
+            </div>
+            <div class="channel-meta">
+              <span data-bytes="{{.DownloadSize}}">—</span>
+              <span>{{.FormattedDate}}</span>
+            </div>
+            <a class="btn btn-ghost btn-sm" href="{{.RefFile}}" download>Download .flatpakref</a>
+          </div>
+          {{end}}{{end}}
+        </div>
+
+        <div class="code-grid">
+          <div class="code-card">
+            <div class="code-head">
+              <span>Add the repository</span>
+              <button class="copy-btn" type="button" data-copy="cmd-repo">Copy</button>
+            </div>
+            <pre><code id="cmd-repo">{{if .Signing.Enabled}}flatpak remote-add --user {{.RemoteName}} <span data-site-root>{{.PagesURL}}</span>/{{.RemoteName}}.flatpakrepo
+flatpak remote-modify --user --signature-lookaside=<span data-site-root>{{.PagesURL}}</span>/{{.Signing.Lookaside}} {{.RemoteName}}{{else}}flatpak remote-add --if-not-exists --user --no-gpg-verify {{.RemoteName}} \
+  oci+<span data-site-root>{{.PagesURL}}</span>{{end}}</code></pre>
+          </div>
+
+          <div class="code-card">
+            <div class="code-head">
+              <span>Install {{range .Apps}}{{.Name}}{{else}}Yauzin{{end}}</span>
+              <button class="copy-btn" type="button" data-copy="cmd-install">Copy</button>
+            </div>
+            <pre><code id="cmd-install">{{range .Apps}}{{range .Branches}}{{.InstallCmd}}
+{{end}}{{end}}</code></pre>
+          </div>
+        </div>
+        <p class="code-hint">Each line in the second block installs a specific channel; <code>//stable</code> is the default branch.</p>
+      </section>
+    </div>
+
+    <aside class="details" aria-labelledby="details-title">
+      <h2 class="details-title" id="details-title">Details</h2>
+      <dl class="detail-list">
+        <div class="detail-row"><dt>Version</dt><dd data-detail="version">—</dd></div>
+        <div class="detail-row"><dt>Channels</dt><dd data-detail="channel">{{range .Apps}}{{range $i, $b := .Branches}}{{if $i}}, {{end}}{{$b.Branch}}{{end}}{{end}}</dd></div>
+        <div class="detail-row"><dt>Updated</dt><dd data-detail="updated">{{range .Apps}}{{range $i, $b := .Branches}}{{if eq $i 0}}{{$b.FormattedDate}}{{end}}{{end}}{{end}}</dd></div>
+        <div class="detail-row"><dt>Download</dt><dd data-detail="download" data-bytes="{{range .Apps}}{{range $i, $b := .Branches}}{{if eq $i 0}}{{$b.DownloadSize}}{{end}}{{end}}{{end}}">—</dd></div>
+        <div class="detail-row"><dt>Installed</dt><dd data-detail="installed" data-bytes="{{range .Apps}}{{range $i, $b := .Branches}}{{if eq $i 0}}{{$b.InstalledSize}}{{end}}{{end}}{{end}}">—</dd></div>
+        <div class="detail-row"><dt>License</dt><dd data-detail="license">—</dd></div>
+        <div class="detail-row"><dt>Runtime</dt><dd data-detail="runtime">—</dd></div>
+      </dl>
+      <div class="detail-links" data-detail="links-wrap" hidden>
+        <p class="detail-links-title">Links</p>
+        <ul data-detail="links"></ul>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <p><span data-footer-name>{{range .Apps}}{{.Name}}{{else}}Yauzin{{end}}</span> is free software, built with Go and Gio.</p>
+    <p class="footer-meta">
+      <a href="https://github.com/zhsj/yauzin" rel="noopener noreferrer">Source</a>
+      <span aria-hidden="true">·</span>
+      <a href="index/static">Index</a>
+      <span aria-hidden="true">·</span>
+      <span>Served by <a href="https://aetherpak.org/" rel="noopener noreferrer">AetherPak</a></span>
+    </p>
+  </div>
+</footer>
+
+<dialog class="lightbox" id="lightbox">
+  <figure class="lightbox-figure">
+    <img data-lightbox-image alt="">
+    <figcaption class="lightbox-bar">
+      <button class="lightbox-btn lightbox-step" type="button" data-lightbox-prev aria-label="Previous screenshot">←</button>
+      <span class="lightbox-caption" data-lightbox-caption></span>
+      <span class="lightbox-counter" data-lightbox-counter></span>
+      <button class="lightbox-btn lightbox-step" type="button" data-lightbox-next aria-label="Next screenshot">→</button>
+    </figcaption>
+  </figure>
+  <button class="lightbox-close" type="button" data-lightbox-close aria-label="Close">×</button>
+</dialog>
+
+<span class="sr-only" role="status" aria-live="polite" data-live-status></span>
+
+<script>
+(function () {
+  'use strict';
+
+  var THEME_KEY = 'yauzin-theme';
+  var root = document.documentElement;
+  var liveStatus = document.querySelector('[data-live-status]');
+  var themeButton = document.querySelector('[data-theme-toggle]');
+
+  function qs(sel, scope) { return (scope || document).querySelector(sel); }
+  function qsa(sel, scope) { return Array.prototype.slice.call((scope || document).querySelectorAll(sel)); }
+
+  function announce(message) {
+    if (!liveStatus) return;
+    liveStatus.textContent = '';
+    window.setTimeout(function () { liveStatus.textContent = message; }, 30);
+  }
+
+  /* ── theme ─────────────────────────────────────────────────────────── */
+
+  var themePref = 'auto';
+  try { themePref = localStorage.getItem(THEME_KEY) || 'auto'; } catch (e) {}
+
+  function paintTheme() {
+    var dark = themePref === 'dark' || (themePref === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    root.dataset.theme = dark ? 'dark' : 'light';
+    root.dataset.themePref = themePref;
+    var themeColor = document.querySelector('meta[name="theme-color"]');
+    if (themeColor) themeColor.setAttribute('content', dark ? '#141010' : '#FBF8F5');
+    if (themeButton) {
+      var label = themePref === 'auto' ? 'Theme: system, switch to light'
+        : themePref === 'light' ? 'Theme: light, switch to dark'
+        : 'Theme: dark, switch to system';
+      themeButton.setAttribute('aria-label', label);
+      themeButton.setAttribute('title', label);
+    }
+  }
+
+  if (themeButton) {
+    themeButton.addEventListener('click', function () {
+      themePref = themePref === 'auto' ? 'light' : themePref === 'light' ? 'dark' : 'auto';
+      try { localStorage.setItem(THEME_KEY, themePref); } catch (e) {}
+      paintTheme();
+    });
+  }
+
+  var schemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+  var onSchemeChange = function () { if (themePref === 'auto') paintTheme(); };
+  if (typeof schemeQuery.addEventListener === 'function') schemeQuery.addEventListener('change', onSchemeChange);
+  else if (typeof schemeQuery.addListener === 'function') schemeQuery.addListener(onSchemeChange);
+
+  paintTheme();
+
+  /* ── header + scroll spy ───────────────────────────────────────────── */
+
+  var header = qs('.site-header');
+  function paintHeader() {
+    if (!header) return;
+    header.classList.toggle('is-stuck', window.scrollY > 8);
+  }
+  paintHeader();
+  window.addEventListener('scroll', paintHeader, { passive: true });
+
+  var navLinks = qsa('.site-nav a[href^="#"]');
+  var navTargets = navLinks.map(function (link) { return qs(link.getAttribute('href')); }).filter(Boolean);
+
+  if ('IntersectionObserver' in window && navTargets.length) {
+    var spy = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        navLinks.forEach(function (link) {
+          if (link.getAttribute('href') === '#' + entry.target.id) link.setAttribute('aria-current', 'true');
+          else link.removeAttribute('aria-current');
+        });
+      });
+    }, { rootMargin: '-40% 0px -52% 0px' });
+    navTargets.forEach(function (target) { spy.observe(target); });
+  }
+
+  /* ── formatting ────────────────────────────────────────────────────── */
+
+  function formatBytes(bytes) {
+    var value = Number(bytes);
+    if (!value || !isFinite(value) || value <= 0) return '—';
+    var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    var index = 0;
+    while (value >= 1000 && index < units.length - 1) { value /= 1000; index += 1; }
+    return (value >= 10 ? value.toFixed(0) : value.toFixed(1)) + ' ' + units[index];
+  }
+
+  function formatDate(ms) {
+    if (!ms) return '—';
+    try {
+      return new Date(ms).toLocaleDateString('en', { day: 'numeric', month: 'short', year: 'numeric' });
+    } catch (e) { return '—'; }
+  }
+
+  function paintBytes(scope) {
+    qsa('[data-bytes]', scope || document).forEach(function (el) {
+      el.textContent = formatBytes(el.dataset.bytes);
+    });
+  }
+
+  function setBytes(el, bytes) {
+    if (!el || !bytes) return;
+    el.dataset.bytes = String(bytes);
+    el.textContent = formatBytes(bytes);
+  }
+
+  function setText(sel, value) {
+    var el = qs(sel);
+    if (el && value) el.textContent = value;
+  }
+
+  paintBytes();
+
+  /* ── site root ─────────────────────────────────────────────────────── */
+
+  var siteRoot = '';
+  try {
+    var here = new URL(window.location.href);
+    var basePath = here.pathname;
+    if (!/\/$/.test(basePath)) basePath = basePath.replace(/[^/]*$/, '');
+    siteRoot = here.origin + basePath.replace(/\/$/, '');
+  } catch (e) {}
+  if (siteRoot) {
+    qsa('[data-site-root]').forEach(function (el) { el.textContent = siteRoot; });
+  }
+
+  /* ── copy blocks ───────────────────────────────────────────────────── */
+
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(function () { return true; }).catch(function () { return fallbackCopy(text); });
+    }
+    return Promise.resolve(fallbackCopy(text));
+  }
+
+  function fallbackCopy(text) {
+    var area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.top = '-1000px';
+    document.body.appendChild(area);
+    area.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    area.remove();
+    return ok;
+  }
+
+  qsa('[data-copy]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      var target = document.getElementById(button.dataset.copy);
+      if (!target) return;
+      var text = target.textContent.replace(/\s+$/, '');
+      copyText(text).then(function (ok) {
+        button.dataset.state = ok ? 'done' : 'fail';
+        button.textContent = ok ? 'Copied' : 'Failed';
+        announce(ok ? 'Command copied to the clipboard' : 'Could not copy the command');
+        window.setTimeout(function () {
+          button.textContent = 'Copy';
+          delete button.dataset.state;
+        }, 2000);
+      });
+    });
+  });
+
+  /* ── AppStream rendering ───────────────────────────────────────────── */
+
+  var ALLOWED_TAGS = { P: 1, UL: 1, OL: 1, LI: 1, EM: 1, STRONG: 1, CODE: 1, TT: 1, BR: 1, A: 1, SPAN: 1 };
+
+  function convertNode(node) {
+    if (node.nodeType === 3) return document.createTextNode(node.nodeValue);
+    if (node.nodeType !== 1) return document.createDocumentFragment();
+
+    var tag = node.tagName.toUpperCase();
+    var fragment = document.createDocumentFragment();
+
+    if (!ALLOWED_TAGS[tag]) {
+      Array.prototype.forEach.call(node.childNodes, function (child) {
+        fragment.appendChild(convertNode(child));
+      });
+      return fragment;
+    }
+
+    var el = document.createElement(tag.toLowerCase());
+
+    if (tag === 'A') {
+      var href = node.getAttribute('href') || '';
+      if (!/^https?:\/\//i.test(href)) {
+        Array.prototype.forEach.call(node.childNodes, function (child) {
+          fragment.appendChild(convertNode(child));
+        });
+        return fragment;
+      }
+      el.setAttribute('href', href);
+      el.setAttribute('rel', 'noopener noreferrer');
+    }
+
+    Array.prototype.forEach.call(node.childNodes, function (child) {
+      el.appendChild(convertNode(child));
+    });
+    return el;
+  }
+
+  function renderMarkup(source, host) {
+    if (!source || !host) return;
+    host.textContent = '';
+    Array.prototype.forEach.call(source.childNodes, function (child) {
+      host.appendChild(convertNode(child));
+    });
+  }
+
+  function textOf(node) { return node ? node.textContent.trim() : ''; }
+
+  function parseAppdata(xml) {
+    if (!xml) return null;
+    var doc;
+    try { doc = new DOMParser().parseFromString(xml, 'application/xml'); } catch (e) { return null; }
+    if (!doc) return null;
+    if (doc.getElementsByTagName('parsererror').length) return null;
+    if (doc.documentElement && doc.documentElement.nodeName.toLowerCase() === 'parsererror') return null;
+
+    var comp = doc.getElementsByTagName('component')[0];
+    if (!comp) return null;
+
+    var description = comp.getElementsByTagName('description')[0] || null;
+
+    var screenshots = [];
+    Array.prototype.forEach.call(comp.getElementsByTagName('screenshot'), function (shot) {
+      var images = shot.getElementsByTagName('image');
+      var src = '';
+      for (var i = 0; i < images.length; i += 1) {
+        var type = images[i].getAttribute('type');
+        if (type === 'source') { src = textOf(images[i]); break; }
+        if (!src) src = textOf(images[i]);
+      }
+      if (!src) return;
+      screenshots.push({ src: src, caption: textOf(shot.getElementsByTagName('caption')[0]) });
+    });
+
+    var releases = [];
+    Array.prototype.forEach.call(comp.getElementsByTagName('release'), function (release) {
+      var stamp = release.getAttribute('timestamp');
+      var day = release.getAttribute('date');
+      var when = 0;
+      if (stamp) when = Number(stamp) * 1000;
+      else if (day) {
+        var parsed = Date.parse(day.length === 10 ? day + 'T00:00:00Z' : day);
+        if (!isNaN(parsed)) when = parsed;
+      }
+      releases.push({
+        version: release.getAttribute('version') || '',
+        when: when,
+        description: release.getElementsByTagName('description')[0] || null
+      });
+    });
+    releases.sort(function (a, b) { return b.when - a.when; });
+
+    var urls = {};
+    Array.prototype.forEach.call(comp.getElementsByTagName('url'), function (url) {
+      var type = url.getAttribute('type');
+      if (type && !urls[type]) urls[type] = textOf(url);
+    });
+
+    var developer = textOf(comp.getElementsByTagName('developer')[0] && comp.getElementsByTagName('developer')[0].getElementsByTagName('name')[0]);
+    if (!developer) developer = textOf(comp.getElementsByTagName('developer_name')[0]);
+
+    var runtime = '';
+    var bundle = comp.getElementsByTagName('bundle')[0];
+    if (bundle) runtime = bundle.getAttribute('runtime') || '';
+
+    return {
+      description: description,
+      screenshots: screenshots,
+      releases: releases,
+      urls: urls,
+      developer: developer,
+      license: textOf(comp.getElementsByTagName('project_license')[0]),
+      runtime: runtime
+    };
+  }
+
+  function collectApp(index) {
+    var apps = {};
+    var order = [];
+
+    ((index && index.Results) || []).forEach(function (pkg) {
+      (pkg.Images || []).forEach(function (image) {
+        var labels = image.Labels || {};
+        var ref = labels['org.flatpak.ref'] || '';
+        var parts = ref.split('/');
+        if (parts.length < 4 || parts[0] !== 'app') return;
+
+        var id = parts[1];
+        if (id.slice(-6) === '.Debug' || id.slice(-7) === '.Locale') return;
+        if (!labels['org.freedesktop.appstream.appdata']) return;
+
+        var stamp = Number(labels['org.flatpak.timestamp'] || 0) || 0;
+        var entry = apps[id];
+        if (!entry) {
+          entry = apps[id] = { id: id, images: [] };
+          order.push(entry);
+        }
+        entry.images.push({
+          arch: parts[2],
+          branch: parts[3],
+          stamp: stamp,
+          download: Number(labels['org.flatpak.download-size'] || 0) || 0,
+          installed: Number(labels['org.flatpak.installed-size'] || 0) || 0,
+          labels: labels
+        });
+      });
+    });
+
+    if (!order.length) return null;
+
+    var app = order[0];
+    app.images.sort(function (a, b) { return b.stamp - a.stamp; });
+    app.latest = app.images[0];
+    return app;
+  }
+
+  function renderIcon(app) {
+    var labels = app.latest.labels;
+    var big = labels['org.freedesktop.appstream.icon-128'] || labels['org.freedesktop.appstream.icon-64'];
+    var small = labels['org.freedesktop.appstream.icon-64'] || big;
+
+    if (big) {
+      qsa('[data-app-icon="large"]').forEach(function (img) {
+        img.src = big;
+        img.removeAttribute('srcset');
+      });
+    }
+    if (small) {
+      qsa('[data-app-icon="small"]').forEach(function (img) { img.src = small; });
+      var icon = qs('link[rel="icon"]');
+      if (icon) icon.href = small;
+    }
+  }
+
+  function renderGallery(shots) {
+    var host = qs('[data-gallery]');
+    if (!host) return;
+    var section = host.closest('section');
+
+    if (!shots.length) {
+      if (section) section.remove();
+      qsa('.site-nav a[href="#screenshots"]').forEach(function (link) { link.remove(); });
+      return;
+    }
+
+    host.textContent = '';
+    shots.forEach(function (shot, index) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'shot rise';
+      button.setAttribute('aria-label', shot.caption ? 'Open screenshot: ' + shot.caption : 'Open screenshot');
+
+      var img = document.createElement('img');
+      img.src = shot.src;
+      img.alt = shot.caption || 'Screenshot';
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      img.addEventListener('error', function () { button.setAttribute('data-broken', 'true'); });
+      button.appendChild(img);
+
+      if (shot.caption) {
+        var caption = document.createElement('span');
+        caption.className = 'shot-caption';
+        caption.textContent = shot.caption;
+        button.appendChild(caption);
+      }
+
+      button.addEventListener('click', function () { openLightbox(shots, index, button); });
+      host.appendChild(button);
+    });
+  }
+
+  function renderDescription(data) {
+    var host = qs('[data-description]');
+    if (!host) return;
+
+    if (!data.description) {
+      host.innerHTML = '<p class="muted">No long description was published with this build.</p>';
+      return;
+    }
+    renderMarkup(data.description, host);
+  }
+
+  function renderReleases(releases) {
+    var latestHost = qs('[data-latest-release]');
+    var historyHost = qs('[data-release-history]');
+    var toggle = qs('[data-history-toggle]');
+
+    if (!releases.length) {
+      if (latestHost) latestHost.innerHTML = '<p class="muted">No release notes have been published yet.</p>';
+      if (historyHost) historyHost.remove();
+      if (toggle) toggle.remove();
+      return;
+    }
+
+    var latest = releases[0];
+    if (latestHost) {
+      latestHost.textContent = '';
+      var head = document.createElement('div');
+      head.className = 'release-head';
+
+      var version = document.createElement('span');
+      version.className = 'version-pill';
+      version.textContent = latest.version ? 'v' + latest.version : 'Latest';
+
+      var date = document.createElement('span');
+      date.className = 'release-date';
+      date.textContent = formatDate(latest.when);
+
+      head.appendChild(version);
+      head.appendChild(date);
+      latestHost.appendChild(head);
+
+      var body = document.createElement('div');
+      body.className = 'prose prose-release';
+      if (latest.description) renderMarkup(latest.description, body);
+      else body.textContent = 'No notes for this release.';
+      latestHost.appendChild(body);
+    }
+
+    if (!historyHost) return;
+    historyHost.textContent = '';
+
+    releases.forEach(function (release, index) {
+      var item = document.createElement('details');
+      item.className = 'release-item' + (index > 2 ? ' is-extra' : '');
+      if (index === 0) item.open = true;
+
+      var summary = document.createElement('summary');
+      var name = document.createElement('span');
+      name.className = 'release-version';
+      name.textContent = release.version ? 'v' + release.version : 'Release';
+      var when = document.createElement('span');
+      when.className = 'release-date';
+      when.textContent = formatDate(release.when);
+      summary.appendChild(name);
+      summary.appendChild(when);
+      item.appendChild(summary);
+
+      var body = document.createElement('div');
+      body.className = 'prose prose-release';
+      if (release.description) renderMarkup(release.description, body);
+      else body.textContent = 'No notes for this release.';
+      item.appendChild(body);
+
+      historyHost.appendChild(item);
+    });
+
+    if (toggle && releases.length > 3) {
+      toggle.hidden = false;
+      toggle.textContent = 'Show all ' + releases.length + ' versions';
+      toggle.addEventListener('click', function () {
+        var collapsed = historyHost.getAttribute('data-collapsed') === 'true';
+        historyHost.setAttribute('data-collapsed', collapsed ? 'false' : 'true');
+        toggle.textContent = collapsed ? 'Show fewer versions' : 'Show all ' + releases.length + ' versions';
+      });
+    } else if (toggle) {
+      toggle.remove();
+    }
+  }
+
+  function renderLinks(urls) {
+    var wrap = qs('[data-detail="links-wrap"]');
+    var list = qs('[data-detail="links"]');
+    if (!wrap || !list) return;
+    urls = urls || {};
+
+    var labels = {
+      homepage: 'Homepage',
+      bugtracker: 'Bug tracker',
+      'vcs-browser': 'Source code',
+      translate: 'Translations',
+      donation: 'Donate',
+      faq: 'FAQ',
+      help: 'Help'
+    };
+
+    list.textContent = '';
+    Object.keys(labels).forEach(function (key) {
+      var href = urls[key];
+      if (!href || !/^https?:\/\//i.test(href)) return;
+      var item = document.createElement('li');
+      var link = document.createElement('a');
+      link.href = href;
+      link.rel = 'noopener noreferrer';
+      link.textContent = labels[key];
+      item.appendChild(link);
+      list.appendChild(item);
+    });
+
+    wrap.hidden = !list.children.length;
+  }
+
+  function renderDetails(app, data) {
+    var latest = app.latest;
+    var releases = data.releases || [];
+
+    if (releases.length) setText('[data-detail="version"]', releases[0].version ? 'v' + releases[0].version : '');
+
+    var branches = [];
+    app.images.forEach(function (image) {
+      if (branches.indexOf(image.branch) === -1) branches.push(image.branch);
+    });
+    setText('[data-detail="channel"]', branches.join(', '));
+
+    if (latest.stamp) setText('[data-detail="updated"]', formatDate(latest.stamp * 1000));
+    setBytes(qs('[data-detail="download"]'), latest.download);
+    setBytes(qs('[data-detail="installed"]'), latest.installed);
+    setBytes(qs('[data-meta="size"]'), latest.download);
+
+    setText('[data-detail="license"]', data.license);
+
+    if (data.runtime) {
+      var parts = data.runtime.split('/');
+      var runtime = parts[0] + (parts[2] ? ' ' + parts[2] : '');
+      setText('[data-detail="runtime"]', runtime);
+    }
+
+    renderLinks(data.urls);
+  }
+
+  function renderMeta(app, data) {
+    setText('[data-meta="developer"]', data.developer);
+    setText('[data-meta="license"]', data.license);
+    if (app.latest.stamp) setText('[data-meta="updated"]', formatDate(app.latest.stamp * 1000));
+  }
+
+  /* ── lightbox ──────────────────────────────────────────────────────── */
+
+  var dialog = qs('#lightbox');
+  var lightbox = { shots: [], index: 0, opener: null };
+
+  function paintLightbox() {
+    if (!dialog) return;
+    var shot = lightbox.shots[lightbox.index];
+    if (!shot) return;
+
+    var image = qs('[data-lightbox-image]', dialog);
+    var caption = qs('[data-lightbox-caption]', dialog);
+    var counter = qs('[data-lightbox-counter]', dialog);
+
+    if (image) { image.src = shot.src; image.alt = shot.caption || 'Screenshot'; }
+    if (caption) caption.textContent = shot.caption || '';
+    if (counter) counter.textContent = lightbox.shots.length > 1 ? (lightbox.index + 1) + ' / ' + lightbox.shots.length : '';
+    dialog.setAttribute('data-single', lightbox.shots.length < 2 ? 'true' : 'false');
+  }
+
+  function openLightbox(shots, index, opener) {
+    if (!dialog || !shots.length) return;
+    lightbox = { shots: shots, index: index, opener: opener };
+    paintLightbox();
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+  }
+
+  function stepLightbox(delta) {
+    if (!lightbox.shots.length) return;
+    lightbox.index = (lightbox.index + delta + lightbox.shots.length) % lightbox.shots.length;
+    paintLightbox();
+  }
+
+  if (dialog) {
+    qs('[data-lightbox-prev]', dialog).addEventListener('click', function () { stepLightbox(-1); });
+    qs('[data-lightbox-next]', dialog).addEventListener('click', function () { stepLightbox(1); });
+    qs('[data-lightbox-close]', dialog).addEventListener('click', function () { dialog.close(); });
+
+    dialog.addEventListener('keydown', function (event) {
+      if (event.key === 'ArrowRight') { stepLightbox(1); event.preventDefault(); }
+      else if (event.key === 'ArrowLeft') { stepLightbox(-1); event.preventDefault(); }
+    });
+
+    dialog.addEventListener('click', function (event) {
+      if (event.target === dialog) dialog.close();
+    });
+
+    dialog.addEventListener('close', function () {
+      if (lightbox.opener && typeof lightbox.opener.focus === 'function') lightbox.opener.focus();
+    });
+  }
+
+  /* ── boot ──────────────────────────────────────────────────────────── */
+
+  function showDataNote(message) {
+    var note = qs('[data-data-note]');
+    if (!note) return;
+    note.textContent = message;
+    note.hidden = false;
+  }
+
+  function loadIndex() {
+    return fetch('index/static', { cache: 'no-cache' }).then(function (response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return response.text();
+    }).then(function (text) {
+      return JSON.parse(text);
+    });
+  }
+
+  loadIndex().then(function (index) {
+    var app = collectApp(index);
+    if (!app) throw new Error('No application image in the index');
+
+    var data = parseAppdata(app.latest.labels['org.freedesktop.appstream.appdata']);
+    if (!data) throw new Error('AppStream metadata missing');
+
+    renderIcon(app);
+    renderMeta(app, data);
+    renderDescription(data);
+    renderGallery(data.screenshots || []);
+    renderReleases(data.releases || []);
+    renderDetails(app, data);
+    paintBytes();
+  }).catch(function (error) {
+    var description = qs('[data-description]');
+    if (description) description.innerHTML = '<p class="muted">The long description could not be loaded from the repository index.</p>';
+
+    var gallery = qs('[data-gallery]');
+    if (gallery) gallery.innerHTML = '<p class="muted">Screenshots are unavailable right now.</p>';
+
+    var latestHost = qs('[data-latest-release]');
+    if (latestHost) latestHost.innerHTML = '<p class="muted">Release notes are unavailable right now.</p>';
+
+    var historyHost = qs('[data-release-history]');
+    if (historyHost) historyHost.remove();
+
+    var toggle = qs('[data-history-toggle]');
+    if (toggle) toggle.remove();
+
+    showDataNote('Live AppStream data could not be loaded (' + (error && error.message ? error.message : 'unknown error') + '). The install links and commands above still work.');
+  });
+})();
+</script>
+</body>
+</html>
