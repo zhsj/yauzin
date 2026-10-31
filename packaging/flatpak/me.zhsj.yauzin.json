@@ -13,6 +13,8 @@
     "--socket=wayland",
     "--socket=fallback-x11",
     "--device=dri",
+    "--filesystem=xdg-run/gnupg:ro",
+    "--filesystem=~/.gnupg:ro",
     "--talk-name=org.kde.StatusNotifierWatcher"
   ],
   "modules": [
