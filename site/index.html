@@ -254,8 +254,6 @@ html[data-theme-pref="dark"] .theme-icon-dark { display: block; }
   font-family: var(--font-serif); font-size: 18px; font-weight: 600;
   margin-bottom: 2px;
 }
-.repo-link { font-size: 13.5px; text-align: center; color: var(--ink-3); }
-.repo-link:hover { color: var(--accent-3); }
 .card-note {
   margin-top: 6px; padding-top: 12px; border-top: 1px dashed var(--line);
   font-size: 12.5px; line-height: 1.55; color: var(--ink-3);
@@ -369,7 +367,7 @@ html[data-theme-pref="dark"] .theme-icon-dark { display: block; }
 /* ── install ────────────────────────────────────────────────────────── */
 .channels { border-top: 1px solid var(--line); }
 .channel {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
   gap: 18px; align-items: center;
   padding: 18px 2px; border-bottom: 1px solid var(--line);
 }
@@ -385,7 +383,9 @@ html[data-theme-pref="dark"] .theme-icon-dark { display: block; }
   font-variant-numeric: tabular-nums;
 }
 
-.code-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 26px; }
+.install-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 24px; }
+
+.code-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; margin-top: 26px; }
 
 .code-card {
   border-radius: var(--radius); overflow: hidden;
@@ -410,7 +410,8 @@ html[data-theme-pref="dark"] .theme-icon-dark { display: block; }
 .code-card pre { margin: 0; padding: 16px 18px; overflow-x: auto; }
 .code-card code {
   font-family: var(--font-mono); font-size: 13px; line-height: 1.7;
-  color: var(--code-ink); white-space: pre;
+  color: var(--code-ink); white-space: pre-wrap;
+  overflow-wrap: anywhere; word-break: break-word;
 }
 .code-hint { margin-top: 12px; font-size: 13px; color: var(--ink-3); }
 .code-hint code { font-family: var(--font-mono); font-size: 12.5px; }
@@ -539,7 +540,6 @@ html[data-theme-pref="dark"] .theme-icon-dark { display: block; }
   .install-card { max-width: 420px; }
   .columns { grid-template-columns: minmax(0, 1fr); gap: 40px; }
   .details { position: static; order: 2; max-width: 420px; }
-  .code-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 760px) {
@@ -550,9 +550,7 @@ html[data-theme-pref="dark"] .theme-icon-dark { display: block; }
   .app-summary { font-size: 18px; }
   .gallery { grid-template-columns: minmax(0, 1fr); }
   .shot:first-child { grid-column: auto; }
-  .channel { grid-template-columns: minmax(0, 1fr) auto; }
-  .channel-meta { grid-column: 1 / -1; order: 3; }
-  .channel .btn { grid-column: 2; grid-row: 1; }
+  .channel-meta { grid-column: 1 / -1; }
   .details { max-width: none; }
   .footer-inner { flex-direction: column; align-items: flex-start; }
 }
@@ -561,7 +559,6 @@ html[data-theme-pref="dark"] .theme-icon-dark { display: block; }
   .meta-row { font-size: 13px; }
   .meta-row li { flex-wrap: wrap; }
   .btn { width: 100%; }
-  .channel .btn { width: auto; }
 }
 </style>
 </head>
@@ -612,12 +609,8 @@ html[data-theme-pref="dark"] .theme-icon-dark { display: block; }
 
       <aside class="install-card rise" aria-label="Install">
         <p class="card-kicker">Install</p>
-        <a class="btn btn-primary btn-block" {{if .Apps}}download{{end}}
-           {{range .Apps}}{{range $i, $b := .Branches}}{{if eq $i 0}}href="{{$b.RefFile}}"{{end}}{{end}}{{else}}href="#install"{{end}}>
-          Install {{range .Apps}}{{.Name}}{{else}}Yauzin{{end}}
-        </a>
+        <a class="btn btn-primary btn-block" href="{{if .RemoteName}}{{.RemoteName}}{{else}}yauzin{{end}}.flatpakrepo" download>Download .flatpakrepo</a>
         <a class="btn btn-ghost btn-block" href="#install">Command line</a>
-        <a class="repo-link" href="{{if .RemoteName}}{{.RemoteName}}{{else}}yauzin{{end}}.flatpakrepo" download>Download .flatpakrepo</a>
         <p class="card-note">
           {{if .Signing.Enabled}}Signed repository — flatpak verifies every install.
           {{else}}Unsigned build — the command line section adds the remote with <code>--no-gpg-verify</code>.{{end}}
@@ -679,8 +672,12 @@ html[data-theme-pref="dark"] .theme-icon-dark { display: block; }
           <p class="eyebrow">Install</p>
           <h2>Add the repository</h2>
           <p class="section-lede">
-            Pick a channel below, or add the whole repository once and install from the command line.
+            Download the repository file and open it with your software installer, or add the remote and install a channel from the command line.
           </p>
+        </div>
+
+        <div class="install-actions">
+          <a class="btn btn-primary" href="{{if .RemoteName}}{{.RemoteName}}{{else}}yauzin{{end}}.flatpakrepo" download>Download .flatpakrepo</a>
         </div>
 
         <div class="channels">
@@ -694,7 +691,6 @@ html[data-theme-pref="dark"] .theme-icon-dark { display: block; }
               <span data-bytes="{{.DownloadSize}}">—</span>
               <span>{{.FormattedDate}}</span>
             </div>
-            <a class="btn btn-ghost btn-sm" href="{{.RefFile}}" download>Download .flatpakref</a>
           </div>
           {{end}}{{end}}
         </div>
@@ -712,14 +708,14 @@ flatpak remote-modify --user --signature-lookaside=<span data-site-root>{{.Pages
 
           <div class="code-card">
             <div class="code-head">
-              <span>Install {{range .Apps}}{{.Name}}{{else}}Yauzin{{end}}</span>
+              <span>Install a channel</span>
               <button class="copy-btn" type="button" data-copy="cmd-install">Copy</button>
             </div>
             <pre><code id="cmd-install">{{range .Apps}}{{range .Branches}}{{.InstallCmd}}
 {{end}}{{end}}</code></pre>
           </div>
         </div>
-        <p class="code-hint">Each line in the second block installs a specific channel; <code>//stable</code> is the default branch.</p>
+        <p class="code-hint">Each line in the second block installs one channel; <code>//stable</code> is the default branch.</p>
       </section>
     </div>
 
