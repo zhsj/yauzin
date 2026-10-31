@@ -20,10 +20,25 @@ func fakeGPG(t *testing.T, script string) string {
 	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
 		t.Fatalf("write fake gpg: %v", err)
 	}
+	fakeAgent(t, dir, "")
 	// The fake wins the lookup, but the real PATH stays behind it so the script
 	// can still use cat and sleep.
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return dir
+}
+
+// fakeAgent replaces the probe next to the fake gpg. An empty script is the
+// silent success of a reachable agent.
+func fakeAgent(t *testing.T, dir, script string) {
+	t.Helper()
+	body := "#!/bin/sh\n"
+	if script != "" {
+		body += script + "\n"
+	}
+	body += "exit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "gpg-connect-agent"), []byte(body), 0o755); err != nil {
+		t.Fatalf("write fake gpg-connect-agent: %v", err)
+	}
 }
 
 // sign runs one signing call and returns its result and error.
@@ -77,7 +92,7 @@ printf -- '-----BEGIN PGP SIGNATURE-----\n\nAAAA\n-----END PGP SIGNATURE-----\n'
 	gotArgs := string(args)
 	for _, want := range []string{
 		"--batch", "--no-tty", "--detach-sign", "--armor", "--digest-algo\nSHA256",
-		"--local-user\n0123456789ABCDEF", "--status-fd\n3",
+		"--local-user\n0123456789ABCDEF", "--status-fd\n3", "--no-autostart",
 	} {
 		if !strings.Contains(gotArgs, want) {
 			t.Fatalf("gpg args %q missing %q", gotArgs, want)
@@ -105,6 +120,37 @@ exit 2
 `)
 	if _, _, err := sign(t, context.Background(), "x"); !errors.Is(err, ErrCancelled) {
 		t.Fatalf("SignDetached = %v, want ErrCancelled", err)
+	}
+}
+
+func TestSignDetachedReportsUnusableAgent(t *testing.T) {
+	argsOut := filepath.Join(t.TempDir(), "args")
+	t.Setenv("PGP_ARGS", argsOut)
+	dir := fakeGPG(t, `
+printf '%s\n' "$@" > "$PGP_ARGS"
+echo '[GNUPG:] SIG_CREATED D 1 8 00 1700000000 0123456789ABCDEF0123456789ABCDEF01234567' >&3
+printf 'sig\n'
+`)
+	fakeAgent(t, dir, `echo 'gpg-connect-agent: no gpg-agent running in this session' >&2`)
+
+	_, _, err := sign(t, context.Background(), "x")
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("SignDetached = %v, want ErrUnavailable", err)
+	}
+	if !strings.Contains(err.Error(), "no gpg-agent running") {
+		t.Fatalf("error %q does not carry the probe's message", err)
+	}
+	if _, statErr := os.Stat(argsOut); statErr == nil {
+		t.Fatal("gpg ran even though the probe failed")
+	}
+}
+
+func TestSignDetachedReportsFailingProbe(t *testing.T) {
+	dir := fakeGPG(t, "cat > /dev/null; printf 'sig\\n'")
+	fakeAgent(t, dir, "exit 3")
+
+	if _, _, err := sign(t, context.Background(), "x"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("SignDetached = %v, want ErrUnavailable", err)
 	}
 }
 

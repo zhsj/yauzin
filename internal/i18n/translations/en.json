@@ -239,7 +239,7 @@
   "error.signatureStale": "The draft changed after it was signed. Sign it again.",
   "error.gpgNoKey": "gpg has no secret key for this identity. Check the signing key in the account settings.",
   "error.gpgCancelled": "Signing was cancelled.",
-  "error.gpgUnavailable": "gpg is not installed or not on PATH.",
+  "error.gpgUnavailable": "gpg is unavailable, or gpg-agent cannot be reached.",
   "error.gpgInvalidKey": "The signing key is neither a long key ID nor a fingerprint.",
   "error.gpgFailed": "gpg could not sign: {{.Error}}",
 

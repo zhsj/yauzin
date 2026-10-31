@@ -35,7 +35,8 @@ var (
 	// ErrCancelled reports that the user dismissed the pinentry dialog or that
 	// the signing context expired.
 	ErrCancelled = errors.New("pgp: signing cancelled")
-	// ErrUnavailable reports that the gpg binary could not be run.
+	// ErrUnavailable reports that gpg could not be run or that it cannot reach
+	// its agent.
 	ErrUnavailable = errors.New("pgp: gpg not available")
 	// ErrFailed is every other signing failure: an expired key, a rejected
 	// passphrase, an unpinned smart card.
@@ -53,6 +54,10 @@ const (
 	// gpgBinary is looked up in PATH; distributions ship it under this name
 	// (2.x dropped the gpg2 alias).
 	gpgBinary = "gpg"
+
+	// connectAgentBinary is the client whose only useful answer here is
+	// whether an agent is listening.
+	connectAgentBinary = "gpg-connect-agent"
 
 	// waitDelay bounds Wait after gpg's own exit, so a lingering helper holding
 	// the pipes cannot hang the signing task.
@@ -102,6 +107,9 @@ func (s *Signer) SignDetached(ctx context.Context, entity io.Reader) ([]byte, st
 	if err != nil {
 		return nil, "", fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
+	if err := checkAgent(ctx); err != nil {
+		return nil, "", err
+	}
 
 	// The status lines go to a dedicated descriptor: mixing them into stderr
 	// would tie the parse to the wording of gpg's human messages.
@@ -122,6 +130,7 @@ func (s *Signer) SignDetached(ctx context.Context, entity io.Reader) ([]byte, st
 		"--local-user", s.key,
 		"--output", "-",
 		"--status-fd", "3",
+		"--no-autostart",
 	)
 	cmd.Stdin = entity
 	cmd.Stdout = &stdout
@@ -174,6 +183,36 @@ func (s *Signer) SignDetached(ctx context.Context, entity io.Reader) ([]byte, st
 		"micalg", micalg, "elapsed", time.Since(start))
 
 	return stdout.Bytes(), micalg, nil
+}
+
+// checkAgent reports whether gpg has an agent to sign with. The probe runs
+// with --no-autostart so it never creates an agent of its own: in a Flatpak
+// sandbox that agent would have no pinentry and would take over the socket the
+// host's agent uses. gpg-connect-agent exits zero even when it cannot connect,
+// so silence on stderr is what a usable agent looks like.
+func checkAgent(ctx context.Context) error {
+	path, err := exec.LookPath(connectAgentBinary)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, path, "--no-autostart", "/bye")
+	cmd.Stderr = &stderr
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	cmd.WaitDelay = waitDelay
+
+	runErr := cmd.Run()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("%w: %v", ErrCancelled, ctxErr)
+	}
+	if msg := lastLine(stderr.Bytes()); msg != "" {
+		return fmt.Errorf("%w: %s", ErrUnavailable, msg)
+	}
+	if runErr != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, runErr)
+	}
+	return nil
 }
 
 // status is the subset of the gpg status protocol this package reads.

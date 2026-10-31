@@ -236,7 +236,7 @@
   "error.signatureStale": "草稿在签名之后改动过，请重新签名。",
   "error.gpgNoKey": "gpg 里没有该身份的私钥，请检查账号设置中的签名密钥。",
   "error.gpgCancelled": "已取消签名。",
-  "error.gpgUnavailable": "未找到 gpg，请确认它已安装并在 PATH 中。",
+  "error.gpgUnavailable": "gpg 不可用，或无法连接 gpg-agent。",
   "error.gpgInvalidKey": "签名密钥不是长 key ID 或完整指纹。",
   "error.gpgFailed": "gpg 签名失败：{{.Error}}",
 
