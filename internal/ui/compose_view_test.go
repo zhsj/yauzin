@@ -8,6 +8,7 @@ import (
 	"gioui.org/io/key"
 	"gioui.org/op"
 
+	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
 )
 
@@ -173,6 +174,47 @@ func TestComposeLayoutFrames(t *testing.T) {
 				t.Fatalf("frame = %v, want the window %v", dims.Size, testWindow)
 			}
 		})
+	}
+}
+
+// TestComposeFooterFrames draws the footer in its signing states: the optional
+// children (sign button, then the badge) must fit the row, and the button has
+// to report the step it is in.
+func TestComposeFooterFrames(t *testing.T) {
+	a, _, store := composeTestApp(t)
+	entry, ok := store.Entry("smtp:alt@example.com")
+	if !ok {
+		t.Fatal("seeded sending account missing")
+	}
+	entry.SigningKey = "0123456789ABCDEF"
+	if err := store.Upsert(entry); err != nil {
+		t.Fatalf("store key: %v", err)
+	}
+
+	c := newComposeView(a, composeNew, nil, "")
+	c.setSender("smtp:alt@example.com")
+	c.focusInit = true
+
+	var ops op.Ops
+	gtx := testGtx(&ops, testWindow)
+	if dims := c.Layout(gtx, a); dims.Size != testWindow {
+		t.Fatalf("signable frame = %v, want the window %v", dims.Size, testWindow)
+	}
+	if c.signBtn.label != i18n.T("compose.sign") || c.signBtn.disabled {
+		t.Fatalf("sign button = %q (disabled %v), want an idle Sign", c.signBtn.label, c.signBtn.disabled)
+	}
+	ops.Reset()
+
+	c.signed = testSignature("0123456789ABCDEF")
+	c.signing = true
+	if dims := c.Layout(gtx, a); dims.Size != testWindow {
+		t.Fatalf("signed frame = %v, want the window %v", dims.Size, testWindow)
+	}
+	if c.signBtn.label != i18n.T("compose.signing") || !c.signBtn.disabled {
+		t.Fatalf("sign button = %q (disabled %v), want a busy Signing…", c.signBtn.label, c.signBtn.disabled)
+	}
+	if !c.sendBtn.disabled {
+		t.Fatal("send stayed live while gpg was working")
 	}
 }
 

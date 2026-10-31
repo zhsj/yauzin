@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"image"
 	"strings"
 	"time"
@@ -67,9 +68,25 @@ type composeView struct {
 	minBtn    *iconButton
 	closeBtn  *iconButton
 	sendBtn   *pillButton
+	// signBtn is the secondary action next to send. It is only laid out while
+	// the current identity has a key, so a composer without one never shows a
+	// button that cannot work.
+	signBtn *pillButton
 
 	attachments []mail.DraftAttachment
 	chips       []*attachmentChip
+
+	// Signing is a step of its own, not part of the send: gpg may ask for a
+	// passphrase, and that answer must not be waited for inside a send. signed
+	// holds the finished signature; signing is true while gpg runs.
+	signed  *mail.Signature
+	signing bool
+	// signGen counts the drafts that were invalidated while a signature was
+	// being made, so a result for an older draft is dropped instead of
+	// relabelling a draft it does not cover.
+	signGen    int
+	signTaskID uint64
+	signCancel context.CancelFunc
 
 	// maximized fills the window up to composeMargin; it and minimized are
 	// mutually exclusive, so the header never offers a state it cannot leave.
@@ -152,6 +169,10 @@ func newComposeView(a *App, mode composeMode, msg *mail.Message, replySelection 
 	c.closeBtn = newIconButton(iconClose, 32, a.hideOverlay)
 	c.sendBtn = newPillButton(i18n.T("compose.send"), iconSendWhite, true, c.send)
 	c.sendBtn.minW = 96
+	// The secondary style marks signing as the optional step: the same pill as
+	// send, one shade quieter, so the two actions read as one pair.
+	c.signBtn = newPillButton(i18n.T("compose.sign"), icon{}, false, c.sign)
+	c.signBtn.minW = 96
 	return c
 }
 
@@ -350,6 +371,10 @@ type composeSender struct {
 	// picked, so a message sent through another server still leaves a copy
 	// behind.
 	bccCopy bool
+	// key is the OpenPGP key this identity signs with, empty when it does not
+	// sign. It is read from the account store when the composer opens, the same
+	// way the rest of the identity is.
+	key string
 }
 
 // composeSenders returns the identities a draft can go out as: the mailbox that
@@ -357,7 +382,12 @@ type composeSender struct {
 func (a *App) composeSenders() []composeSender {
 	var out []composeSender
 	if acc, ok := a.accountByID(a.activeAcc); ok {
-		out = append(out, composeSender{id: acc.ID, name: acc.DisplayName(), email: acc.Email})
+		out = append(out, composeSender{
+			id:    acc.ID,
+			name:  acc.DisplayName(),
+			email: acc.Email,
+			key:   storedSigningKey(a, acc.ID),
+		})
 	}
 	for _, entry := range a.smtpEntries() {
 		item := entry
@@ -367,6 +397,7 @@ func (a *App) composeSenders() []composeSender {
 			email:   item.Email,
 			entry:   &item,
 			bccCopy: item.SMTP != nil && item.SMTP.BccToAccount,
+			key:     item.SigningKey,
 		})
 	}
 	return out
@@ -434,6 +465,9 @@ func (c *composeView) setSender(id string) {
 	}
 	c.fromID = id
 	c.refreshIdentity()
+	// Another identity means another key, so the signature no longer belongs to
+	// this draft.
+	c.clearSignature()
 	for i, sender := range c.senders {
 		if i < len(c.fromRows) {
 			c.fromRows[i].active = sender.id == id
@@ -683,9 +717,28 @@ func (c *composeView) separator(gtx layout.Context) layout.Dimensions {
 
 // bodyRow lays out the message body, the one row that takes the leftover height.
 func (c *composeView) bodyRow(gtx layout.Context) layout.Dimensions {
+	c.watchBody(gtx)
 	return layout.Inset{Top: 8, Bottom: 8, Left: 16, Right: 16}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return c.app.th.textField(gtx, &c.body, i18n.T("compose.body"), textMain)
 	})
+}
+
+// watchBody drops the signature as soon as the body changes. The editor reports
+// a change for typing, pasting, undo and SetText alike, so the whole text never
+// has to be compared frame by frame.
+func (c *composeView) watchBody(gtx layout.Context) {
+	if c.signed == nil && !c.signing {
+		return
+	}
+	for {
+		ev, ok := c.body.Update(gtx)
+		if !ok {
+			return
+		}
+		if _, changed := ev.(widget.ChangeEvent); changed {
+			c.clearSignature()
+		}
+	}
 }
 
 func (c *composeView) header(gtx layout.Context) layout.Dimensions {
@@ -720,21 +773,71 @@ func (c *composeView) footer(gtx layout.Context) layout.Dimensions {
 	} else {
 		c.sendBtn.setText(i18n.T("compose.send"))
 	}
+	// Sending while gpg is still asking for a passphrase would race the
+	// signature against the transport.
+	c.sendBtn.disabled = c.signing
+	if c.signing {
+		c.signBtn.setText(i18n.T("compose.signing"))
+		c.signBtn.disabled = true
+	} else {
+		// A signed draft stays signable: a new run replaces the signature
+		// instead of needing an edit to invalidate the old one first.
+		c.signBtn.setText(i18n.T("compose.sign"))
+		c.signBtn.disabled = false
+	}
 	return layout.Inset{Left: 12, Right: 12, Top: 8, Bottom: 8}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		children := []layout.FlexChild{
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.attachBtn.Layout(gtx, th) }),
-			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					if c.errMsg == "" {
-						return layout.Dimensions{}
-					}
-					return th.text(gtx, c.errMsg, textMeta, colDanger, font.Normal, 1)
-				})
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.sendBtn.Layout(gtx, th) }),
 		}
+		if c.signed != nil {
+			children = append(children,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 6) }),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.signedBadge(gtx, th) }),
+			)
+		}
+		children = append(children, layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				if c.errMsg == "" {
+					return layout.Dimensions{}
+				}
+				return th.text(gtx, c.errMsg, textMeta, colDanger, font.Normal, 1)
+			})
+		}))
+		if c.canSign() {
+			children = append(children,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.signBtn.Layout(gtx, th) }),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
+			)
+		}
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return c.sendBtn.Layout(gtx, th)
+		}))
 		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx, children...)
 	})
+}
+
+// canSign reports whether the identity the draft goes out as has a key. The
+// footer uses it to leave the button out entirely: a greyed label would
+// advertise a step that cannot run.
+func (c *composeView) canSign() bool {
+	sender := c.currentSender()
+	return sender != nil && sender.key != ""
+}
+
+// signedBadge reports the state of the draft next to the attachment button. It
+// is a label, not a control: losing the signature is a content change. It stays
+// in place while a new signature is being made, because the old one still
+// covers what is on screen.
+func (c *composeView) signedBadge(gtx layout.Context, th *theme) layout.Dimensions {
+	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return th.glyphIn(gtx, iconCheckPrimary, 14, 16)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 2) }),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return th.text(gtx, i18n.T("compose.signed"), textMeta, colPrimary, font.Medium, 1)
+		}),
+	)
 }
 
 func (c *composeView) chipRow(gtx layout.Context) layout.Dimensions {

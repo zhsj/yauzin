@@ -34,8 +34,10 @@ import (
 	"github.com/zhsj/yauzin/internal/mail"
 	"github.com/zhsj/yauzin/internal/mail/gmail"
 	"github.com/zhsj/yauzin/internal/mail/mock"
+	"github.com/zhsj/yauzin/internal/mail/rfc822"
 	"github.com/zhsj/yauzin/internal/mail/smtp"
 	"github.com/zhsj/yauzin/internal/notify"
+	"github.com/zhsj/yauzin/internal/pgp"
 	"github.com/zhsj/yauzin/internal/prefs"
 	"github.com/zhsj/yauzin/internal/tray"
 )
@@ -86,6 +88,9 @@ type App struct {
 	// sendSMTP delivers a draft through one stored sending account. It is a
 	// field so the composer can be exercised without a server.
 	sendSMTP func(ctx context.Context, entry accounts.Entry, draft mail.Draft) error
+	// signDraft produces the OpenPGP signature of a draft. It is a field so the
+	// composer can be exercised without gpg and its pinentry.
+	signDraft func(ctx context.Context, key string, draft mail.Draft) (*mail.Signature, error)
 	// factory reflects the proxy setting into the backends it builds; nil when
 	// the app was assembled without real accounts.
 	factory *serviceFactory
@@ -280,6 +285,11 @@ type appOptions struct {
 	// sendSMTP replaces the outbound SMTP sender, which is how the composer
 	// tests run without a server. The zero value builds the real one.
 	sendSMTP func(ctx context.Context, entry accounts.Entry, draft mail.Draft) error
+
+	// signDraft replaces the gpg call behind the composer's signing step. The
+	// zero value runs gpg, which a test machine has neither a key ring nor a
+	// pinentry for.
+	signDraft func(ctx context.Context, key string, draft mail.Draft) (*mail.Signature, error)
 }
 
 // demoAccountID identifies the shipped demo mailbox, which exists only in
@@ -425,6 +435,17 @@ func (a *App) smtpEntries() []accounts.Entry {
 	return a.accountStore.SMTPEntries()
 }
 
+// signWithGPG signs a draft with the system gpg binary. Going through gpg is
+// what lets the passphrase reach the desktop pinentry: this process never asks
+// for it and never sees it.
+func signWithGPG(ctx context.Context, key string, draft mail.Draft) (*mail.Signature, error) {
+	signer, err := pgp.New(key)
+	if err != nil {
+		return nil, err
+	}
+	return rfc822.Sign(ctx, draft, signer)
+}
+
 // sendViaSMTP delivers a draft through one stored sending account: a fresh
 // connection per send, through the shared proxy when the entry opted into it.
 func (a *App) sendViaSMTP(ctx context.Context, entry accounts.Entry, draft mail.Draft) error {
@@ -507,6 +528,10 @@ func newAppWith(pref prefs.Settings, opts appOptions) *App {
 	if a.sendSMTP == nil {
 		a.sendSMTP = a.sendViaSMTP
 	}
+	a.signDraft = opts.signDraft
+	if a.signDraft == nil {
+		a.signDraft = signWithGPG
+	}
 
 	for _, acc := range a.accounts {
 		if svc := opts.newService(acc); svc != nil {
@@ -582,6 +607,10 @@ const (
 	timeoutMutation = 20 * time.Second
 	timeoutSend     = 5 * time.Minute
 	timeoutAttach   = time.Minute
+	// timeoutSign bounds a signing step. It is generous on purpose: gpg waits
+	// for the user to unlock a key or type a smart-card PIN, and that wait is
+	// paced by a person, not by a server.
+	timeoutSign = 15 * time.Minute
 	// timeoutPoll bounds one process-level inbox poll: the change check plus
 	// the search for the unread conversations, so both fit in one budget.
 	timeoutPoll = 45 * time.Second

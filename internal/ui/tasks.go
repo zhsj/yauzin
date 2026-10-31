@@ -57,6 +57,9 @@ type taskKind uint8
 const (
 	taskDownload taskKind = iota
 	taskSend
+	// taskSign is the composer's signing step: separate from the send because
+	// the user may sit in front of a pinentry dialog for a while.
+	taskSign
 )
 
 // taskState is where one job is.
@@ -341,8 +344,11 @@ func (p *taskPanel) row(gtx layout.Context, th *theme, t *task, divider bool) la
 		area.Pop()
 	}
 	ic := iconFile
-	if t.kind == taskSend {
+	switch t.kind {
+	case taskSend:
 		ic = iconSent
+	case taskSign:
+		ic = iconCheck
 	}
 	switch t.state {
 	case taskDone:
@@ -390,8 +396,11 @@ func (p *taskPanel) row(gtx layout.Context, th *theme, t *task, divider bool) la
 func (p *taskPanel) status(gtx layout.Context, th *theme, t *task) layout.Dimensions {
 	switch t.state {
 	case taskDone:
-		if t.kind == taskSend {
+		switch t.kind {
+		case taskSend:
 			return th.text(gtx, i18n.T("task.sent"), textTiny, colMuted, font.Normal, 1)
+		case taskSign:
+			return th.text(gtx, i18n.T("task.signed"), textTiny, colMuted, font.Normal, 1)
 		}
 		return th.text(gtx, i18n.T("task.savedTo", map[string]string{"Path": t.savedTo}), textTiny, colMuted, font.Normal, 1)
 	case taskFailed:
@@ -400,8 +409,11 @@ func (p *taskPanel) status(gtx layout.Context, th *theme, t *task) layout.Dimens
 		}
 		return th.text(gtx, i18n.T("task.failed", map[string]string{"Error": errorText(t.err)}), textTiny, colDanger, font.Normal, 1)
 	}
-	if t.kind == taskSend {
+	switch t.kind {
+	case taskSend:
 		return th.text(gtx, i18n.T("task.sending"), textTiny, colMuted, font.Normal, 1)
+	case taskSign:
+		return th.text(gtx, i18n.T("task.signing"), textTiny, colMuted, font.Normal, 1)
 	}
 	return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {

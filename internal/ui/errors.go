@@ -4,10 +4,12 @@ import (
 	"errors"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/zhsj/yauzin/internal/i18n"
 	"github.com/zhsj/yauzin/internal/mail"
 	"github.com/zhsj/yauzin/internal/mail/smtp"
+	"github.com/zhsj/yauzin/internal/pgp"
 )
 
 // errorText renders a service error in the active language.
@@ -37,10 +39,30 @@ func errorText(err error) string {
 		// The sending server refused the credentials: the protocol sentence
 		// below it is only noise for the user.
 		return i18n.T("error.smtpAuth")
+	case errors.Is(err, mail.ErrSignatureStale):
+		return i18n.T("error.signatureStale")
+	case errors.Is(err, pgp.ErrNoKey):
+		return i18n.T("error.gpgNoKey")
+	case errors.Is(err, pgp.ErrCancelled):
+		return i18n.T("error.gpgCancelled")
+	case errors.Is(err, pgp.ErrUnavailable):
+		return i18n.T("error.gpgUnavailable")
+	case errors.Is(err, pgp.ErrInvalidKey):
+		return i18n.T("error.gpgInvalidKey")
+	case errors.Is(err, pgp.ErrFailed):
+		// gpg's own sentence says what to fix (expired key, bad passphrase,
+		// missing pinentry), so it is kept after the generic prefix.
+		return i18n.T("error.gpgFailed", map[string]string{"Error": detail(err, pgp.ErrFailed)})
 	}
 	// Anything else is a transport or filesystem failure; its text is the only
 	// detail the user can act on.
 	return err.Error()
+}
+
+// detail is err's message without the sentinel prefix the domain layer wraps it
+// in, so a sentence that already names the failure does not name it twice.
+func detail(err error, sentinel error) string {
+	return strings.TrimPrefix(err.Error(), sentinel.Error()+": ")
 }
 
 // quotaWaitText says how long the account's quota needs before the request can
