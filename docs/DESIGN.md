@@ -64,6 +64,17 @@
 - **代理**：`internal/netproxy` 是裸 TCP 的代理拨号器——`net/http` 的代理支持在它的 internal bundle 里，给不了别的 dialer。`Parse` 规则（`http`/`https`/`socks5`，必须有 host 与端口，`socks5h` 不接受）由 `gmail.ParseProxy` 与 SMTP 共用；`Dial` 对 socks5 用 `golang.org/x/net/proxy`，对 `http`/`https` 手写 `CONNECT`（含 `Proxy-Authorization: Basic`，https 时先对代理做 TLS）。发信条目与 Gmail 账号一样有 `useProxy`，沿用 `settings.json` 的全局代理地址。
 - **不写 Gmail「已发送」**：通过 SMTP 发出的邮件不会出现在 Gmail 的已发送里（`messages.insert` 不接受未配置 `sendAs` 的伪造 From，配置 sendAs 需要额外验证流程）。留档靠 SMTP 条目上的「默认密送到当前 Gmail 账号」开关：选中该发件人时写信浮层把当前邮箱地址预填进密送字段，用户可清空或改填。
 
+### 3.3 PGP/MIME 签名（`internal/pgp`、`mail.Signature`）
+
+- **签名是写信框里的一步，不是发送的一步**：`rfc822.Sign(ctx, draft, signer)` 先渲染被签实体并签名，结果存进 `Draft.Signature`；`rfc822.Prepare` 只负责把它包进报文，**发送路径上不会再调 gpg**。原因只有一个：口令必须由 pinentry 弹窗输入，而用户不该在点了「发送」之后才发现要等自己输密码。页脚因此把签名做成发送左侧的次要药丸按钮（与发送同高，浅灰底）：平时写「签名」，签名中写「签名中…」并禁用（发送同时禁用），侧栏有可取消的任务。已签名不是按钮的一种状态：状态显示在附件按钮右侧，勾形图标加「已签名」；按钮保持可点，用来重签，重签期间与重签失败时徽标都留着（旧签名仍覆盖当前草稿）。当前发件人没配密钥时整个按钮不出现，不留灰色死按钮。
+- **必须走系统 gpg**：只有真实的 gpg-agent 能把口令或智能卡 PIN 交给桌面 pinentry，纯 Go 的 OpenPGP 库做不到，因此本仓库不引入任何 OpenPGP 依赖。调用形态是 `gpg --batch --no-tty --yes --armor --detach-sign --digest-algo SHA256 --local-user <key> --output - --status-fd 3`：`--batch --no-tty` 只关掉终端交互，口令仍由 agent 转给 pinentry；状态行走独立的 fd（`ExtraFiles`），不与人类可读的 stderr 混在一起；`LC_ALL=C` 只为稳定解析，其余环境变量**原样继承**——pinentry 由 agent 启动，需要 `DISPLAY` / `WAYLAND_DISPLAY` 才能打开。`micalg` 取自 `SIG_CREATED` 的摘要算法号（不写死，智能卡可能强制别的算法），取消/超时由 `exec.CommandContext` 直接杀进程，`SIG_CREATED` 缺失则按 `FAILURE`/`NO_SECKEY`/stderr 归类成 `ErrNoKey`、`ErrCancelled`、`ErrUnavailable`、`ErrFailed`。
+- **报文结构**：外层头（From/To/Cc/Bcc/Subject/Date/Message-ID/线程头/MIME-Version）在签名之外——密送尤其不能进被签实体；顶层 `Content-Type: multipart/signed; micalg=…; protocol="application/pgp-signature"`，第一段是被签的 MIME 实体（`text/plain`，有附件时 `multipart/mixed`），第二段是 armored 的 `application/pgp-signature`。因此 `rfc822` 分成「外层头」与「实体（自身头 + parts + closing）」两层，无签名时报文仍与旧实现逐字节一致。
+- **边界必须复用、摘要必须校验**：实体边界由 `newBoundary()` 随机生成，重渲染会变，所以 `Signature.Boundary` 存下签名时用的值，`Prepare` 原样复用；`Signature.Digest` 是**被签字节**的 SHA-256，`Prepare` 在写任何字节之前重渲染比对，不符返回 `mail.ErrSignatureStale`（界面提示重新签名并清掉已签名状态），避免把过期签名发出去。代价是带签名的邮件会把附件读三次（签名一次、校验一次、写出一次），全部是流式磁盘 I/O，内存仍与附件大小无关。
+- **被签字节不含 boundary 前那个 CRLF**：RFC 2046 §5.1.1 规定紧贴 boundary 前的 CRLF「概念上属于 boundary」，因此收件端解析出的第一段**不含**它（要让正文真的以换行结尾，必须写两个 CRLF、留一个空行）；RFC 3156 §5 第 (2) 步同样要求末行的换行「缺失时不得计入签名」。`entity.signedWriteTo` 是这条规则的唯一实现（`crlfTailWriter` 只挂起最后两个字节），`Sign` 喂给 gpg 的流与 `Digest` 都走它，`Prepare` 的校验因此与收件端口径一致。报文本身仍是「实体 + 紧跟 boundary」，网络字节与长度不变——早期版本签了完整实体（多一个 CRLF），导致收件端验签 BAD，回归测试 `TestSignedBytesAreWhatAParserRecovers` 按收件端规则抽第一段比对，专抓这类 off-by-CRLF。
+- **失效规则**：正文（打字/粘贴/撤销，靠 `widget.ChangeEvent` 判定而不是每帧比较全文）、附件增删、切换发件人——任一发生立刻退回未签名；主题与收件人不影响，因为它们不在签名覆盖范围内。签名中改稿会取消任务并让 `signGen` 递增，迟到的结果不会贴到新草稿上；关闭写信框会中止正在等待口令的 gpg。
+- **密钥按发件身份存**：`accounts.Entry.SigningKey`，邮箱账号与 SMTP 发信账号各一把，留空即不签名。只接受 16 位长 key ID 或 40 位完整指纹（`pgp.NormalizeKey`：去空白、去 `0x`、转大写），邮箱、UID、8 位短 ID 一律拒绝，避免 gpg 解析到用户没点名的密钥；保存时**只查格式不调 gpg**，密钥不存在或过期在点「签名」时报错（`pgp.ErrNoKey` 等经 `errors.go` 翻成固定文案）。未签名直接点发送就按未签名发出，不补签、不弹确认。配置入口只有设置页的「签名」tab：邮箱账号与 SMTP 发信账号各一行，格式与口令归属的说明只在该 tab 顶部出现一次；账号手风琴和 SMTP 表单里都没有密钥字段，编辑发信账号会保留已配好的密钥。
+- **已知限制**：gpg-agent 若从没有图形会话的地方启动，会退到 `pinentry-curses` 并报 "Inappropriate ioctl for device"，此时需在 `~/.gnupg/gpg-agent.conf` 指定 GUI pinentry；Flatpak 打包尚未放行 gpg（无 `gpg` 二进制、无 `~/.gnupg` 访问），该场景下签名会以 `ErrUnavailable` 失败而不是静默降级。
+
 ## 4. UI 架构（`internal/ui`）
 
 ### 4.1 单点状态
@@ -81,7 +92,7 @@
 
 状态条的 4s 消退定时器由 `statusBar` 自己持有（`timer`，UI goroutine 独占）：`show`/`clear` 先 `Stop` 旧定时器再改文案，`notify` 随后重新装一个，因此新通知、点击状态条与 Esc 都不会留下上一条文案继续撑到超时。定时器回调仍经 `post` 回投并校验 `gen`，覆盖「回调已入队、新消息刚到」的窗口。
 
-后台任务列表（`taskPanel`）与状态条一样只由 UI goroutine 写，统一记录附件保存与邮件发送。下载：`saveAttachment` 先 `begin` 一个任务并弹出保存对话框，用户确认位置后才开始下载（超时也从此计时），进度回调经 `post` 更新（`Done` 只增不减，迟到的回调不会让已完成的任务回到进行中）；门户 writer 关闭成功才标记完成；用户取消对话框时 `drop(id)` 直接移除任务（没有下载、没有历史）；下载失败保留错误原因，且因为目标文件已在确认位置时创建，任务用 `task.failedPartial` 追加「目标文件可能不完整」，不删除文件以免误删用户原有文件。发送：`composeView.send` 在发起请求前 `begin` 一条任务（key 为空，允许并发），标题取单行化的主题、空主题用 `list.noSubject`，成功标 `task.sent`、失败保留 `task.failed` 原因；发送期间关掉草稿任务仍在栏里，结果照常回写。每行末尾的关闭按钮在任务运行中即取消（下载取消父 ctx 并在对话框返回后直接退出，发送取消请求并把草稿复位为可再次发送），已结束时仅从历史移除；取消是用户主动行为，因此不再弹失败提示（`saveAttachment` 与 `send` 的回调先查任务是否还在）。`layout.List` 的回调按索引访问任务，删除只标记 `removed`，切片在下一次 `LayoutSection` 开头 `compact()`，迟到的进度/结果回调对已移除任务成为 no-op。分栏固定在侧栏底部（`sidebarView.Layout` 用垂直 `Flex`：导航区 `Flexed(1)`、任务区 `Rigid`），没有任务时整个分栏不占位，最多显示 3 行、更多在分栏内滚动，文件夹列表在剩余高度内继续滚动。分栏本身是一张白色圆角卡片（`colSurface`、1dp `colBorder`、8dp 圆角），卡片上方以间距代替原来的通栏分隔线；行与行之间一条 1dp 细线，左缩进到文字左缘、最后一行不画线。任务只存在内存里，完成后不自动消失、不写配置文件，进程退出才清空；同一附件仍在下载时再次点击直接返回（不会重复下载），重新保存已完成过的附件则新建一条任务。历史上限 50 条，溢出先淘汰最旧的已完成项，运行中的任务不会被淘汰。侧栏折叠时任务列表随侧栏隐藏。
+后台任务列表（`taskPanel`）与状态条一样只由 UI goroutine 写，统一记录附件保存、写信框的签名步骤与邮件发送。下载：`saveAttachment` 先 `begin` 一个任务并弹出保存对话框，用户确认位置后才开始下载（超时也从此计时），进度回调经 `post` 更新（`Done` 只增不减，迟到的回调不会让已完成的任务回到进行中）；门户 writer 关闭成功才标记完成；用户取消对话框时 `drop(id)` 直接移除任务（没有下载、没有历史）；下载失败保留错误原因，且因为目标文件已在确认位置时创建，任务用 `task.failedPartial` 追加「目标文件可能不完整」，不删除文件以免误删用户原有文件。发送：`composeView.send` 在发起请求前 `begin` 一条任务（key 为空，允许并发），标题取单行化的主题、空主题用 `list.noSubject`，成功标 `task.sent`、失败保留 `task.failed` 原因；发送期间关掉草稿任务仍在栏里，结果照常回写。每行末尾的关闭按钮在任务运行中即取消（下载取消父 ctx 并在对话框返回后直接退出，发送取消请求并把草稿复位为可再次发送），已结束时仅从历史移除；取消是用户主动行为，因此不再弹失败提示（`saveAttachment` 与 `send` 的回调先查任务是否还在）。`layout.List` 的回调按索引访问任务，删除只标记 `removed`，切片在下一次 `LayoutSection` 开头 `compact()`，迟到的进度/结果回调对已移除任务成为 no-op。分栏固定在侧栏底部（`sidebarView.Layout` 用垂直 `Flex`：导航区 `Flexed(1)`、任务区 `Rigid`），没有任务时整个分栏不占位，最多显示 3 行、更多在分栏内滚动，文件夹列表在剩余高度内继续滚动。分栏本身是一张白色圆角卡片（`colSurface`、1dp `colBorder`、8dp 圆角），卡片上方以间距代替原来的通栏分隔线；行与行之间一条 1dp 细线，左缩进到文字左缘、最后一行不画线。任务只存在内存里，完成后不自动消失、不写配置文件，进程退出才清空；同一附件仍在下载时再次点击直接返回（不会重复下载），重新保存已完成过的附件则新建一条任务。历史上限 50 条，溢出先淘汰最旧的已完成项，运行中的任务不会被淘汰。侧栏折叠时任务列表随侧栏隐藏。
 
 ### 4.2 并发模型
 
@@ -247,6 +258,8 @@
 约定：`LoadOrZero` 把「文件不存在」当首次运行，其余错误只告警、不覆盖；修改设置一律「先落盘成功再改内存」，失败提示并回滚。`activeAccount` 是例外：账号切换已经发生，写盘失败只记日志、不弹提示；删除账号也不清该字段，下次启动匹配不到账号即回退，行为仍然正确。
 
 账号凭据与令牌另存 `accounts.json`（`internal/accounts`，同为 0600 原子写，目录由 `prefs.Dir()` 统一解析，`YAUZIN_CONFIG_DIR` 对两者同时生效）。它不放进 `settings.json`：令牌刷新频繁且由后端在 worker goroutine 写回，与 UI 设置的读写节奏不同。
+
+同一个文件还存 PGP 签名密钥：条目上的 `signingKey` 是 16 位长 key ID 或 40 位完整指纹（大写、无 `0x`），邮箱账号与 SMTP 条目共用同一字段，缺省即不签名。口令不落盘，永远留在 gpg-agent / pinentry 那一侧。
 
 同一个文件还存 SMTP 发信账号：`kind` 为 `smtp`，`smtp{host,port,username,password,security,bccToAccount}` 是它唯一的配置，没有令牌。它们**不是邮箱**——`configuredAccounts` 按 kind 跳过，顶栏账号菜单、侧栏与后端工厂都看不到它们，写信浮层与「设置 → 账号」的发信账号分组才读它们。`id` 为 `smtp:` + 小写发件地址，同地址再次保存即覆盖（与 Gmail 的 `gmail:` + 小写邮箱同一规则）；编辑时改了发件地址就用 `Store.Replace(oldID, entry)` 一次写入完成改名，避免写盘失败留下两份或零份。密码与 OAuth client secret 同策略：明文存 0600 文件、不写日志，没有系统密钥环集成。
 
@@ -425,7 +438,8 @@ cmd/yauzin/main.go             入口：只有一行 uihost.Main(os.Args[1:])
 internal/mail/mail.go          领域模型（会话摘要 / 分页）与 Service 接口
 internal/mail/mock/            内存 mock 后端（140ms 模拟延迟，按会话聚合）
 internal/mail/gmail/           Gmail 后端：OAuth（PKCE 回环）、REST 客户端、请求日志 transport、MIME 解析、写操作（mutate.go：标记/归档/垃圾邮件/删除）、发信（upload.go：messages.send 的 resumable 上传）、Discovery 生成的 API 类型（doc.go 是 go:generate 入口）
-internal/mail/rfc822/          Draft → RFC 5322 报文（头编码、折行、附件 multipart、可选 Bcc 头）；Prepare 定长、WriteTo 流式，Gmail 与 SMTP 共用
+internal/mail/rfc822/          Draft → RFC 5322 报文（头编码、折行、附件 multipart、可选 Bcc 头、可选 multipart/signed 签名外壳）；Prepare 定长、WriteTo 流式，Gmail 与 SMTP 共用；Sign 单独产出可复用的 mail.Signature
+internal/pgp/                  外部 gpg 分离签名：参数构造、[GNUPG:] 状态解析、micalg、密钥格式规范化（16/40 位十六进制），不接触口令
 internal/mail/smtp/            SMTP 发信：三种加密、PLAIN/LOGIN、信封收件人（含 Bcc）、代理拨号
 internal/netproxy/             裸 TCP 代理拨号：http/https CONNECT 与 socks5（与 Gmail 共用的地址校验）
 internal/cmd/gmailgen/         Gmail Discovery 文档 → Go 类型生成器（go generate 入口）
@@ -460,9 +474,10 @@ internal/ui/reader_find.go     阅读器正文查找：匹配内核、查找条�
 internal/ui/messagecard.go     可折叠消息卡片
 internal/ui/textselection.go   阅读器可选文字：选区状态、右键区域与选区菜单（复制 / 打开链接）
 internal/ui/compose_view.go    写信浮层布局（含发件人就地展开、密送行与只读表头详情）
-internal/ui/compose_actions.go 发送（按发件人分派到后端或 SMTP）、附件路径列表的增删
-internal/ui/settings.go        设置浮层（通用/账号/快捷键，含网络代理、日志级别与账号手风琴：展开后是浅灰子卡片——代理开关 + 描边按钮操作，删除在同一行原地确认；账号卡下方是发信账号分组）
-internal/ui/smtp_account.go    SMTP 发信账号：新增/编辑表单浮层、设置页分组行与其展开块
+internal/ui/compose_actions.go 发送（按发件人分派到后端或 SMTP）、签名步骤（gpg 任务、失效与取消）、附件路径列表的增删
+internal/ui/settings.go        设置浮层（通用/账号/签名/快捷键，含网络代理、日志级别与账号手风琴：展开后是浅灰子卡片——代理开关 + 描边按钮操作，删除在同一行原地确认；账号卡下方是发信账号分组）
+internal/ui/smtp_account.go    SMTP 发信账号：新增/编辑表单浮层、设置页分组行与其展开块（签名密钥不在这里，编辑时原样保留）
+internal/ui/signing_key_field.go 设置页「签名」tab 的密钥行：每个身份一行，格式校验与写回 accounts.json
 internal/ui/account_add.go     添加账号 / 重新登录浮层（类型选择含 SMTP 发信账号、授权链接复制与打开）
 internal/ui/menu.go            下拉菜单
 internal/ui/status.go          轻量状态条
