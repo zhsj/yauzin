@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/zhsj/yauzin/internal/mail"
+	"github.com/zhsj/yauzin/internal/pgp"
 )
 
 // ErrNotExist reports an account ID the store does not hold.
@@ -72,6 +73,11 @@ type Entry struct {
 	// SMTP is set for a mail.KindSMTP entry, the outbound-only accounts. They
 	// have no token and are never handed to a mailbox backend.
 	SMTP *SMTPConfig `json:"smtp,omitempty"`
+	// SigningKey is the OpenPGP key this identity signs with: a long key ID or
+	// a full fingerprint, normalized by pgp.NormalizeKey. Empty means the
+	// identity sends unsigned. Only the key is stored, never a passphrase:
+	// the secret stays with gpg-agent.
+	SigningKey string `json:"signingKey,omitempty"`
 }
 
 // file is the on-disk document.
@@ -274,6 +280,13 @@ func validateEntry(e Entry) error {
 	}
 	if e.Kind == mail.KindSMTP && e.SMTP == nil {
 		return errors.New("accounts: SMTP account without a server")
+	}
+	// A hand-edited file can carry anything here; checking on write keeps a
+	// value the form would reject from being stored as if it were accepted.
+	if e.SigningKey != "" {
+		if _, err := pgp.NormalizeKey(e.SigningKey); err != nil {
+			return fmt.Errorf("accounts: signing key: %w", err)
+		}
 	}
 	return nil
 }

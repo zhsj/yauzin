@@ -17,7 +17,8 @@ import (
 )
 
 // TestSettingsPagesFrame lays out every page of the settings panel: none may
-// panic, and clicking a segment must switch pages.
+// panic, and clicking a segment must switch pages. It also pins the order of
+// the tabs to the settingsTab* indices, which the callers use to open a page.
 func TestSettingsPagesFrame(t *testing.T) {
 	a := testApp(t)
 	s := newSettingsView(a)
@@ -27,24 +28,13 @@ func TestSettingsPagesFrame(t *testing.T) {
 	s.Layout(gtx, a)
 	ops.Reset()
 
-	s.tabs[1].click.Click()
-	s.Layout(gtx, a)
-	if s.page != 1 {
-		t.Fatalf("page = %d, want 1 after clicking the accounts segment", s.page)
-	}
-	ops.Reset()
-
-	s.tabs[2].click.Click()
-	s.Layout(gtx, a)
-	if s.page != 2 {
-		t.Fatalf("page = %d, want 2 after clicking the shortcuts segment", s.page)
-	}
-	ops.Reset()
-
-	s.tabs[0].click.Click()
-	s.Layout(gtx, a)
-	if s.page != 0 {
-		t.Fatalf("page = %d, want 0 after clicking the general segment", s.page)
+	for i := range s.tabs {
+		s.tabs[i].click.Click()
+		s.Layout(gtx, a)
+		if s.page != i {
+			t.Fatalf("page = %d, want %d after clicking the %q segment", s.page, i, s.tabs[i].label)
+		}
+		ops.Reset()
 	}
 }
 

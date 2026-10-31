@@ -259,15 +259,23 @@ func (d *smtpDialog) entry() (accounts.Entry, bool) {
 		return accounts.Entry{}, false
 	}
 	address := addrs[0]
+	// The signing key is edited on the signing page, not here. Carrying the
+	// stored one over is what keeps a rename or a password change from
+	// silently disabling signing for this sender.
+	key := ""
+	if d.edit != nil {
+		key = d.edit.SigningKey
+	}
 	// The ID follows the sender address, so two entries cannot claim the same
 	// identity; saving it again replaces the stored one.
 	id := string(mail.KindSMTP) + ":" + strings.ToLower(address.Email)
 	return accounts.Entry{
-		ID:       id,
-		Kind:     mail.KindSMTP,
-		Email:    address.Email,
-		Name:     strings.TrimSpace(d.name.Text()),
-		UseProxy: d.proxySwitch.on(),
+		ID:         id,
+		Kind:       mail.KindSMTP,
+		Email:      address.Email,
+		Name:       strings.TrimSpace(d.name.Text()),
+		UseProxy:   d.proxySwitch.on(),
+		SigningKey: key,
 		SMTP: &accounts.SMTPConfig{
 			Host:         host,
 			Port:         port,

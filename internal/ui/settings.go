@@ -18,13 +18,13 @@ import (
 	"github.com/zhsj/yauzin/internal/mail"
 )
 
-// settingsView is the modal panel opened from the gear button. It has three
+// settingsView is the modal panel opened from the gear button. It has four
 // pages picked with the underlined tabs under the title: General holds the
 // appearance card (language, client-side title bar, performance monitor), the
 // network card (proxy address) and the logging card (console level), Accounts
 // the configured accounts as an accordion (one account opens its proxy switch,
-// re-login and delete rows) plus an "add account" row, Shortcuts the read-only
-// table of the keys in shortcutTable.
+// re-login and delete rows) plus an "add account" row, Signing one key row per
+// identity, Shortcuts the read-only table of the keys in shortcutTable.
 type settingsView struct {
 	app     *App
 	blocker *tapBlocker
@@ -47,6 +47,9 @@ type settingsView struct {
 	// smtpRows are the sending accounts: they have no mailbox, so they get a
 	// group of their own instead of joining the account accordion.
 	smtpRows []*settingsRow
+	// signRows edit the OpenPGP key of every identity, in the order the
+	// accounts page lists them: mailboxes first, then sending accounts.
+	signRows []*signingKeyRow
 	// expanded is the account whose details are open: the accounts page is an
 	// accordion, so at most one account is expanded at a time. confirmDelete
 	// names the account whose delete row a first click has armed.
@@ -68,6 +71,7 @@ type settingsView struct {
 const (
 	settingsTabGeneral = iota
 	settingsTabAccounts
+	settingsTabSigning
 	settingsTabShortcuts
 )
 
@@ -290,6 +294,7 @@ func newSettingsView(a *App) *settingsView {
 	s.tabs = []settingsTab{
 		{label: i18n.T("settings.tabGeneral")},
 		{label: i18n.T("settings.tabAccounts")},
+		{label: i18n.T("settings.tabSigning")},
 		{label: i18n.T("settings.tabShortcuts")},
 	}
 
@@ -377,7 +382,42 @@ func newSettingsView(a *App) *settingsView {
 
 	s.buildAccountRows(a)
 	s.buildSMTPRows(a)
+	s.buildSigningRows(a)
 	return s
+}
+
+// buildSigningRows lists one key row per identity: every mailbox, then every
+// sending account, so the page answers "which key does this address use"
+// without opening a form. The rows keep their own editor, so a save on one
+// identity never touches another.
+func (s *settingsView) buildSigningRows(a *App) {
+	s.signRows = nil
+	// Only identities stored in accounts.json have somewhere to keep the key:
+	// the dev-mode demo mailbox lives outside the file, so it gets no row
+	// instead of a field that cannot save.
+	if a.accountStore != nil {
+		for _, acc := range a.accounts {
+			account := acc
+			if _, ok := a.accountStore.Entry(account.ID); !ok {
+				continue
+			}
+			// The row names the identity by its address: the key belongs to
+			// the address that signs, and a display name says nothing about it.
+			title := account.Email
+			if title == "" {
+				title = account.DisplayName()
+			}
+			s.signRows = append(s.signRows, newSigningKeyRow(a, account.ID, title, storedSigningKey(a, account.ID)))
+		}
+	}
+	for _, entry := range a.smtpEntries() {
+		item := entry
+		title := item.Email
+		if title == "" {
+			title = item.Name
+		}
+		s.signRows = append(s.signRows, newSigningKeyRow(a, item.ID, title, item.SigningKey))
+	}
 }
 
 // buildAccountRows rebuilds the card of the accounts page. The rows are one
@@ -561,6 +601,15 @@ func (s *settingsView) pageContent(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(s.loggingCard(th)),
 			layout.Rigid(pageBottom),
 		)
+	case settingsTabSigning:
+		children = append(children,
+			layout.Rigid(sectionHeading(th, i18n.T("settings.signing"))),
+			layout.Rigid(sectionHint(th, i18n.T("settings.signingHint"))),
+		)
+		if len(s.signRows) > 0 {
+			children = append(children, layout.Rigid(settingsCard(s.signWidgets(th))))
+		}
+		children = append(children, layout.Rigid(pageBottom))
 	case settingsTabShortcuts:
 		sections := shortcutSections()
 		for i := range sections {
@@ -700,6 +749,19 @@ func cardChildren(items []layout.Widget) []layout.FlexChild {
 		out = append(out, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return w(gtx)
 		}))
+	}
+	return out
+}
+
+// signWidgets turns the key rows into the items of a card, the way rowWidgets
+// does for the plain rows.
+func (s *settingsView) signWidgets(th *theme) []layout.Widget {
+	out := make([]layout.Widget, 0, len(s.signRows))
+	for _, row := range s.signRows {
+		r := row
+		out = append(out, func(gtx layout.Context) layout.Dimensions {
+			return r.Layout(gtx, th)
+		})
 	}
 	return out
 }

@@ -256,6 +256,100 @@ func TestUpsertRejectsSMTPWithoutServer(t *testing.T) {
 	}
 }
 
+func TestSigningKeyRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	entry := Entry{
+		ID:         "smtp:me@example.com",
+		Kind:       mail.KindSMTP,
+		Email:      "me@example.com",
+		SigningKey: "0123456789ABCDEF",
+		SMTP:       &SMTPConfig{Host: "smtp.example.com", Port: 587, Security: "starttls"},
+	}
+	if err := s.Upsert(entry); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	got, ok := reopened.Entry(entry.ID)
+	if !ok {
+		t.Fatal("account missing after reopen")
+	}
+	if got.SigningKey != "0123456789ABCDEF" {
+		t.Fatalf("SigningKey = %q, want the long key ID", got.SigningKey)
+	}
+}
+
+func TestSigningKeyWithoutKeyIsUnsigned(t *testing.T) {
+	dir := t.TempDir()
+	// A file written before signing existed has no signingKey at all; it must
+	// keep loading and simply mean "unsigned".
+	doc := `{"accounts":[{"id":"gmail:a@example.com","kind":"gmail","email":"a@example.com"}]}`
+	if err := os.WriteFile(filepath.Join(dir, fileName), []byte(doc), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	entry, ok := s.Entry("gmail:a@example.com")
+	if !ok {
+		t.Fatal("account missing")
+	}
+	if entry.SigningKey != "" {
+		t.Fatalf("SigningKey = %q, want empty", entry.SigningKey)
+	}
+}
+
+func TestUpsertRejectsInvalidSigningKey(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for _, key := range []string{"ada@example.com", "0123ABCD", "not-hex-at-all!", "0123456789ABCDEF0"} {
+		entry := Entry{ID: "gmail:a@example.com", Kind: mail.KindGmail, Email: "a@example.com", SigningKey: key}
+		if err := s.Upsert(entry); err == nil {
+			t.Fatalf("Upsert accepted signing key %q", key)
+		}
+	}
+}
+
+func TestReplaceKeepsSigningKey(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	old := Entry{
+		ID:         "smtp:old@example.com",
+		Kind:       mail.KindSMTP,
+		Email:      "old@example.com",
+		SigningKey: "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+		SMTP:       &SMTPConfig{Host: "h", Port: 25, Security: "none"},
+	}
+	if err := s.Upsert(old); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	next := old
+	next.ID = "smtp:new@example.com"
+	next.Email = "new@example.com"
+	if err := s.Replace(old.ID, next); err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+	got, ok := s.Entry(next.ID)
+	if !ok {
+		t.Fatal("renamed entry missing")
+	}
+	if got.SigningKey != old.SigningKey {
+		t.Fatalf("SigningKey = %q after rename, want %q", got.SigningKey, old.SigningKey)
+	}
+}
+
 func TestCredentialsRejectOtherProvider(t *testing.T) {
 	s, err := Open(t.TempDir())
 	if err != nil {
