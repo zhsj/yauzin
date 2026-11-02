@@ -163,6 +163,7 @@
 - 任务列表分栏在侧栏最下方：与导航之间不画分隔线，改用 10dp 间距；标题 13sp Medium 左缩进 14dp、留在卡片外，任务行装在 8dp 圆角、1dp `colBorder` 描边的 `colSurface` 白色卡片里，卡片上下各 4dp 内边距；任务行高 48dp、左右内边距 10dp / 6dp，最多显示 3 行、更多行在卡片内滚动；行与行之间一条 1dp `colBorder` 细线，起点缩进到文字左缘（10 + 20 + 10 = 40dp）、右端留 6dp，最后一行不画线；每行图标 16dp、文件名或主题 13sp 单行省略、状态行 12sp，末尾 20dp 关闭按钮（运行中提示「取消任务」，结束后「删除任务」）；下载行的状态行是进度条加百分比：进度条高 4dp、2dp 圆角（轨道 `colSurface2`、填充 `colPrimary`），已知总长按比例填充并在右侧固定宽度单元格里显示百分比，未知总长用往返移动的段并逐帧请求重绘；发送行没有总长，状态行是「正在发送…」「已发送」或失败原因；完成用 `iconCheckPrimary`，失败用 `colDanger` 的警告三角，运行中的下载用文件图标、发送用发送箭头。
 - 两栏：侧栏 + 单一内容卡片；列表与阅读器在同一个 `Stack` 里按 `selectedThread` 切换，不存在第三栏。
 - 色板令牌集中在 `palette.go`（页面底 `#F6F8FC`、选中 `#EAF1FB`、主色 `#D3E3FD`、行 hover `#F2F6FC` 等），视图里不写裸色值。
+- CSD 窗口在整窗最外圈补 1dp `colBorder` 描边（`drawWindowFrame`）：没有平台边框与阴影时，白色顶栏会与桌面或后面的窗口连成一片，看不出窗口从哪里开始。描边画在顶栏与浮层之上、只含 paint op（不参与命中，标题栏拖动与各按钮点击不变），四边矩形互不重叠；**必须保持直角**，Gio 的 Wayland 后端把整个 surface 设为不透明区域（`updateOpaqueRegion`），圆角处不会透出桌面，只会留下未绘制像素。平台装饰（X11 等）时由系统画边框，应用不重复描边。
 - 列表行：勾选 | 星标 | 发件人 | 标签–主题–摘要 | 附件 | 日期。发件人固定 168dp，尾部附件/hover 操作叠在固定 112dp 底层上（四个 28dp 悬停按钮比附件+日期列宽，取两者较大值；宽度恒定，正文列不漂移）；会话数量紧跟发件人；悬停换操作不改变行布局。主题之前的标签是 Gmail 风格的实心色块：圆角 4dp、左右内边距 6dp、上下内边距 2dp、字号 11sp、块间距 4dp，底色取 `labels` 的颜色、文字按 WCAG 对比度在深色与白色之间取更清楚的一个（无颜色标签用 `colChipFallback` 浅灰底），标签名保留完整层级路径；只显示用户标签，系统标签（`INBOX`/`UNREAD`/`CATEGORY_*`）与当前浏览的标签本身不显示。标签段最多占主题-摘要区宽度的一半，低于 48dp 时整段隐藏，剩余宽度仍由主题与摘要均分。
 - 分页与全选在列表工具栏：页码由 `tokens` 推出，工具栏显示范围与总数；全选只作用于当前页，切页 / 切文件夹 / 搜索即清空。
 - 标签区按 Gmail 的层级展示：标签名里的 `/` 是层级分隔（`工作/项目A` 是 `工作` 下的标签），子标签每层缩进 18dp（最多 3 层）且只显示末段名称；有子标签的父标签把颜色圆点换成展开符号（折叠 ›、展开 ▾，取标签自身颜色），符号占圆点原来的 20dp 单元格、悬停时显示同色圆底并切换手型光标，点击只折叠子树、不选中标签；叶子标签仍显示颜色圆点；折叠状态只存内存（默认全展开），选中标签的严格祖先强制展开——此时祖先行的符号保留 ▾ 外观，但不显示悬停圆底、不切换手型、点击无效（折叠会把选中项藏起来）；选中父标签本身时仍可折叠其子标签；缺少父标签的数据按根级显示完整名称。
@@ -196,6 +197,7 @@
 
 - 应用建窗时 `app.Decorated(false)`，唯一判定出口是 `clientSide() = !decorated`：`Config.Decorated` 是「平台是否装饰」的唯一事实来源。**X11 永不画自绘标题栏**（Gio 在 X11 恒要求服务端装饰并报告 `Decorated == true`，自绘会重复）。
 - 自绘标题栏承载侧栏按钮 / logo+品牌 / 搜索胶囊 / 设置 / 头像 / 分隔线 / 最小化·最大化·关闭（高度见上节，`windowcontrols.go` 用 clip 自绘，字体无窗口字形）。
+- 客户端装饰同时意味着没有平台边框与阴影，因此窗口轮廓由应用补（见 §5 的 `drawWindowFrame`）；平台装饰时这是系统的事，应用不画，否则会与系统边框叠成双线。
 - Wayland 上由 `internal/waylanddeco` 让合成器回答「客户端装饰」：Gio 建窗时只注册 `zxdg_toplevel_decoration_v1` 的 `configure` 监听，从不发送 `set_mode`，装饰模式由合成器默认决定（KWin 对强制无边框的窗口回 `server_side`，源码注释 *Faked as server_side mode*）。该包用 `#cgo LDFLAGS: -Wl,--wrap=wl_proxy_add_listener` 在链接期包装符号：生成的 `zxdg_toplevel_decoration_v1_add_listener` 是 static inline，最终落到非变参的 `wl_proxy_add_listener`，包装函数按 proxy 的 interface 名认出装饰对象后立即补发 `set_mode(client_side)`，时序仍在首次 `wl_surface.commit` 之前。`vendor/` 不改动，去掉这个包即回到原行为。
 - 拖动只把 `system.ActionInputOp(system.ActionMove)` 登记在空白抓手区（clip 包裹、绘制顺序在按钮之后）；按在搜索框/按钮上不能被 move 消费。
 - 光标主题解析顺序：`XCURSOR_THEME`/`XCURSOR_SIZE`（用户显式设置）→ XDG portal `org.freedesktop.portal.Settings`（`org.gnome.desktop.interface`，750ms 超时）→ KDE `kreadconfig6`（回退 `kreadconfig5`）→ GNOME `gsettings get`（750ms 超时）。导出前必须校验 `<theme>/cursors` 真实存在，否则 Wayland `wl_cursor_theme_load` 失败会导致无法建窗。

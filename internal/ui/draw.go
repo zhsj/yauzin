@@ -93,6 +93,43 @@ func strokeRect(gtx layout.Context, fill, border color.NRGBA, radius unit.Dp, wi
 	return layout.Dimensions{Size: size}
 }
 
+// frameStrips splits the outline of a window of size into the four strips of
+// width w that ring it: top, bottom, left and right. The left and right strips
+// stop where the top and bottom ones begin, so no two strips overlap.
+//
+// A degenerate window or a width that would leave no interior yields zero
+// rectangles: a window narrower than two strips has nothing to draw without
+// painting over its content.
+func frameStrips(size image.Point, w int) [4]image.Rectangle {
+	var out [4]image.Rectangle
+	if w <= 0 || size.X < 2*w || size.Y < 2*w {
+		return out
+	}
+	out[0] = image.Rect(0, 0, size.X, w)
+	out[1] = image.Rect(0, size.Y-w, size.X, size.Y)
+	out[2] = image.Rect(0, w, w, size.Y-w)
+	out[3] = image.Rect(size.X-w, w, size.X, size.Y-w)
+	return out
+}
+
+// drawWindowFrame paints the outline of a client-side decorated window. It runs
+// above the frame's content, because a ring cannot be clipped directly (see
+// strokeRect) and painting the interior again would cover what is there.
+//
+// The corners are square on purpose: Gio marks the whole Wayland surface opaque
+// (app/os_wayland.go, updateOpaqueRegion), so unpainted corner pixels would not
+// let the desktop show through but stay undefined.
+func drawWindowFrame(gtx layout.Context, col color.NRGBA) {
+	for _, r := range frameStrips(gtx.Constraints.Max, gtx.Dp(1)) {
+		if r.Empty() {
+			continue
+		}
+		area := clip.Rect(r).Push(gtx.Ops)
+		paint.Fill(gtx.Ops, col)
+		area.Pop()
+	}
+}
+
 func hgap(gtx layout.Context, w unit.Dp) layout.Dimensions {
 	return layout.Dimensions{Size: image.Pt(gtx.Dp(w), 0)}
 }

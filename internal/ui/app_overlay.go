@@ -56,6 +56,9 @@ func (a *App) layout(gtx layout.Context) {
 		title := gtx
 		title.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, bar))
 		a.top.Layout(title)
+		// Without a platform frame the white title bar runs straight into
+		// whatever is behind the window, so the app draws the outline itself.
+		drawWindowFrame(gtx, colBorder)
 		a.registerPointerArea(gtx)
 		return
 	}
