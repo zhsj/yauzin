@@ -3,7 +3,7 @@ module github.com/zhsj/yauzin
 go 1.26.0
 
 require (
-	gioui.org v0.10.4-0.20261022055823-ba799cc61a63
+	gioui.org v0.10.4-0.20261102203804-84cf1a3e7ed3
 	gioui.org/x v0.10.3
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/nicksnyder/go-i18n/v2 v2.7.0
