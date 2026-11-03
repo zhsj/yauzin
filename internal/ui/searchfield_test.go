@@ -62,3 +62,57 @@ func TestSearchFieldTakesTypedText(t *testing.T) {
 		t.Fatalf("query = %q after Enter, want %q", a.query, "yauzin")
 	}
 }
+
+// TestSearchEscBlursTheField covers Esc in the search pill: it only hands the
+// keyboard back. The typed text, the active query and the rows behind the
+// field stay, and the next Esc belongs to the conversation again.
+func TestSearchEscBlursTheField(t *testing.T) {
+	a := testApp(t)
+	a.decorated = false
+	a.query = "invoice"
+	a.activeFolder = ""
+	a.top.search.SetText("invoic")
+	seedList(a)
+
+	router, ops, gtx := newRouterFrame(testWindow)
+	runFrame(a, router, ops, gtx)
+
+	// "/" gives the pill the keyboard; its focus request runs at the end of
+	// the frame, so the state is sampled one frame later.
+	router.Queue(key.Event{Name: "/", State: key.Press})
+	runFrame(a, router, ops, gtx)
+	runFrame(a, router, ops, gtx)
+	if !a.searchFocused || !router.Source().Focused(&a.top.search) {
+		t.Fatal("the search pill did not take the keyboard focus")
+	}
+
+	// The Esc frame only queues the blur; the next frame executes the
+	// FocusCmd at its end, and the focus state is sampled again after that.
+	router.Queue(key.Event{Name: key.NameEscape, State: key.Press})
+	runFrame(a, router, ops, gtx)
+	runFrame(a, router, ops, gtx)
+	runFrame(a, router, ops, gtx)
+
+	if a.searchFocused || router.Source().Focused(&a.top.search) {
+		t.Fatal("Esc left the search field focused")
+	}
+	if got := a.top.search.Text(); got != "invoic" {
+		t.Fatalf("search box = %q after Esc, want the typed text kept", got)
+	}
+	if a.query != "invoice" {
+		t.Fatalf("query = %q after Esc, want the active query kept", a.query)
+	}
+	if len(a.list.threads) != 3 {
+		t.Fatalf("list rows = %d after Esc, want the results to stay", len(a.list.threads))
+	}
+	if a.selectedThread != "t0" {
+		t.Fatalf("Esc closed the conversation %q while the search field had the focus", a.selectedThread)
+	}
+
+	// The next Esc is no longer the field's: it closes the conversation.
+	router.Queue(key.Event{Name: key.NameEscape, State: key.Press})
+	runFrame(a, router, ops, gtx)
+	if a.selectedThread != "" {
+		t.Fatalf("the second Esc left the conversation %q open", a.selectedThread)
+	}
+}

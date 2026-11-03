@@ -234,11 +234,14 @@ func (a *App) handleKeys(gtx layout.Context) {
 	}
 
 	if a.overlay == nil && a.searchFocused {
-		// Esc is the only key the search field shares with the shortcuts: it
-		// closes the status bar, then the conversation. It never clears the
-		// query. Everything else belongs to the editor.
+		// Esc is the only key the search field shares with the shortcuts, and
+		// it only hands the keyboard back: the typed text, the active query and
+		// the list stay untouched, so the next Esc is the list's again. The
+		// focus flag is cleared here because the FocusCmd runs at the end of
+		// the frame, after this branch. Everything else belongs to the editor.
 		if pressed(gtx, key.NameEscape) {
-			a.escape(gtx)
+			a.searchFocused = false
+			a.blurRequested = true
 		}
 		return
 	}

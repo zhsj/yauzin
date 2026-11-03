@@ -117,7 +117,7 @@
 
 - `App.overlay` 是**单一槽位**：`menuOverlay` / `settingsView` / `composeView` 互相替换。
 - 吞点击层必须是 `Stack` 的第一个子对象，否则挡住卡片自身的交互。菜单用 pass-through blocker（点击外部只关菜单），设置保持模态阻塞；写信浮窗**不设全窗 blocker**，由卡片内 `Clickable` 自己消费空白点击。
-- Esc 优先级：状态条 / 菜单 → 写信 / 设置 → 阅读器返回列表。Esc 不清空查询、不在搜索时回退文件夹；搜索框胶囊的 ✕ 只清空输入框文字，列表保持当前搜索结果（`query` 与 `activeFolder` 都不变）。
+- Esc 优先级：搜索框聚焦时先交出输入焦点，然后才是状态条 / 菜单 → 写信 / 设置 → 阅读器返回列表。Esc 不清空查询、不在搜索时回退文件夹；搜索框胶囊的 ✕ 只清空输入框文字，列表保持当前搜索结果（`query` 与 `activeFolder` 都不变）。
 - 面板内的下拉**必须页内展开**，不能复用 `App.showMenu`：`showOverlay` 先 `closeOverlay()` 把 `a.settings` 置 nil，菜单关闭时 `hideOverlay()` 又直接清空 `a.overlay`，设置面板不会回来。设置页的语言选择即按此实现（`settingsView.langOpen`，候选行在同一张卡片内展开）；写信浮层的「发件人」同理（`composeView.fromOpen`），因为菜单会顺带把草稿丢掉。
 - 写信浮层的「发件人」行只在存在 SMTP 发信账号时出现（否则整行不占位）：候选在卡片内就地展开，当前身份带勾，选中即收起。身份决定传输——邮箱身份走它自己的后端（`services[mailboxID]`，写信开始时固定，中途切账号不会改投），发信账号走 `App.sendSMTP`（可注入，测试不碰网络）。「密送」行始终显示；自动预填的值记在 `composeView.bccAuto` 里，切走发件人时只清除仍是该自动值的文本，用户改过的内容不动。
 - 主题下方的「邮件头」折叠行是本层唯一的表头可见入口：展开后只读列出 `Date` / `Message-ID` / `In-Reply-To` / `References`，空值不显示（新邮件与转发因此只有前两行；mailto 打开的信件若带 `in-reply-to`，这里同样显示对应两行）。回复打开时由 `mail.ReplyReferences` 预置线程头，被回复邮件没有 Message-ID 就整条链留空，不伪造 ID。长引用链在界面上只显示最后 8 条（前置 `… `），`Draft.References` 仍是完整链。标签列宽 `headersLabelWidth`（96dp）比通用 `composeLabelWidth` 宽，头部名称不会截断；只用现有 chevron 字形，避免为一个折叠箭头重建图标字体子集。
@@ -129,14 +129,14 @@
 
 - 所有按键在 `internal/ui/keys.go` 的单一入口路由：先镜像搜索框焦点，再分发全局层（Ctrl+W 关窗口、Ctrl+Q 退出进程），然后按「状态条 → 浮层 → 阅读器」的 Esc 顺序处理，最后才分发其余快捷键。
 - 键表 `shortcutTable` 同时驱动分发与「设置 → 快捷键」页：每条记录带分组、位、修饰键 (`mods`)、`global` 标志、Gio 键名与键帽文本，`readShortcuts(gtx, global)` 只读其中一半，设置页遍历整张表，新增按键只需改一处。列表与阅读器都生效的 E / Delete / S / U 归入「全局」组，帮助页因此不出现重复行；方向键与 PgUp/PgDn/Home/End 归入「滚动」组；Esc 也在表内，按位在浮层/搜索门禁之前处理。
-- `global` 行（Ctrl+W / Ctrl+Q / Ctrl+F）要求修饰键，因此在两道门禁之前读取，写信浮窗、设置页、搜索框聚焦时同样可用；Ctrl+W 置位 `windowActions` 的 `ActionClose`（与标题栏关闭按钮同一条路径），Ctrl+Q 调 `requestQuit()`，同帧同时按下以退出优先。Ctrl+F 是「阅读器内查找」，只在 `overlay == nil && selectedThread != ""` 时打开查找条，否则整帧忽略；查找编辑器聚焦时只让出 Esc（Enter 由编辑器的 `Submit` 触发「下一个」），因此阅读器的其他快捷键不会吞掉正在输入的字符。Esc 顺序为状态条 → 浮层 → 查找条 → 会话。
+- `global` 行（Ctrl+W / Ctrl+Q / Ctrl+F）要求修饰键，因此在两道门禁之前读取，写信浮窗、设置页、搜索框聚焦时同样可用；Ctrl+W 置位 `windowActions` 的 `ActionClose`（与标题栏关闭按钮同一条路径），Ctrl+Q 调 `requestQuit()`，同帧同时按下以退出优先。Ctrl+F 是「阅读器内查找」，只在 `overlay == nil && selectedThread != ""` 时打开查找条，否则整帧忽略；查找编辑器聚焦时只让出 Esc（Enter 由编辑器的 `Submit` 触发「下一个」），因此阅读器的其他快捷键不会吞掉正在输入的字符。Esc 顺序为状态条 → 浮层 → 查找条 → 会话；搜索框聚焦时 Esc 只交出焦点，不走这条顺序。
 - 搜索框焦点用 `gtx.Focused(&a.top.search)` 每帧采样，**不能**用 `gtx.Event(key.FocusFilter{...})` 去读：`FocusFilter` 同时匹配目标的 `EditEvent`/`SnippetEvent`/`SelectionEvent`/`CompositionEvent`，而 `Router.Event` 命中即从该帧删除事件，读焦点会把编辑器的文本输入一起吃掉（表现为能聚焦、光标会闪、但打不出字）。
-- 读快捷键是破坏性的，因此裸键只在没有编辑器持有键盘时才读：搜索框聚焦时只读 Esc（其余字符、退格、回车全部留给编辑器，回车才能触发 `Editor.Submit`），浮层打开时同样只处理 Esc。未读取的事件在帧末由 `Router.Frame` 直接丢弃，不会残留到编辑器失焦后才触发。全局层是例外：它只要修饰键组合，而 `widget.Editor` 只绑定 Ctrl+Z/C/V/X/A、Ctrl+Backspace/Delete、Home/End 与方向键，Ctrl+W / Ctrl+Q 不会被编辑器消费。
+- 读快捷键是破坏性的，因此裸键只在没有编辑器持有键盘时才读：搜索框聚焦时只读 Esc（交出输入焦点，输入文字、`query` 与列表都不变；其余字符、退格、回车全部留给编辑器，回车才能触发 `Editor.Submit`），浮层打开时同样只处理 Esc。未读取的事件在帧末由 `Router.Frame` 直接丢弃，不会残留到编辑器失焦后才触发。全局层是例外：它只要修饰键组合，而 `widget.Editor` 只绑定 Ctrl+Z/C/V/X/A、Ctrl+Backspace/Delete、Home/End 与方向键，Ctrl+W / Ctrl+Q 不会被编辑器消费。
 - 字母键名是 Gio 的大写形式（`J`/`K`/`C`…），普通字母过滤不带修饰键，所以 `Ctrl+C` 不会被当成「写信」；反过来 `key.Filter.Required` 的匹配要求事件修饰键是该集合的子集，`Ctrl+Shift+W` 也不会触发「关闭窗口」。
 - 列表有一个键盘光标（`cursorThread`，页/文件夹切换时清空），行高亮复用选中色；移出视口时通过设置 `layout.List.Position.First` 拉回可见区域。动作快捷键复用与鼠标相同的 `App` 方法，不另开一条数据通路。
 - 「滚动」组在两个视图中语义随上下文：列表里 ↑/↓ 与 J/K 逐行移动光标，PgUp/PgDn 一步移动上一帧可见行数（`layout.List.Position.Count`），Home/End 跳到首/末行；阅读器里 ↑/↓ 每次滚动 `readerScrollStep`（约三行正文），PgUp/PgDn 滚动「上一帧可视高度 − `readerPageOverlap`」，Home/End 回到正文首/末条。J/K 在阅读器里切换相邻会话（`openAdjacentThread` 同步列表光标，到页首/页尾即停，不循环），因此键表把方向键从原来的 `J`/`↓` 共用行里拆了出来。阅读器的 R / A / F 分别对最新一封邮件打开回复、回复全部与转发。
 - 阅读器滚动直接改 `layout.List.Position.Offset`：`layout.List` 只处理指针滚轮，`ScrollBy` 以条目为单位、对高度差异极大的消息卡会跳，所以按像素偏移滚动。键盘在布局之前读取，翻页高度取上一帧在 `layout.Flexed` 子树记录的 `readerView.viewH`，首帧为 0 时回退窗口高度；跨卡与两端由 `layout.List` 自行纠正（负偏移回补上一条，末尾夹到底部），`openThread` 的 `reader.reset()` 负责切会话时回到顶部。
-- 焦点归属由 App 自己声明：打开会话、切文件夹、关闭浮层都会请求把焦点交还窗口根，避免搜索框在别处继续吃字符；`/` 主动把焦点交给搜索框。写信浮窗没有发送快捷键（Ctrl+Enter 不发送），打开后按模式分派首帧焦点：回复与回复全部给正文，新邮件与转发给「收件人」。因此 `showOverlay` 不替写信浮窗排队 `blurRequested`：那条失焦要等下一帧才执行，正好落在浮窗刚拿到焦点之后，会把焦点抢回窗口根（表现为光标闪一帧、随后打不出字）。设置、菜单、账号对话框这类不自行聚焦的浮层仍然排队失焦。
+- 焦点归属由 App 自己声明：打开会话、切文件夹、关闭浮层、在搜索框内按 Esc 都会请求把焦点交还窗口根，避免搜索框在别处继续吃字符；`/` 主动把焦点交给搜索框。写信浮窗没有发送快捷键（Ctrl+Enter 不发送），打开后按模式分派首帧焦点：回复与回复全部给正文，新邮件与转发给「收件人」。因此 `showOverlay` 不替写信浮窗排队 `blurRequested`：那条失焦要等下一帧才执行，正好落在浮窗刚拿到焦点之后，会把焦点抢回窗口根（表现为光标闪一帧、随后打不出字）。设置、菜单、账号对话框这类不自行聚焦的浮层仍然排队失焦。
 
 ### 4.4 窗口生命周期
 
