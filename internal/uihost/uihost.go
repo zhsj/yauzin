@@ -13,10 +13,6 @@ import (
 
 	"github.com/zhsj/yauzin/internal/singleinstance"
 	"github.com/zhsj/yauzin/internal/ui"
-
-	// Imported for its link-time side effect: it makes Gio ask the Wayland
-	// compositor for client-side decorations before the window is mapped.
-	_ "github.com/zhsj/yauzin/internal/waylanddeco"
 )
 
 // Main hands the main thread to Gio and runs the UI until the process quits.
@@ -46,8 +42,8 @@ func (driver) NewWindow() ui.Window {
 		// Leave decoration to the app so Config.Decorated tells the truth. The
 		// title bar is drawn by the app in windowcontrols.go and topbar.go;
 		// platforms that decorate regardless (X11, Windows, macOS) keep their
-		// own frame and the app draws nothing. On Wayland the compositor
-		// answers client-side because internal/waylanddeco requests it.
+		// own frame and the app draws nothing. On Wayland Gio turns this
+		// option into the decoration mode it requests from the compositor.
 		app.Decorated(false),
 	)
 	// The explorer belongs to the window: a new window gets a new one, and the

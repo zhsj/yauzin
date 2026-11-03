@@ -198,7 +198,7 @@
 - 应用建窗时 `app.Decorated(false)`，唯一判定出口是 `clientSide() = !decorated`：`Config.Decorated` 是「平台是否装饰」的唯一事实来源。**X11 永不画自绘标题栏**（Gio 在 X11 恒要求服务端装饰并报告 `Decorated == true`，自绘会重复）。
 - 自绘标题栏承载侧栏按钮 / logo+品牌 / 搜索胶囊 / 设置 / 头像 / 分隔线 / 最小化·最大化·关闭（高度见上节，`windowcontrols.go` 用 clip 自绘，字体无窗口字形）。
 - 客户端装饰同时意味着没有平台边框与阴影，因此窗口轮廓由应用补（见 §5 的 `drawWindowFrame`）；平台装饰时这是系统的事，应用不画，否则会与系统边框叠成双线。
-- Wayland 上由 `internal/waylanddeco` 让合成器回答「客户端装饰」：Gio 建窗时只注册 `zxdg_toplevel_decoration_v1` 的 `configure` 监听，从不发送 `set_mode`，装饰模式由合成器默认决定（KWin 对强制无边框的窗口回 `server_side`，源码注释 *Faked as server_side mode*）。该包用 `#cgo LDFLAGS: -Wl,--wrap=wl_proxy_add_listener` 在链接期包装符号：生成的 `zxdg_toplevel_decoration_v1_add_listener` 是 static inline，最终落到非变参的 `wl_proxy_add_listener`，包装函数按 proxy 的 interface 名认出装饰对象后立即补发 `set_mode(client_side)`，时序仍在首次 `wl_surface.commit` 之前。`vendor/` 不改动，去掉这个包即回到原行为。
+- Wayland 上的装饰模式由 Gio 自己谈：`gioui.org` 自 HEAD（`66fc2b1` + `84cf1a3`）起在 `window.Configure` 里比较 `Decorated` 的前后取值，变化时向 `zxdg_toplevel_decoration_v1` 发送 `set_mode(client_side|server_side)`，`configure` 回包再写回 `Config.Decorated`。应用只声明 `app.Decorated(false)`，不再需要任何链接期包装或本地补丁；合成器不提供 xdg-decoration（Mutter/Weston）时 Gio 也不预设服务端装饰，应用照常自己画标题栏。
 - 拖动只把 `system.ActionInputOp(system.ActionMove)` 登记在空白抓手区（clip 包裹、绘制顺序在按钮之后）；按在搜索框/按钮上不能被 move 消费。
 - 光标主题解析顺序：`XCURSOR_THEME`/`XCURSOR_SIZE`（用户显式设置）→ XDG portal `org.freedesktop.portal.Settings`（`org.gnome.desktop.interface`，750ms 超时）→ KDE `kreadconfig6`（回退 `kreadconfig5`）→ GNOME `gsettings get`（750ms 超时）。导出前必须校验 `<theme>/cursors` 真实存在，否则 Wayland `wl_cursor_theme_load` 失败会导致无法建窗。
 - 门户必须排在 KDE 之前：`org.gnome.desktop.interface` 由 `xdg-desktop-portal-gtk` 转发 dconf 实现，Flatpak 内也靠它透视宿主设置；KDE 的 portal 只注册 `org.freedesktop.appearance` 与 `org.kde.*`，查询该命名空间会失败并自然落到 KDE 来源，因此不做会话判断。
@@ -206,12 +206,12 @@
 - `gsettings` 放最后兜底：它在任何桌面都会返回 schema 默认值（`Adwaita`），只有门户与 KDE 都没结果时才轮到它，避免把其他桌面的真实设置盖掉。Flatpak 内 `gsettings`/`kreadconfig6` 读不到宿主配置，这是从纯 D-Bus 门户改为 CLI 的已知代价。
 - 未导出尺寸时 Gio 的 Wayland 后端自己用 32（`os_wayland.go`），KDE 未设置时是 24，所以 `kreadconfig6` 读不到值时两侧尺寸可能差一档。
 - 应用自己导出的值会被下一次解析读到（误判为「用户设置」并且不再回查 portal），因此 `cursor` 包用 `lastExport` 在读取 env 时屏蔽自写值；`Apply` 只在每次建窗前调用一次。运行中换主题需重开窗口。
-- **边缘缩放挂在 `Config.Decorated` 上**：Gio 的缩放热区 `systemGesture()` 首行即 `if Mode != Windowed || Decorated { return nil, 0 }`，只有合成器确认客户端装饰时才有缩放光标与 `xdg_toplevel.resize`。`internal/waylanddeco` 的 `set_mode(client_side)` 就是让合成器回 `configure(client_side)` 的那一步；应用自己拿不到 `wl_surface`/`xdg_toplevel`（`io/system` 只暴露 `ActionMove`），也不需要拿。
+- **边缘缩放挂在 `Config.Decorated` 上**：Gio 的缩放热区 `systemGesture()` 首行即 `if Mode != Windowed || Decorated { return nil, 0 }`，只有合成器确认客户端装饰时才有缩放光标与 `xdg_toplevel.resize`。Gio 依 `app.Decorated(false)` 发出的 `set_mode(client_side)` 就是让合成器回 `configure(client_side)` 的那一步；应用自己拿不到 `wl_surface`/`xdg_toplevel`（`io/system` 只暴露 `ActionMove`），也不需要拿。
 - **最小化后的模式同步**：Gio 的 Wayland 后端把 `Mode` 置为 `Minimized` 后只靠 `wl_surface.enter` 清除，而窗口在同一 output 恢复不会触发 enter；`Configure` 又会丢弃 `prev.Mode == Minimized` 时的一切模式切换，于是恢复后最大化按钮、标题栏拖动与缩放热区全部失效。应用不做可视化补偿：窗口层在 `Perform` 之后，按纯函数 `windowSteps`（`windowcontrols.go`，帧回调里算出并放进 `WindowActions.ResetMode`）的判断在最小化时补一次 `app.Windowed`，复位这条僵死记录（协议层窗口仍然是最小化的）。代价是幂等的最小化前已最大化情形需要点两次最大化：第一次只把状态同步回合成器本已保持的最大化。
 
 ### 7.2 使用者配置
 
-- **Wayland 恒用自绘标题栏**：`internal/waylanddeco` 让合成器确认客户端装饰，KWin 与 Mutter 都不再画边框，**不需要任何窗口规则，也没有应用内开关**。
+- **Wayland 恒用自绘标题栏**：Gio 依 `app.Decorated(false)` 让合成器确认客户端装饰，KWin 与 Mutter 都不再画边框，**不需要任何窗口规则，也没有应用内开关**。
 - **平台自己装饰时保持系统边框**：X11（Gio 恒要求服务端装饰）、Windows、macOS 由平台画标题栏（原因见 §7.1）。
 - **X11 无法使用客户端标题栏**。
 - **光标主题覆盖**：环境变量优先级最高，可绕过自动解析直接指定；运行中更换系统主题后，从托盘关闭再打开窗口即可生效。
@@ -448,7 +448,7 @@ internal/mail/smtp/            SMTP 发信：三种加密、PLAIN/LOGIN、信封
 internal/netproxy/             裸 TCP 代理拨号：http/https CONNECT 与 socks5（与 Gmail 共用的地址校验）
 internal/cmd/gmailgen/         Gmail Discovery 文档 → Go 类型生成器（go generate 入口）
 internal/accounts/             accounts.json：OAuth 凭据（provider）、每账号 kind/令牌/useProxy、SMTP 发信条目（smtp 配置，无令牌）
-internal/uihost/uihost.go      唯一 import gioui.org/app 的包：进程入口（app.ID / app.Main）、建窗与初始选项、事件循环、窗口动作、waylanddeco 副作用引入
+internal/uihost/uihost.go      唯一 import gioui.org/app 的包：进程入口（app.ID / app.Main）、建窗与初始选项、事件循环、窗口动作
 internal/uihost/picker.go      把 gioui.org/x/explorer 适配成 ui.FilePicker（错误映射为 ui 的两个哨兵）
 internal/ui/driver.go          窗口层端口：Driver / Window / WindowConfig / WindowActions / FilePicker 与文件选择器错误
 internal/ui/app.go             状态与构造：App 字段、构造器、异步原语
@@ -506,7 +506,6 @@ internal/logging/              进程级 slog level var 与控制台 text handle
 internal/cursor/               系统光标主题解析（门户 / kreadconfig6 / gsettings）
 internal/i18n/                 中英文翻译与系统 locale
 internal/tray/                 系统托盘（自实现 StatusNotifierItem + DBusMenu）
-internal/waylanddeco/          Wayland 客户端装饰（链接期包装 wl_proxy_add_listener 补发 set_mode）
 internal/singleinstance/       D-Bus 单实例（会话总线名 me.zhsj.yauzin）
 internal/mailto/               mailto URI 解析（收件人、抄送、密送、主题、正文、in-reply-to）
 artwork/                       图标设计母版（SVG）、512px 桌面图标与截图，均不进二进制
