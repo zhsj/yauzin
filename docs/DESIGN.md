@@ -199,6 +199,7 @@
 - 自绘标题栏承载侧栏按钮 / logo+品牌 / 搜索胶囊 / 设置 / 头像 / 分隔线 / 最小化·最大化·关闭（高度见上节，`windowcontrols.go` 用 clip 自绘，字体无窗口字形）。
 - 客户端装饰同时意味着没有平台边框与阴影，因此窗口轮廓由应用补（见 §5 的 `drawWindowFrame`）；平台装饰时这是系统的事，应用不画，否则会与系统边框叠成双线。
 - Wayland 上的装饰模式由 Gio 自己谈：`gioui.org` 自 HEAD（`66fc2b1` + `84cf1a3`）起在 `window.Configure` 里比较 `Decorated` 的前后取值，变化时向 `zxdg_toplevel_decoration_v1` 发送 `set_mode(client_side|server_side)`，`configure` 回包再写回 `Config.Decorated`。应用只声明 `app.Decorated(false)`，不再需要任何链接期包装或本地补丁；合成器不提供 xdg-decoration（Mutter/Weston）时 Gio 也不预设服务端装饰，应用照常自己画标题栏。
+- **启动阶段的补发**：Gio 的 `createNativeWindow` 用 `if w.decor != nil` 判断是否预设服务端装饰，而该字段要到函数尾部才创建，条件恒假，`Config.Decorated` 因此从 false 起算；应用建窗时的 `Decorated(false)` 与之一致，首次 commit 前不会发出 `set_mode`，KWin 按默认回 `server_side`。窗口层（`internal/uihost` 的 `requestClientSide`）于是在合成器首次报 `Decorated == true` 时再请求一次 `Decorated(false)`，Gio 才发出 `set_mode(client_side)`。代价是窗口映射瞬间可能闪过一次服务端标题栏；Mutter/Weston 不提供 xdg-decoration，不会触发。上游把该判断改成 `d.decor`（只在合成器宣传协议时预设服务端装饰）后，补发即可删除。
 - 拖动只把 `system.ActionInputOp(system.ActionMove)` 登记在空白抓手区（clip 包裹、绘制顺序在按钮之后）；按在搜索框/按钮上不能被 move 消费。
 - 光标主题解析顺序：`XCURSOR_THEME`/`XCURSOR_SIZE`（用户显式设置）→ XDG portal `org.freedesktop.portal.Settings`（`org.gnome.desktop.interface`，750ms 超时）→ KDE `kreadconfig6`（回退 `kreadconfig5`）→ GNOME `gsettings get`（750ms 超时）。导出前必须校验 `<theme>/cursors` 真实存在，否则 Wayland `wl_cursor_theme_load` 失败会导致无法建窗。
 - 门户必须排在 KDE 之前：`org.gnome.desktop.interface` 由 `xdg-desktop-portal-gtk` 转发 dconf 实现，Flatpak 内也靠它透视宿主设置；KDE 的 portal 只注册 `org.freedesktop.appearance` 与 `org.kde.*`，查询该命名空间会失败并自然落到 KDE 来源，因此不做会话判断。
@@ -212,6 +213,7 @@
 ### 7.2 使用者配置
 
 - **Wayland 恒用自绘标题栏**：Gio 依 `app.Decorated(false)` 让合成器确认客户端装饰，KWin 与 Mutter 都不再画边框，**不需要任何窗口规则，也没有应用内开关**。
+- **KWin 的「无标题栏和边框」规则不支持**：该规则强制服务端装饰（KWin 源码注释 *Faked as server_side mode*），补发的 `set_mode(client_side)` 会被忽略，应用按 `Decorated == true` 不画标题栏，窗口就没有边框，边缘缩放也不可用。需要自绘标题栏时删掉这条窗口规则。
 - **平台自己装饰时保持系统边框**：X11（Gio 恒要求服务端装饰）、Windows、macOS 由平台画标题栏（原因见 §7.1）。
 - **X11 无法使用客户端标题栏**。
 - **光标主题覆盖**：环境变量优先级最高，可绕过自动解析直接指定；运行中更换系统主题后，从托盘关闭再打开窗口即可生效。

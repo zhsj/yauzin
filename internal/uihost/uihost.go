@@ -4,6 +4,8 @@
 package uihost
 
 import (
+	"os"
+
 	"gioui.org/app"
 	"gioui.org/io/system"
 	"gioui.org/layout"
@@ -14,6 +16,11 @@ import (
 	"github.com/zhsj/yauzin/internal/singleinstance"
 	"github.com/zhsj/yauzin/internal/ui"
 )
+
+// onWayland reports whether Gio talks to a Wayland compositor. Only there does
+// the decoration mode belong to a negotiation the app can restart; every other
+// platform decorates on its own terms.
+var onWayland = os.Getenv("WAYLAND_DISPLAY") != ""
 
 // Main hands the main thread to Gio and runs the UI until the process quits.
 // args are the arguments of this launch: a mailto URI among them opens a
@@ -55,6 +62,9 @@ func (driver) NewWindow() ui.Window {
 type window struct {
 	win      *app.Window
 	explorer *explorer.Explorer
+	// askedClientSide records that the window already answered the compositor's
+	// server-side verdict with a client-side request. See requestClientSide.
+	askedClientSide bool
 }
 
 // Events pumps the window until it is destroyed.
@@ -74,6 +84,7 @@ func (w *window) Events(frame func(layout.Context) ui.WindowActions, config func
 		case app.ConfigEvent:
 			// Config.Decorated reports whether the platform decorates the
 			// window; without that the application draws its own title bar.
+			w.requestClientSide(e.Config.Decorated)
 			config(ui.WindowConfig{
 				Decorated: e.Config.Decorated,
 				Maximized: e.Config.Mode == app.Maximized,
@@ -83,6 +94,34 @@ func (w *window) Events(frame func(layout.Context) ui.WindowActions, config func
 			return
 		}
 	}
+}
+
+// requestClientSide answers a compositor that decorated the window on its own
+// with a client-side request of its own.
+//
+// A Wayland window starts out with Config.Decorated false: Gio only presumes
+// server-side decorations where the compositor speaks xdg-decoration, and its
+// guard for that is evaluated before the window's decoration object exists, so
+// the Decorated(false) the window opens with changes nothing and Gio sends no
+// set_mode. Compositors that decorate by default (KWin) then answer
+// server_side, and the app stops drawing its title bar while Gio disables the
+// resize edges that key off Config.Decorated.
+//
+// Gio sends set_mode only when Configure sees Config.Decorated change, so the
+// request has to follow the compositor's answer: repeating Decorated(false) now
+// that Config.Decorated reads true turns into set_mode(client_side). The
+// server-side title bar is visible for the moment in between, which is what
+// makes this a workaround: drop it once Gio presumes server-side decorations
+// from the protocol object and sends set_mode before the first commit itself.
+//
+// Compositors without the protocol never decorate and report Decorated false
+// throughout, so they never reach the request.
+func (w *window) requestClientSide(decorated bool) {
+	if !onWayland || !decorated || w.askedClientSide {
+		return
+	}
+	w.askedClientSide = true
+	w.win.Option(app.Decorated(false))
 }
 
 // perform applies the requests the title bar collected during a frame. The mode
