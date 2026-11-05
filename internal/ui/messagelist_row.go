@@ -296,14 +296,13 @@ func (r *messageRow) labelStrip(gtx layout.Context, chips []labelChip, maxWidth 
 	return layout.Dimensions{Size: image.Pt(x-gap, height)}
 }
 
-// tailCell reserves the trailing column: the attachment slot and the date, or
-// the hover actions on top of that same slot.
+// tailCell reserves the trailing column: the date, or the hover actions on top
+// of that same slot.
 func (r *messageRow) tailCell(gtx layout.Context, sum mail.ThreadSummary, hovered bool) layout.Dimensions {
-	// The tail always reserves the same width — the idle row of the attachment
-	// slot and the date cell — so the subject/snippet body keeps its equal split
-	// no matter whether the pointer hovers a row or the conversation has an
-	// attachment. The hover actions overlay the same slot, right-aligned, and
-	// are four 28dp buttons; that set is the wider of the two.
+	// The tail always reserves the same width — the idle row of the date cell —
+	// so the subject/snippet body keeps its equal split no matter whether the
+	// pointer hovers a row. The hover actions overlay the slot, right-aligned,
+	// and are four 28dp buttons; that set is the wider of the two.
 	const tailWidth = 4 * 28
 	return layout.Stack{Alignment: layout.E}.Layout(gtx,
 		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
@@ -311,13 +310,6 @@ func (r *messageRow) tailCell(gtx layout.Context, sum mail.ThreadSummary, hovere
 				return layout.Dimensions{Size: image.Pt(gtx.Dp(tailWidth), 0)}
 			}
 			dims := layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					if !sum.HasAttachments {
-						return layout.Dimensions{Size: image.Pt(gtx.Dp(16), gtx.Dp(16))}
-					}
-					return r.app.th.glyphIn(gtx, iconAttach, 15, 16)
-				}),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					gtx.Constraints.Min.X = gtx.Dp(76)
