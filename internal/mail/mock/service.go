@@ -134,7 +134,6 @@ func (s *Service) seedInbox(now time.Time) {
 				if name == "" {
 					name = "邮件附件.txt"
 				}
-				m.HasAttachments = true
 				m.Attachments = []mail.Attachment{{
 					ID:       fmt.Sprintf("%s-att-%d", m.ID, 0),
 					Filename: name,
@@ -613,9 +612,6 @@ func buildThreadSummary(id string, msgs []*stored) mail.ThreadSummary {
 		if m.Starred {
 			summary.Starred = true
 		}
-		if m.HasAttachments {
-			summary.HasAttachments = true
-		}
 		for _, l := range m.Labels {
 			if labels[l] {
 				continue
@@ -802,7 +798,6 @@ func (s *Service) storeSent(draft mail.Draft) {
 		HTMLBody:   "<div>" + strings.ReplaceAll(html.EscapeString(draft.Body), "\n", "<br/>") + "</div>",
 	}
 	for _, a := range draft.Attachments {
-		m.HasAttachments = true
 		m.Attachments = append(m.Attachments, mail.Attachment{
 			ID:       fmt.Sprintf("%s-att-%d", m.ID, len(m.Attachments)),
 			Filename: a.Name,

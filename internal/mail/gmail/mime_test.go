@@ -61,7 +61,7 @@ func TestMessagePrefersFirstTextAndHTMLBodies(t *testing.T) {
 	if att.ID != "att1" || att.Filename != "report.pdf" || att.Size != 1234 || att.MIMEType != "application/pdf" {
 		t.Fatalf("attachment = %+v", att)
 	}
-	if !got.HasAttachments || !got.Unread || !got.Starred {
+	if !got.Unread || !got.Starred {
 		t.Fatalf("flags = %+v", got.MessageSummary)
 	}
 	if got.From.Email != "alice@example.com" || got.From.Name != "Alice" {
@@ -259,18 +259,5 @@ func TestAttachmentWithoutBlobKeepsEmptyID(t *testing.T) {
 	}
 	if id := got.Attachments[1].ID; id != "a1" {
 		t.Fatalf("blob attachment ID = %q, want a1", id)
-	}
-	if !got.HasAttachments {
-		t.Fatal("message with file parts reported no attachments")
-	}
-}
-
-func TestPayloadHasAttachment(t *testing.T) {
-	if payloadHasAttachment(&MessagePart{MIMEType: "text/plain", Body: &MessagePartBody{Data: b64("x")}}) {
-		t.Fatal("a body-only part reported an attachment")
-	}
-	nested := &MessagePart{Parts: []*MessagePart{{Parts: []*MessagePart{{Filename: "x.png"}}}}}
-	if !payloadHasAttachment(nested) {
-		t.Fatal("nested file part was not detected")
 	}
 }

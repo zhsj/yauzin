@@ -74,16 +74,15 @@ func TestLayoutFrames(t *testing.T) {
 			labels = []string{"work", "bills", "CATEGORY_PERSONAL"}
 		}
 		threads = append(threads, mail.ThreadSummary{
-			ID:             "t" + strconv.Itoa(i),
-			Subject:        "Subject " + strconv.Itoa(i) + " 中文主题",
-			Snippet:        "Snippet 摘要 " + strings.Repeat("x", 40),
-			Participants:   []mail.Address{{Name: "Ada Chen", Email: "ada@example.com"}},
-			LastDate:       time.Now().Add(-time.Duration(i) * time.Hour),
-			MessageCount:   2,
-			UnreadCount:    1,
-			MessageIDs:     []string{"m" + strconv.Itoa(i)},
-			HasAttachments: i%3 == 0,
-			Labels:         labels,
+			ID:           "t" + strconv.Itoa(i),
+			Subject:      "Subject " + strconv.Itoa(i) + " 中文主题",
+			Snippet:      "Snippet 摘要 " + strings.Repeat("x", 40),
+			Participants: []mail.Address{{Name: "Ada Chen", Email: "ada@example.com"}},
+			LastDate:     time.Now().Add(-time.Duration(i) * time.Hour),
+			MessageCount: 2,
+			UnreadCount:  1,
+			MessageIDs:   []string{"m" + strconv.Itoa(i)},
+			Labels:       labels,
 		})
 	}
 	a.list.setThreads(threads)

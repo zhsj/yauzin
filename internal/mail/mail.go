@@ -114,17 +114,16 @@ type Attachment struct {
 
 // MessageSummary is the metadata rendered in the message list.
 type MessageSummary struct {
-	ID             string
-	AccountID      string
-	From           Address
-	To             []Address
-	Subject        string
-	Snippet        string
-	Date           time.Time
-	Unread         bool
-	Starred        bool
-	HasAttachments bool
-	Labels         []string
+	ID        string
+	AccountID string
+	From      Address
+	To        []Address
+	Subject   string
+	Snippet   string
+	Date      time.Time
+	Unread    bool
+	Starred   bool
+	Labels    []string
 }
 
 // Message is a fully loaded message body plus attachments.
@@ -173,8 +172,6 @@ type ThreadSummary struct {
 	UnreadCount int
 	// Starred reports whether any message in the conversation is starred.
 	Starred bool
-	// HasAttachments reports whether any message carries an attachment.
-	HasAttachments bool
 	// Labels are the label IDs applied to any message in the conversation.
 	Labels []string
 	// MessageIDs lists the message IDs oldest first.

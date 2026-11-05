@@ -639,9 +639,6 @@ func TestListThreadsAssemblesConversations(t *testing.T) {
 	if got := strings.Join(th.MessageIDs, ","); got != "m1,m2" {
 		t.Fatalf("message IDs = %q, want oldest first", got)
 	}
-	if !page.Threads[1].HasAttachments {
-		t.Fatal("t2 should carry an attachment")
-	}
 	// The metadata of both conversations must arrive in a single batch
 	// request, in list order.
 	batches := batch.calls()
@@ -857,7 +854,7 @@ func TestGetThreadParsesMessages(t *testing.T) {
 	if len(m.Attachments) != 1 || m.Attachments[0].ID != "att1" || m.Attachments[0].Size != 12 {
 		t.Fatalf("attachments = %+v", m.Attachments)
 	}
-	if !m.HasAttachments || !m.Unread || m.Date.IsZero() {
+	if !m.Unread || m.Date.IsZero() {
 		t.Fatalf("message flags = %+v", m.MessageSummary)
 	}
 }

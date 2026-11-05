@@ -55,23 +55,3 @@ func (m *Message) timestamp(headers map[string]string) time.Time {
 	}
 	return time.Time{}
 }
-
-// hasAttachment reports whether the MIME tree carries a file part.
-func (m *Message) hasAttachment() bool {
-	if m.Payload == nil {
-		return false
-	}
-	return payloadHasAttachment(m.Payload)
-}
-
-func payloadHasAttachment(p *MessagePart) bool {
-	if p.Filename != "" || (p.Body != nil && p.Body.AttachmentID != "") {
-		return true
-	}
-	for _, child := range p.Parts {
-		if payloadHasAttachment(child) {
-			return true
-		}
-	}
-	return false
-}

@@ -32,9 +32,6 @@ func summarize(accountID string, th *Thread) mail.ThreadSummary {
 		if m.hasFlag("STARRED") {
 			sum.Starred = true
 		}
-		if m.hasAttachment() {
-			sum.HasAttachments = true
-		}
 		for _, l := range m.LabelIDs {
 			if _, ok := seenLabels[l]; ok {
 				continue

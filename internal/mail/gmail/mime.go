@@ -43,7 +43,6 @@ func (s *Service) message(m *Message) *mail.Message {
 	out.HTMLBody = bodies.html
 	out.TextBody = bodies.text
 	out.Attachments = bodies.attachments
-	out.HasAttachments = len(bodies.attachments) > 0
 	return out
 }
 

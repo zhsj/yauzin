@@ -964,9 +964,6 @@ func TestSaveAttachment(t *testing.T) {
 	var msg *mail.Message
 	var att mail.Attachment
 	for _, th := range page.Threads {
-		if !th.HasAttachments {
-			continue
-		}
 		msgs, err := s.GetThread(ctx, th.ID)
 		if err != nil {
 			t.Fatalf("get thread: %v", err)
