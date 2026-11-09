@@ -142,6 +142,10 @@ type messageCard struct {
 	name     textSelection
 	addr     textSelection
 	bodyText textSelection
+	// detailsSel holds one selectable run per header field, indexed by the
+	// field rather than by row position: an empty Cc removes its row, and a
+	// position would then hand Reply-To the selection Cc was carrying.
+	detailsSel [headerFieldCount]textSelection
 
 	// headH is the height of the open head and its divider on the last layout,
 	// height the height of the whole card. The find bar needs both to scroll a
@@ -169,9 +173,22 @@ func (c *messageCard) bodySelection(msg *mail.Message) *widget.Selectable {
 	return c.bodyText.Select(msg.ID)
 }
 
+// textRuns lists every selectable run of this card, the header details
+// included. The menu and the reader's one-selection rule both read this list,
+// so a run added here is wired into both at once. The array is returned by
+// value: it is small and fixed, and a slice would allocate once per frame.
+func (c *messageCard) textRuns() [3 + headerFieldCount]*textSelection {
+	var runs [3 + headerFieldCount]*textSelection
+	runs[0], runs[1], runs[2] = &c.name, &c.addr, &c.bodyText
+	for f := headerField(0); f < headerFieldCount; f++ {
+		runs[3+f] = &c.detailsSel[f]
+	}
+	return runs
+}
+
 // selection reports the fragment a right click landed on in this card, if any.
 func (c *messageCard) selection() (string, bool) {
-	for _, s := range [...]*textSelection{&c.name, &c.addr, &c.bodyText} {
+	for _, s := range c.textRuns() {
 		if text, ok := s.Take(); ok {
 			return text, true
 		}
@@ -386,6 +403,14 @@ func (c *messageCard) detailsToggle(gtx layout.Context, th *theme) layout.Dimens
 	// details, instead of showing the old state for another frame.
 	if c.detailsClick.Clicked(gtx) {
 		c.detailsOpen = !c.detailsOpen
+		if !c.detailsOpen {
+			// The runs go with the block. Keeping a selection in a run that is
+			// no longer drawn would bring an unexplained highlight back the
+			// next time the block opens.
+			for i := range c.detailsSel {
+				c.detailsSel[i].clear()
+			}
+		}
 		invalidateAfterTap(gtx)
 	}
 	return c.headControl(gtx, th, &c.detailsClick, func(gtx layout.Context) layout.Dimensions {
@@ -404,8 +429,26 @@ func (c *messageCard) detailsToggle(gtx layout.Context, th *theme) layout.Dimens
 	})
 }
 
-// headerRow is one label/value pair of the card's header details.
+// headerField identifies one row of the header details. The rows are filtered
+// by presence, so the selectable runs are keyed by this instead of by the row
+// position they end up in.
+type headerField int
+
+const (
+	headerFieldFrom headerField = iota
+	headerFieldTo
+	headerFieldCc
+	headerFieldReplyTo
+	headerFieldSubject
+	headerFieldDate
+	headerFieldMessageID
+	headerFieldReferences
+	headerFieldCount
+)
+
+// headerRow is one field of the card's header details.
 type headerRow struct {
+	field headerField
 	label string
 	value string
 }
@@ -415,14 +458,14 @@ type headerRow struct {
 // would suggest the header exists but could not be read.
 func detailsRows(msg *mail.Message) []headerRow {
 	rows := []headerRow{
-		{i18n.T("compose.from"), msg.From.String()},
-		{i18n.T("compose.to"), mail.FormatAddressList(msg.To)},
-		{i18n.T("compose.cc"), mail.FormatAddressList(msg.Cc)},
-		{i18n.T("reader.headerReplyTo"), mail.FormatAddressList(msg.ReplyTo)},
-		{i18n.T("compose.subject"), strings.TrimSpace(msg.Subject)},
-		{i18n.T("compose.headerDate"), formatFullTime(msg.Date)},
-		{i18n.T("compose.headerMessageID"), strings.TrimSpace(msg.MessageID)},
-		{i18n.T("compose.headerReferences"), formatReferences(msg.References)},
+		{headerFieldFrom, i18n.T("compose.from"), msg.From.String()},
+		{headerFieldTo, i18n.T("compose.to"), mail.FormatAddressList(msg.To)},
+		{headerFieldCc, i18n.T("compose.cc"), mail.FormatAddressList(msg.Cc)},
+		{headerFieldReplyTo, i18n.T("reader.headerReplyTo"), mail.FormatAddressList(msg.ReplyTo)},
+		{headerFieldSubject, i18n.T("compose.subject"), strings.TrimSpace(msg.Subject)},
+		{headerFieldDate, i18n.T("compose.headerDate"), formatFullTime(msg.Date)},
+		{headerFieldMessageID, i18n.T("compose.headerMessageID"), strings.TrimSpace(msg.MessageID)},
+		{headerFieldReferences, i18n.T("compose.headerReferences"), formatReferences(msg.References)},
 	}
 	kept := rows[:0]
 	for _, row := range rows {
@@ -455,7 +498,9 @@ func (c *messageCard) details(gtx layout.Context, msg *mail.Message) layout.Dime
 						// The values stay one step darker than the labels: a
 						// Message-ID or a list of recipients has to stay
 						// readable, and long values wrap instead of clipping.
-						return th.wrappedText(gtx, item.value, textMeta, colText, font.Normal)
+						// They are the selectable half: a recipient or an ID is
+						// what a reader copies out of the block.
+						return c.detailsSel[item.field].Wrap(gtx, c.reader, msg.ID, item.value, textMeta, 0, colText, font.Normal)
 					}),
 				)
 			})

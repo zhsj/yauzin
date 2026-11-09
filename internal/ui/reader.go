@@ -234,7 +234,10 @@ func (r *readerView) retireSelections(gtx layout.Context, keep *textSelection) {
 		dropped = r.subject.clear() || dropped
 	}
 	for _, c := range r.cards {
-		for _, s := range [...]*textSelection{&c.name, &c.addr, &c.bodyText} {
+		// The card lists its own runs, header details included: anything it
+		// lays out as selectable is retired here without a second list to keep
+		// in step.
+		for _, s := range c.textRuns() {
 			if s == keep {
 				continue
 			}

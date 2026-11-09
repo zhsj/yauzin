@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gioui.org/f32"
+	"gioui.org/font"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -40,14 +41,14 @@ func TestDetailsRowsListTheMessageHeaders(t *testing.T) {
 	msg := headerMessage()
 	got := detailsRows(msg)
 	want := []headerRow{
-		{i18n.T("compose.from"), "Bob <bob@example.com>"},
-		{i18n.T("compose.to"), "Ada <ada@example.com>, second@example.com"},
-		{i18n.T("compose.cc"), "cc@example.com"},
-		{i18n.T("reader.headerReplyTo"), "list@example.com"},
-		{i18n.T("compose.subject"), "hello"},
-		{i18n.T("compose.headerDate"), formatFullTime(msg.Date)},
-		{i18n.T("compose.headerMessageID"), "<m1@example.com>"},
-		{i18n.T("compose.headerReferences"), "<m0@example.com>"},
+		{headerFieldFrom, i18n.T("compose.from"), "Bob <bob@example.com>"},
+		{headerFieldTo, i18n.T("compose.to"), "Ada <ada@example.com>, second@example.com"},
+		{headerFieldCc, i18n.T("compose.cc"), "cc@example.com"},
+		{headerFieldReplyTo, i18n.T("reader.headerReplyTo"), "list@example.com"},
+		{headerFieldSubject, i18n.T("compose.subject"), "hello"},
+		{headerFieldDate, i18n.T("compose.headerDate"), formatFullTime(msg.Date)},
+		{headerFieldMessageID, i18n.T("compose.headerMessageID"), "<m1@example.com>"},
+		{headerFieldReferences, i18n.T("compose.headerReferences"), "<m0@example.com>"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("details rows = %+v, want %d rows", got, len(want))
@@ -173,8 +174,97 @@ func TestDetailsToggleClicksThrough(t *testing.T) {
 	if !a.expanded[msg.ID] {
 		t.Fatal("the details switch folded the card")
 	}
+
+	// A fragment selected in the block goes away with it: the runs are not
+	// drawn while the block is closed.
+	sel := card.detailsSel[headerFieldFrom].Select(msg.ID)
+	sel.SetText("Bob <bob@example.com>")
+	sel.SetCaret(0, 3)
 	click()
 	if card.detailsOpen {
 		t.Fatal("clicking the switch again left the details open")
+	}
+	if got := card.detailsSel[headerFieldFrom].Selected(msg.ID); got != "" {
+		t.Fatalf("closing the details kept %q selected", got)
+	}
+}
+
+// TestRightClickOnAHeaderDetailCopiesIt drives a right click through the card:
+// the press lands on the value of the first detail row, which has to report the
+// selection so the copy menu can act on it.
+func TestRightClickOnAHeaderDetailCopiesIt(t *testing.T) {
+	a := testApp(t)
+	msg := headerMessage()
+	a.msgs = []*mail.Message{msg}
+	a.expanded = map[string]bool{msg.ID: true}
+	card := a.reader.cardFor(msg.ID)
+
+	router, ops, gtx := newRouterFrame(image.Pt(600, 400))
+	gtx.Constraints = layout.Exact(image.Pt(600, 400))
+	draw := func() {
+		ops.Reset()
+		card.Layout(gtx, msg)
+		router.Frame(ops)
+	}
+
+	// The first detail row sits below the head and its divider, and its value
+	// column begins after the 96dp label and its 8dp gap. Both measurements
+	// come from the card itself instead of a guessed pixel.
+	draw()
+	head := card.headH - 2*gtx.Dp(8) - gtx.Dp(1)
+	card.detailsOpen = true
+	draw()
+	line := a.th.text(testGtx(new(op.Ops), image.Pt(400, 400)), "x", textMeta, colText, font.Normal, 1).Size.Y
+	sel := card.detailsSel[headerFieldFrom].Select(msg.ID)
+	sel.SetCaret(0, 3) // "Bob"
+	at := f32.Pt(float32(gtx.Dp(14+96+8+4)), float32(gtx.Dp(cardInsetTop+6+1)+head+line/2))
+	router.Queue(pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Position: at, Buttons: pointer.ButtonSecondary})
+	router.Queue(pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: at})
+	draw()
+	draw()
+
+	m, ok := a.overlay.(*menuOverlay)
+	if !ok {
+		t.Fatalf("overlay = %T after a right click, want a menu", a.overlay)
+	}
+	if len(m.items) == 0 || m.items[0].Label != i18n.T("reader.menu.copy") {
+		t.Fatalf("menu = %+v, want the copy entry first", m.items)
+	}
+	m.rows[0].onTap()
+	if got := a.clipPending; got != "Bob" {
+		t.Fatalf("clipPending = %q after the copy entry, want the selected fragment", got)
+	}
+}
+
+// TestHeaderDetailSelectionRetiresTheBody keeps the reader's one-selection rule:
+// a fragment selected in the header details drops the one in the body, the way
+// the sender name and the subject already do.
+func TestHeaderDetailSelectionRetiresTheBody(t *testing.T) {
+	a := testApp(t)
+	msg := headerMessage()
+	a.msgs = []*mail.Message{msg}
+	a.expanded = map[string]bool{msg.ID: true}
+	card := a.reader.cardFor(msg.ID)
+	card.detailsOpen = true
+
+	var ops op.Ops
+	gtx := testGtx(&ops, image.Pt(900, 600))
+	a.reader.Layout(gtx)
+
+	body := card.bodySelection(msg)
+	body.SetCaret(0, 3) // "the"
+	a.reader.Layout(gtx)
+	if got := card.bodyText.Selected(msg.ID); got != "the" {
+		t.Fatalf("body selection = %q, want the fragment before the header was selected", got)
+	}
+
+	sel := card.detailsSel[headerFieldSubject].Select(msg.ID)
+	sel.SetCaret(0, 2) // "he"
+	a.reader.Layout(gtx)
+	if got := card.detailsSel[headerFieldSubject].Selected(msg.ID); got != "he" {
+		t.Fatalf("header selection = %q, want the fragment selected last", got)
+	}
+	if got := card.bodyText.Selected(msg.ID); got != "" {
+		t.Fatalf("body kept %q after the header was selected, want it retired", got)
 	}
 }
