@@ -312,7 +312,9 @@ func (a *App) showAccountMenu() {
 		id := acc.ID
 		name := acc.DisplayName()
 		items = append(items, menuItem{
-			Label:   name,
+			Label: name,
+			// The address keeps two accounts with the same name apart.
+			Detail:  acc.Email,
 			Avatar:  name,
 			Checked: id == a.activeAcc,
 			OnTap:   func() { a.switchAccount(id) },

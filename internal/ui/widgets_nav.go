@@ -182,10 +182,12 @@ func labelDot(gtx layout.Context, dot color.NRGBA) layout.Dimensions {
 }
 
 // menuRow is one entry of a dropdown menu: an optional leading avatar or
-// glyph, the label and an optional trailing check mark for the active entry.
+// glyph, the label with its optional detail line and an optional trailing check
+// mark for the active entry.
 type menuRow struct {
 	click   widget.Clickable
 	label   string
+	detail  string
 	ic      icon
 	avatar  string
 	checked bool
@@ -195,11 +197,21 @@ type menuRow struct {
 func newMenuRow(item menuItem, onTap func()) *menuRow {
 	return &menuRow{
 		label:   item.Label,
+		detail:  item.Detail,
 		ic:      item.Icon,
 		avatar:  item.Avatar,
 		checked: item.Checked,
 		onTap:   onTap,
 	}
+}
+
+// height is the row's own height. The card geometry reads it as well, so the
+// two lines of a detail entry are never clipped by a one-line card.
+func (r *menuRow) height(gtx layout.Context) int {
+	if r.detail != "" {
+		return gtx.Dp(menuRowDetailHeight)
+	}
+	return gtx.Dp(menuRowHeight)
 }
 
 func (r *menuRow) Layout(gtx layout.Context, th *theme) layout.Dimensions {
@@ -212,7 +224,7 @@ func (r *menuRow) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 		if w <= 0 {
 			w = gtx.Dp(220)
 		}
-		size := image.Pt(w, gtx.Dp(40))
+		size := image.Pt(w, r.height(gtx))
 		th.cursor(gtx, pointer.CursorPointer, size)
 		if r.click.Hovered() {
 			rr := clip.RRect{Rect: image.Rectangle{Max: size}, NW: 6, NE: 6, SE: 6, SW: 6}
@@ -240,7 +252,21 @@ func (r *menuRow) Layout(gtx layout.Context, th *theme) layout.Dimensions {
 				)
 			}
 			children = append(children, layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-				return th.text(gtx, r.label, textMain, colText, font.Normal, 1)
+				label := func(gtx layout.Context) layout.Dimensions {
+					return th.text(gtx, r.label, textMain, colText, font.Normal, 1)
+				}
+				if r.detail == "" {
+					return label(gtx)
+				}
+				// The detail sits under the label in the muted meta style, the
+				// same pairing the settings page uses for an account row.
+				return column(gtx,
+					layout.Rigid(label),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return vgap(gtx, 2) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return th.text(gtx, r.detail, textMeta, colMuted, font.Normal, 1)
+					}),
+				)
 			}))
 			if r.checked {
 				children = append(children,

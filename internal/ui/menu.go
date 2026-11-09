@@ -5,13 +5,26 @@ import (
 	"image/color"
 
 	"gioui.org/layout"
+	"gioui.org/unit"
 )
 
-// menuItem is one entry of a dropdown menu. Icon draws a leading glyph,
-// Avatar a leading initials circle instead, and Checked marks the active entry
-// with a trailing check mark.
+// The menu card sizes: a plain entry is one line tall, an entry with a detail
+// line below its label needs the room for both. The card is narrow by default
+// and widens when any entry carries a detail, so an address is not cut off.
+const (
+	menuRowHeight       unit.Dp = 40
+	menuRowDetailHeight unit.Dp = 58
+	menuCardWidth       unit.Dp = 200
+	menuCardDetailWidth unit.Dp = 280
+)
+
+// menuItem is one entry of a dropdown menu. Detail is a second, smaller line
+// under the label (the address under an account name), Icon draws a leading
+// glyph, Avatar a leading initials circle instead, and Checked marks the active
+// entry with a trailing check mark.
 type menuItem struct {
 	Label   string
+	Detail  string
 	Icon    icon
 	Avatar  string
 	Checked bool
@@ -71,6 +84,28 @@ func newMenuOverlay(a *App, anchor image.Rectangle, align menuAlign, items []men
 	return m
 }
 
+// cardWidth returns the width of the card. A detail line widens it: an address
+// does not fit the narrow card a bare label is happy in.
+func (m *menuOverlay) cardWidth(gtx layout.Context) int {
+	w := gtx.Dp(menuCardWidth)
+	for _, r := range m.rows {
+		if r.detail != "" {
+			w = gtx.Dp(menuCardDetailWidth)
+			break
+		}
+	}
+	return min(w, max(gtx.Constraints.Max.X-16, 1))
+}
+
+// cardHeight sums the rows, so a two-line entry is not clipped by the card.
+func (m *menuOverlay) cardHeight(gtx layout.Context) int {
+	h := 0
+	for _, r := range m.rows {
+		h += r.height(gtx)
+	}
+	return min(h+gtx.Dp(12), max(gtx.Constraints.Max.Y-16, 1))
+}
+
 // geometry returns the size of the card and where it goes. It is kept apart
 // from Layout so the clamping can be checked without a window.
 func (m *menuOverlay) geometry(gtx layout.Context) (size, origin image.Point) {
@@ -78,8 +113,8 @@ func (m *menuOverlay) geometry(gtx layout.Context) (size, origin image.Point) {
 	// The card is capped to the window first: a menu with more entries than fit
 	// scrolls instead of growing past the edge and being clamped into a
 	// negative origin.
-	cardW := min(gtx.Dp(200), max(maxX-16, 1))
-	cardH := min(len(m.items)*gtx.Dp(40)+gtx.Dp(12), max(maxY-16, 1))
+	cardW := m.cardWidth(gtx)
+	cardH := m.cardHeight(gtx)
 	// Line the card up with the edge the caller picked, then clamp it: an
 	// anchor too close to the opposite edge (or a narrow window) still keeps
 	// the whole card on screen.
