@@ -184,7 +184,7 @@
 6. **禁止跨帧重放录制宏**：`op.Record` 的宏在帧末以当前变换重放，跨帧重放会错位并触发 GPU `collectOps index out of range` panic。tooltip 队列 `th.tips` 每帧清空，只存放本帧录制的标签，帧末在无 clip 的窗口坐标系重放。
 7. **tooltip 锚点要冻结**：窗口指针坐标与按钮局部坐标分别取整会 ±1px 抖动；进入 hover 时算一次 `anchor` 并冻结，离开时重置。只给语义不直观的图标提示（归档 / 删除 / 标记已读 / 标记未读），其余按钮无提示。
 8. **光标必须 clip 到控件矩形**：`cursor.Apply` 作用于当前 clip，裸调用会让整片区域变手型。
-9. **字体**：`text.Shaper` 只建一次，界面族是 `Noto Sans, Noto Sans CJK <按语言>, sans-serif, emoji`，字号只有六级阶梯（族顺序、CJK 变体与阶梯取值见 [§14.1](#141-文本字体)）；图标字形尺寸按 (fill, size, pxPerSp) 缓存，避免每帧 shaping。
+9. **字体**：`text.Shaper` 只建一次，界面族是 `Noto Sans, Noto Sans CJK <按语言>, sans-serif, emoji`，邮件正文族是 `Noto Sans Mono, Noto Sans Mono CJK <按语言>, monospace, emoji`（只用于阅读器正文与写信正文编辑器），字号只有六级阶梯（族顺序、CJK 变体与阶梯取值见 [§14.1](#141-文本字体)）；图标字形尺寸按 (fill, size, pxPerSp) 缓存，避免每帧 shaping。
 10. **不要在视图构造期长期缓存译文**：语言切换会重建视图，缓存的旧语言字符串不会自动更新。
 11. **转圈自驱帧**：列表工具栏刷新按钮的 `spinning` 在绘制时 `gtx.Execute(op.InvalidateCmd{})` 请求下一帧，`spinStart` 只在旋转期间非零（停止时归零，下次从正立开始）。`listToolbar.setLoading` 是唯一切换点，并给 45s 看门狗（`loadingUntil`，`Layout` 里过期即清除）：任何遗漏的清除路径最多多转一个看门狗周期，不会留下永久 60fps。转圈期间按钮吞点击，避免连点叠出多次 reload；不要用 `setDisabled` 表达转圈，它会把字形压到 35% 不透明度。
 12. **可选文字与可点区域共存**：`widget.Selectable` 的点击/拖拽手势只认主键与触摸（`gesture.Click` / `gesture.Drag` 内部过滤），右键既不会清空选区也不会被它消费；要抓右键必须自己声明区域并在读事件时判断 `e.Buttons`，`pointer.Filter` 没有按键维度。该区域必须是 pass-through（`pointer.PassOp`）且声明在文字之后，否则会挡住下层的选区手势。父级 `Clickable` 与文字同时收到点击，所以「整行可点 + 文字可选」无法靠事件顺序区分：展开的邮件卡把可点区域拆到非文字部分（头像 / 时间 / 箭头），点击发件人姓名与地址只定位光标。选区状态由 `textSelection` 按 owner（消息或会话 ID）重建，见 `internal/ui/textselection.go`。
@@ -404,13 +404,15 @@ gofmt -l internal/ cmd/
 - CJK 族必须显式写出。fontscan 的语言相关替换只认脚本，而 go-text 的 `language.ScriptToLang` 把 Han 映射为 0（没有哪个语言能同时代表中日月韩汉字字形），语言替换对汉字整体失效，脚本兜底会落到 **Noto Sans CJK JP**，中文于是显示日文字形（「直」「骨」这类部件的写法不同）。写明目标族之后，`fontmap.resolveForRune` 逐族检查字符覆盖：拉丁命中第一段，汉字顺延到第二段，互不干扰。缺对应 Noto Sans 变体的机器上该段被跳过，仍按 `sans-serif` 兜底，不会出现空白或方框。
 - `emoji` 必须最后。emoji 属于 Common 脚本，go-text 会把它并入前一个 Latin/CJK run 一起做字体回退；放在前面时，覆盖 Latin 且数据库顺序更靠前的单色符号字体（如 Symbola）会抢到 emoji，显示成黑白。放在末尾时它在精确族匹配阶段命中彩色 emoji 字体（fontconfig 替换表优先 Noto Color Emoji），不受前一 run 脚本影响。也不能把 `emoji` 放开头：Noto Color Emoji 的 cmap 同样覆盖 ASCII 数字、`#`、`*` 和空格，会以 1.245em 的 emoji 宽度渲染它们。
 
-自查选族：`GIODEBUG=text ./yauzin` 会打印 `[text] loaded face ...`，汉字应解析到 `notosanscjksc`、拉丁到 `notosans`；出现 `notosanscjkjp` 说明族列表没生效或系统缺该变体。
+邮件正文另有一套等宽族 `monoTypeface()`，形如 `Noto Sans Mono, Noto Sans Mono CJK SC, monospace, emoji`：文本邮件常按列排版（`> ` 引用前缀、表格、ASCII 图），只有等宽族能对齐，因此阅读器的 `text/plain` 正文（占位提示一视同仁，不做特殊判断）与写信浮窗的正文编辑器（含引用块、签名、mailto 预填正文）都走它，界面其余文本仍是界面族。段序理由与上面三条相同，只是通用兜底换成 `monospace`（fontconfig 通常解析为 DejaVu Sans Mono）；只装了 `Noto Sans Mono CJK`、没有独立拉丁 `Noto Sans Mono` 的机器上，拉丁落到 CJK 等宽族自带的等宽拉丁，仍是等宽。locale → 变体的判定统一由 `cjkVariantOf` 给出，界面族与等宽族共用这一处，避免两份分支漂移；切换点只有 `theme.selectableMonoText`（经 `textSelection.WrapMono`）与 `theme.monoTextField`。
+
+自查选族：`GIODEBUG=text ./yauzin` 会打印 `[text] loaded face ...`，界面文本的汉字应解析到 `notosanscjksc`、拉丁到 `notosans`；邮件正文的拉丁解析到 `notosansmono` 或 `notosansmonocjk*`，汉字解析到 `notosansmonocjksc`。出现 `notosanscjkjp` / `notosansmonocjkjp` 说明族列表没生效或系统缺该变体。
 
 已知限制：Gio 把字形轮廓转成 `clip.Path` 在 GPU 上按几何覆盖率填充，没有 FreeType 的 hinting，并且在线性光空间做 alpha 混合（上游 `~eliasnaur/gio#70` 称为 "correct sRGB blending"，`vendor/gioui.org/gpu/gpu.go` 的 `f32color.LinearFromSRGB`），部分覆盖的像素因此比浏览器（在 sRGB 空间混合）更亮；13–16px 下 1px 竖干只能拿到部分覆盖率，同字号下看起来比浏览器偏淡、偏软。`text.Parameters` 没有画质开关，应用层改不了，不要用放大字号或加深文字颜色的方式「补偿」——浏览器正文同为 Noto Sans 13px 时差距依旧存在。上游在换渲染器，方向是把字形绘制搬回 CPU，届时才有望对齐。
 
 字号阶梯：界面文字只有六级，定义在 `internal/ui/typography.go`——`textTitle` 24sp（阅读页主题、标题栏品牌名）、`textHeading` 20sp（页面与对话框标题）、`textMain` 16sp（正文、侧边栏标签、列表行、按钮、输入框）、`textSecondary` 14sp（会话消息数、列表时间、工具栏状态）、`textMeta` 13sp（地址、完整时间戳、设置说明）、`textTiny` 12sp（标签 chip、性能条）。正文、侧边栏标签与列表行主题刻意留在 `textMain` 同一档，这是三者「一样大」的来源；新增文字必须复用其中一级，`typography_test.go` 用 `go/ast` 扫描拒绝给文本助手传整数字面量。图标字号（`theme.glyph` / `glyphIn`）不在这套阶梯里。
 
-阅读正文另外设置 1.5 倍行高（`bodyLineHeight = textMain * 3 / 2`，即 24sp）：Gio 默认的 1.2 倍对多行邮件过挤，而「没有纯文本正文」的占位提示只是单行，沿用默认。
+阅读正文另外设置 1.5 倍行高（`bodyLineHeight = textMain * 3 / 2`，即 24sp）：Gio 默认的 1.2 倍对多行邮件过挤，而「没有纯文本正文」的占位提示只是单行，沿用默认（字体同样是等宽，见上）。
 
 彩色 emoji 依赖字体自带位图（CBDT/CBLC、sbix）：Gio 只渲染位图与轮廓字形，COLR/CPAL 彩色字形不支持，仅有 COLR 字体的系统会显示空白 emoji。已知限制：go-text 的 `splitByFace` 让空白不触发换字体，紧跟在 emoji 后面的空格会沿用 emoji 字体的空格度量（约 1.245em，明显比正常的 0.26em 宽）；应用层不改文本无法规避，待上游修正。
 
