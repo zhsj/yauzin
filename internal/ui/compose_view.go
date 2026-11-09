@@ -693,21 +693,10 @@ func (c *composeView) headerLabel(gtx layout.Context, label string) layout.Dimen
 	return c.app.th.text(gtx, label, textMeta, colMuted, font.Normal, 1)
 }
 
-// referencesText is the visible form of the References chain. A long chain is
-// cut to its last entries so the details stay a few lines; the message itself
-// keeps every ID.
+// referencesText is the visible form of the References chain, shared with the
+// reader's header details so the two never disagree about the same message.
 func (c *composeView) referencesText() string {
-	const shown = 8
-	refs := c.references
-	if len(refs) == 0 {
-		return ""
-	}
-	prefix := ""
-	if len(refs) > shown {
-		refs = refs[len(refs)-shown:]
-		prefix = "… "
-	}
-	return prefix + strings.Join(refs, " ")
+	return formatReferences(c.references)
 }
 
 // separator draws the hairline between two header fields.

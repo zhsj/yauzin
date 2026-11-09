@@ -58,6 +58,22 @@ func formatFullTime(t time.Time) string {
 	return t.In(time.Local).Format(i18n.T("date.full"))
 }
 
+// formatReferences is the visible form of a References chain. A long chain is
+// cut to its last entries so the details stay a few lines; the message itself
+// keeps every ID, and the composer still writes the whole chain.
+func formatReferences(refs []string) string {
+	const shown = 8
+	if len(refs) == 0 {
+		return ""
+	}
+	prefix := ""
+	if len(refs) > shown {
+		refs = refs[len(refs)-shown:]
+		prefix = "… "
+	}
+	return prefix + strings.Join(refs, " ")
+}
+
 // The quote header is part of the message a recipient reads, not UI copy, so it
 // is fixed English in every interface language, the way Gmail writes it.
 // Localizing it would quote the same mail differently depending on the reader's

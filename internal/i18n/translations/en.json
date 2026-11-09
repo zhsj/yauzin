@@ -182,6 +182,7 @@
   "reader.reply": "Reply",
   "reader.replyAll": "Reply all",
   "reader.forward": "Forward",
+  "reader.headerReplyTo": "Reply-To",
   "reader.find.hint": "Find in message",
   "reader.find.empty": "No matches",
   "reader.find.count": "{{.Current}}/{{.Total}}",

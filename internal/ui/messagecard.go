@@ -125,6 +125,12 @@ type messageCard struct {
 	avatar widget.Clickable
 	stamp  widget.Clickable
 	fold   widget.Clickable
+	// detailsClick folds the header details out below the head of the open
+	// card. The state lives on the card rather than on the App because the
+	// reader drops the cards with the conversation: a newly opened thread
+	// starts with its headers folded.
+	detailsClick widget.Clickable
+	detailsOpen  bool
 
 	reply *pillButton
 	fwd   *pillButton
@@ -280,7 +286,7 @@ func (c *messageCard) expanded(gtx layout.Context, msg *mail.Message) layout.Dim
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			dims := layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return c.foldTarget(gtx, th, &c.avatar, func(gtx layout.Context) layout.Dimensions {
+					return c.headControl(gtx, th, &c.avatar, func(gtx layout.Context) layout.Dimensions {
 						return th.avatar(gtx, senderName(msg.From), 32)
 					})
 				}),
@@ -296,14 +302,16 @@ func (c *messageCard) expanded(gtx layout.Context, msg *mail.Message) layout.Dim
 					)
 				}),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.detailsToggle(gtx, th) }),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return c.foldTarget(gtx, th, &c.stamp, func(gtx layout.Context) layout.Dimensions {
+					return c.headControl(gtx, th, &c.stamp, func(gtx layout.Context) layout.Dimensions {
 						return th.text(gtx, formatFullTime(msg.Date), textMeta, colMuted, font.Normal, 1)
 					})
 				}),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 6) }),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return c.foldTarget(gtx, th, &c.fold, func(gtx layout.Context) layout.Dimensions {
+					return c.headControl(gtx, th, &c.fold, func(gtx layout.Context) layout.Dimensions {
 						return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 							return th.glyph(gtx, iconExpandLess, 18)
 						})
@@ -312,6 +320,17 @@ func (c *messageCard) expanded(gtx layout.Context, msg *mail.Message) layout.Dim
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 2) }),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return c.more.Layout(gtx, th) }),
 			)
+			c.headH += dims.Size.Y
+			return dims
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if !c.detailsOpen {
+				return layout.Dimensions{}
+			}
+			// The details sit above the divider and belong to the head as far
+			// as the find bar is concerned: its height has to reach headH, or
+			// every hit in this card is scrolled to the wrong line.
+			dims := c.details(gtx, msg)
 			c.headH += dims.Size.Y
 			return dims
 		}),
@@ -343,11 +362,11 @@ func (c *messageCard) expanded(gtx layout.Context, msg *mail.Message) layout.Dim
 	)
 }
 
-// foldTarget wraps one non-text part of the open head in its Clickable and
-// advertises the fold with a hand cursor. The cursor belongs inside the
-// clickable's own area, so it is declared after the content was recorded and
-// replayed on top of it.
-func (c *messageCard) foldTarget(gtx layout.Context, th *theme, click *widget.Clickable, content layout.Widget) layout.Dimensions {
+// headControl wraps one clickable part of the open head in its Clickable and
+// advertises it with a hand cursor. The cursor belongs inside the clickable's
+// own area, so it is declared after the content was recorded and replayed on
+// top of it.
+func (c *messageCard) headControl(gtx layout.Context, th *theme, click *widget.Clickable, content layout.Widget) layout.Dimensions {
 	return click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		macro := op.Record(gtx.Ops)
 		dims := content(gtx)
@@ -355,6 +374,95 @@ func (c *messageCard) foldTarget(gtx layout.Context, th *theme, click *widget.Cl
 		th.cursor(gtx, pointer.CursorPointer, dims.Size)
 		call.Add(gtx.Ops)
 		return dims
+	})
+}
+
+// detailsToggle folds the header details out. It is its own control, not one of
+// the fold targets: a click here must reveal the headers, never collapse the
+// card, and the label says which so the chevron is not the only hint.
+func (c *messageCard) detailsToggle(gtx layout.Context, th *theme) layout.Dimensions {
+	// The switch is read before its own layout, the way the composer's header
+	// row does it: the frame that reports the click is the one that draws the
+	// details, instead of showing the old state for another frame.
+	if c.detailsClick.Clicked(gtx) {
+		c.detailsOpen = !c.detailsOpen
+		invalidateAfterTap(gtx)
+	}
+	return c.headControl(gtx, th, &c.detailsClick, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return th.text(gtx, i18n.T("compose.headers"), textMeta, colMuted, font.Normal, 1)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 2) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if c.detailsOpen {
+					return th.glyph(gtx, iconExpandLess, 14)
+				}
+				return th.glyph(gtx, iconExpandMore, 14)
+			}),
+		)
+	})
+}
+
+// headerRow is one label/value pair of the card's header details.
+type headerRow struct {
+	label string
+	value string
+}
+
+// detailsRows lists the headers a received message carries. A row without a
+// value is left out: most messages have no Reply-To or Cc, and an empty row
+// would suggest the header exists but could not be read.
+func detailsRows(msg *mail.Message) []headerRow {
+	rows := []headerRow{
+		{i18n.T("compose.from"), msg.From.String()},
+		{i18n.T("compose.to"), mail.FormatAddressList(msg.To)},
+		{i18n.T("compose.cc"), mail.FormatAddressList(msg.Cc)},
+		{i18n.T("reader.headerReplyTo"), mail.FormatAddressList(msg.ReplyTo)},
+		{i18n.T("compose.subject"), strings.TrimSpace(msg.Subject)},
+		{i18n.T("compose.headerDate"), formatFullTime(msg.Date)},
+		{i18n.T("compose.headerMessageID"), strings.TrimSpace(msg.MessageID)},
+		{i18n.T("compose.headerReferences"), formatReferences(msg.References)},
+	}
+	kept := rows[:0]
+	for _, row := range rows {
+		if row.value == "" {
+			continue
+		}
+		kept = append(kept, row)
+	}
+	return kept
+}
+
+// details draws the label/value block of the open card, the read-only
+// counterpart of the composer's header details.
+func (c *messageCard) details(gtx layout.Context, msg *mail.Message) layout.Dimensions {
+	th := c.reader.app.th
+	rows := detailsRows(msg)
+	children := make([]layout.FlexChild, 0, len(rows))
+	for _, row := range rows {
+		item := row
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Top: 1, Bottom: 1}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						w := gtx.Dp(headersLabelWidth)
+						gtx.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, 1<<16)}
+						return th.text(gtx, item.label, textMeta, colMuted, font.Normal, 1)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return hgap(gtx, 8) }),
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						// The values stay one step darker than the labels: a
+						// Message-ID or a list of recipients has to stay
+						// readable, and long values wrap instead of clipping.
+						return th.wrappedText(gtx, item.value, textMeta, colText, font.Normal)
+					}),
+				)
+			})
+		}))
+	}
+	return layout.Inset{Top: 6, Bottom: 4}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return column(gtx, children...)
 	})
 }
 
