@@ -704,11 +704,13 @@ func (c *composeView) separator(gtx layout.Context) layout.Dimensions {
 	return layout.Inset{Left: 16, Right: 16}.Layout(gtx, hline)
 }
 
-// bodyRow lays out the message body, the one row that takes the leftover height.
+// bodyRow lays out the message body, the one row that takes the leftover
+// height. It is written in the mail body face, so what is typed lines up the
+// way the reader will show it.
 func (c *composeView) bodyRow(gtx layout.Context) layout.Dimensions {
 	c.watchBody(gtx)
 	return layout.Inset{Top: 8, Bottom: 8, Left: 16, Right: 16}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return c.app.th.textField(gtx, &c.body, i18n.T("compose.body"), textMain)
+		return c.app.th.monoTextField(gtx, &c.body, i18n.T("compose.body"), textMain)
 	})
 }
 

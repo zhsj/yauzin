@@ -211,7 +211,19 @@ func (b *tapBlocker) Layout(gtx layout.Context) layout.Dimensions {
 // textField is a single-line editor styled for the compose and search fields.
 // size is a step of the text ladder in typography.go.
 func (t *theme) textField(gtx layout.Context, ed *widget.Editor, hint string, size unit.Sp) layout.Dimensions {
-	es := t.editor(ed, hint, size)
+	return t.textFieldFace(gtx, ed, hint, size, t.face)
+}
+
+// monoTextField is textField in the mail body face: the body of the composer is
+// what goes out as a text/plain message, so it is written the way the reader
+// shows it. The headers keep the proportional face.
+func (t *theme) monoTextField(gtx layout.Context, ed *widget.Editor, hint string, size unit.Sp) layout.Dimensions {
+	return t.textFieldFace(gtx, ed, hint, size, t.monoFace)
+}
+
+// textFieldFace draws ed as a compose field in face.
+func (t *theme) textFieldFace(gtx layout.Context, ed *widget.Editor, hint string, size unit.Sp, face font.Typeface) layout.Dimensions {
+	es := t.editorFace(ed, hint, size, face)
 	es.Color = colText
 	es.HintColor = colFaint
 	es.SelectionColor = colSelection
@@ -264,8 +276,13 @@ func (t *theme) boxedField(gtx layout.Context, ed *widget.Editor, box *widget.Cl
 // colors that fit the background they draw it on; size is a step of the text
 // ladder in typography.go.
 func (t *theme) editor(ed *widget.Editor, hint string, size unit.Sp) material.EditorStyle {
+	return t.editorFace(ed, hint, size, t.face)
+}
+
+// editorFace prepares a single-line editor in face; see editor.
+func (t *theme) editorFace(ed *widget.Editor, hint string, size unit.Sp, face font.Typeface) material.EditorStyle {
 	es := material.Editor(t.mat, ed, hint)
-	es.Font = font.Font{Typeface: t.face}
+	es.Font = font.Font{Typeface: face}
 	es.TextSize = size
 	return es
 }

@@ -17,12 +17,17 @@ import (
 // textSizeArg is the index of the size argument in the argument list of each
 // text helper that takes one.
 var textSizeArg = map[string]int{
-	"text":           2,
-	"wrappedText":    2,
-	"selectableText": 3,
-	"editor":         2,
-	"textField":      3,
-	"boxedField":     4,
+	"text":               2,
+	"wrappedText":        2,
+	"selectableText":     3,
+	"selectableMonoText": 3,
+	"selectableTextFace": 4,
+	"editor":             2,
+	"editorFace":         2,
+	"textField":          3,
+	"monoTextField":      3,
+	"textFieldFace":      3,
+	"boxedField":         4,
 }
 
 // TestTextSizesComeFromTheScale keeps the ladder in typography.go authoritative:

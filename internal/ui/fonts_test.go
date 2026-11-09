@@ -78,3 +78,45 @@ func TestTextTypefaceOrder(t *testing.T) {
 		t.Errorf("last family = %q, want emoji", parts[3])
 	}
 }
+
+func TestMonoTypefaceFor(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		locales []string
+		want    string
+	}{
+		{"chinese", []string{"zh-CN"}, "Noto Sans Mono, Noto Sans Mono CJK SC, monospace, emoji"},
+		{"traditional", []string{"zh-TW"}, "Noto Sans Mono, Noto Sans Mono CJK TC, monospace, emoji"},
+		{"japanese", []string{"ja-JP"}, "Noto Sans Mono, Noto Sans Mono CJK JP, monospace, emoji"},
+		{"korean", []string{"ko-KR"}, "Noto Sans Mono, Noto Sans Mono CJK KR, monospace, emoji"},
+		{"no cjk locale", []string{"en-US"}, "Noto Sans Mono, Noto Sans Mono CJK SC, monospace, emoji"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := string(monoTypefaceFor(tc.locales...)); got != tc.want {
+				t.Errorf("monoTypefaceFor(%q) = %q, want %q", tc.locales, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMonoTypefaceOrder guards the same ordering rules for the mail body face:
+// the Latin mono family leads the mono CJK variant, the generic monospace
+// family comes before emoji, and emoji stays last.
+func TestMonoTypefaceOrder(t *testing.T) {
+	parts := strings.Split(string(monoTypeface()), ", ")
+	if len(parts) != 4 {
+		t.Fatalf("family list %q has %d parts, want 4", strings.Join(parts, ", "), len(parts))
+	}
+	if parts[0] != latinMonoTypeface {
+		t.Errorf("first family = %q, want %q", parts[0], latinMonoTypeface)
+	}
+	if !strings.HasPrefix(parts[1], "Noto Sans Mono CJK ") {
+		t.Errorf("second family = %q, want a Noto Sans Mono CJK variant", parts[1])
+	}
+	if parts[2] != "monospace" {
+		t.Errorf("third family = %q, want monospace", parts[2])
+	}
+	if parts[3] != "emoji" {
+		t.Errorf("last family = %q, want emoji", parts[3])
+	}
+}

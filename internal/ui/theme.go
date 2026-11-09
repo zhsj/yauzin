@@ -24,6 +24,7 @@ type theme struct {
 	mat    *material.Theme
 
 	face         font.Typeface
+	monoFace     font.Typeface
 	iconFace     font.Typeface
 	iconFillFace font.Typeface
 
@@ -71,6 +72,7 @@ func newTheme(t *themeFonts) *theme {
 		shaper:       t.shaper,
 		mat:          mat,
 		face:         t.face,
+		monoFace:     t.monoFace,
 		iconFace:     t.iconFace,
 		iconFillFace: t.iconFillFace,
 	}
@@ -118,8 +120,22 @@ func (t *theme) wrappedText(gtx layout.Context, txt string, size unit.Sp, col co
 // redraws and can be reset when the text changes. lineHeight is the baseline
 // distance; zero keeps Gio's default of 1.2 times the text size.
 func (t *theme) selectableText(gtx layout.Context, sel *widget.Selectable, txt string, size, lineHeight unit.Sp, col color.NRGBA, weight font.Weight) layout.Dimensions {
+	return t.selectableTextFace(gtx, t.face, sel, txt, size, lineHeight, col, weight)
+}
+
+// selectableMonoText is selectableText in the mail body face. A text/plain
+// message is written in columns — quoted replies, tables, ASCII art — and the
+// body is the only surface that has to keep them aligned; the interface around
+// it keeps the proportional face.
+func (t *theme) selectableMonoText(gtx layout.Context, sel *widget.Selectable, txt string, size, lineHeight unit.Sp, col color.NRGBA, weight font.Weight) layout.Dimensions {
+	return t.selectableTextFace(gtx, t.monoFace, sel, txt, size, lineHeight, col, weight)
+}
+
+// selectableTextFace is the shared body of the two helpers above: one
+// selectable label drawn in face.
+func (t *theme) selectableTextFace(gtx layout.Context, face font.Typeface, sel *widget.Selectable, txt string, size, lineHeight unit.Sp, col color.NRGBA, weight font.Weight) layout.Dimensions {
 	l := material.Label(t.mat, size, txt)
-	l.Font = font.Font{Typeface: t.face, Weight: weight}
+	l.Font = font.Font{Typeface: face, Weight: weight}
 	l.Color = col
 	l.State = sel
 	l.SelectionColor = colSelection

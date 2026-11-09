@@ -94,8 +94,25 @@ func (s *textSelection) Selected(owner string) string {
 // selection the conversation keeps. lineHeight is the baseline distance; zero
 // keeps Gio's default of 1.2 times the text size.
 func (s *textSelection) Wrap(gtx layout.Context, r *readerView, owner, txt string, size, lineHeight unit.Sp, col color.NRGBA, weight font.Weight) layout.Dimensions {
+	return s.wrap(gtx, r, owner, txt, size, lineHeight, col, weight, r.app.th.selectableText)
+}
+
+// WrapMono is Wrap in the mail body face. Everything the reader shows inside a
+// message card goes through it: a text/plain body is written in columns, and
+// monospace keeps them aligned.
+func (s *textSelection) WrapMono(gtx layout.Context, r *readerView, owner, txt string, size, lineHeight unit.Sp, col color.NRGBA, weight font.Weight) layout.Dimensions {
+	return s.wrap(gtx, r, owner, txt, size, lineHeight, col, weight, r.app.th.selectableMonoText)
+}
+
+// selectableDraw draws one run of selectable text in the face its helper picks.
+type selectableDraw func(gtx layout.Context, sel *widget.Selectable, txt string, size, lineHeight unit.Sp, col color.NRGBA, weight font.Weight) layout.Dimensions
+
+// wrap prepares the selection, draws the text with draw and declares the
+// pointer area. Both entry points share it, so the selection and the right
+// click menu behave the same whatever face the text is drawn in.
+func (s *textSelection) wrap(gtx layout.Context, r *readerView, owner, txt string, size, lineHeight unit.Sp, col color.NRGBA, weight font.Weight, draw selectableDraw) layout.Dimensions {
 	sel := s.ready(gtx, r, owner)
-	dims := r.app.th.selectableText(gtx, sel, txt, size, lineHeight, col, weight)
+	dims := draw(gtx, sel, txt, size, lineHeight, col, weight)
 	s.area(gtx, dims.Size)
 	s.retireOthers(gtx, r)
 	return dims

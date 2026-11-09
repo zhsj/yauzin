@@ -512,9 +512,11 @@ func (c *messageCard) details(gtx layout.Context, msg *mail.Message) layout.Dime
 }
 
 // body shows the text/plain part. HTML bodies are never rendered in-app: the
-// card's "more" menu hands them to the browser instead. The body is the one
-// surface that gets bodyLineHeight: a placeholder hint is a single line, so it
-// keeps the default spacing.
+// card's "more" menu hands them to the browser instead. The whole body is
+// drawn in the monospace face, the placeholder hint included: mail is laid out
+// in columns, and there is no reason to switch faces inside the same block.
+// The body is also the one surface that gets bodyLineHeight: the hint is a
+// single line, so it keeps the default spacing.
 //
 // The find highlights are painted before the text, from the geometry measured
 // when the text was laid out last; the fresh geometry is collected after the
@@ -522,18 +524,18 @@ func (c *messageCard) details(gtx layout.Context, msg *mail.Message) layout.Dime
 func (c *messageCard) body(gtx layout.Context, msg *mail.Message) layout.Dimensions {
 	body := plainBody(msg)
 	if body == "" {
-		return c.bodyText.Wrap(gtx, c.reader, msg.ID, i18n.T("reader.noPlainText"), textMain, 0, colMuted, font.Normal)
+		return c.bodyText.WrapMono(gtx, c.reader, msg.ID, i18n.T("reader.noPlainText"), textMain, 0, colMuted, font.Normal)
 	}
 	f := c.reader.find
 	width := gtx.Constraints.Max.X
 	if !f.active() {
 		c.marks = findMarks{}
-		return c.bodyText.Wrap(gtx, c.reader, msg.ID, body, textMain, bodyLineHeight, colText, font.Normal)
+		return c.bodyText.WrapMono(gtx, c.reader, msg.ID, body, textMain, bodyLineHeight, colText, font.Normal)
 	}
 	if c.marks.valid(f.gen, width, body) {
 		c.marks.paint(gtx, f.cur)
 	}
-	dims := c.bodyText.Wrap(gtx, c.reader, msg.ID, body, textMain, bodyLineHeight, colText, font.Normal)
+	dims := c.bodyText.WrapMono(gtx, c.reader, msg.ID, body, textMain, bodyLineHeight, colText, font.Normal)
 	if !c.marks.valid(f.gen, width, body) {
 		c.collectFind(msg.ID, body, width)
 	}
